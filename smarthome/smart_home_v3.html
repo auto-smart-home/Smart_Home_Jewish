@@ -1100,10 +1100,19 @@ function doLogout() {
 
 function applyPermissions() {
   if (!currentUser) return;
-  // אין הסתרות — המשתמש רואה הכל, חסימה מתרחשת בעת הפעולה עצמה
-  // היוצא מן הכלל: יומן — אם אין הרשאה, הטאב מוסתר לחלוטין (אין טעם לראות תוכן ריק)
-  const logTab = document.querySelector('[onclick*="log"], [data-tab="log"]');
-  if (logTab) logTab.style.display = (currentUser.role==='admin' || currentUser.canViewLog) ? '' : 'none';
+  const isAdmin = currentUser.role === 'admin';
+
+  // יומן
+  const logTab = document.querySelector('[onclick*="\'log\'"]');
+  if (logTab) logTab.style.display = (isAdmin || currentUser.canViewLog) ? '' : 'none';
+
+  // IVR
+  const ivrTab = document.querySelector('[onclick*="\'ivr\'"]');
+  if (ivrTab) ivrTab.style.display = (isAdmin || currentUser.canViewIvr) ? '' : 'none';
+
+  // הגדרות התקנים
+  const haTab = document.querySelector('[onclick*="\'ha_devices\'"]');
+  if (haTab) haTab.style.display = (isAdmin || currentUser.canViewHaDevices) ? '' : 'none';
 }
 
 function canControlRelay(relayId) {
