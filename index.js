@@ -374,6 +374,7 @@ let schedulerActiveModeId = 0;
 const _firedToday = new Set();
 const _actuallyFired = new Set();
 const _firedRunOnceToday = new Map();
+const _pendingPublish = {};
 
 const _calendarIndex = {};
 for (const entry of HOLIDAY_CALENDAR) {
@@ -944,7 +945,19 @@ function computeTodayEvents(nowIL,zmanim,dow,todayKey){
 function getNowSecIL(){const n=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));return n.getHours()*3600+n.getMinutes()*60+n.getSeconds();}
 
 function checkAckAndFireChild(event,todayKey){
-  const expected=event.ackExpected,actual=relayState[event.ackRelayId];
+  const expected=event.ackExpected;
+  const pending=_pendingPublish[event.ackRelayId];
+  if(pending){
+    pending
+      .then(()=>checkAckAndFireChildNow(event,todayKey,expected))
+      .catch(()=>checkAckAndFireChildNow(event,todayKey,expected));
+  } else {
+    checkAckAndFireChildNow(event,todayKey,expected);
+  }
+}
+
+function checkAckAndFireChildNow(event,todayKey,expected){
+  const actual=relayState[event.ackRelayId];
   if(actual===expected){fireEvent(event,todayKey);return;}
   setTimeout(()=>{
     if(event.endSec!==null&&getNowSecIL()>event.endSec) return;
@@ -967,7 +980,7 @@ function checkRelayOwnerBlock(event,nowSec){
 function fireEvent(event,todayKey){
   const{relayId,action,name}=event;
   if(!event.isEndEvent) _actuallyFired.add(`${event.progId}_${relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_start_${todayKey}`);
-  publishRelay(relayId,action).then(()=>{
+  const pub = publishRelay(relayId,action).then(()=>{
     io.emit('scheduler_fired',{progName:name,relayId,action});
     if(action==='ON'){
       const existing=relayOwner[relayId];
@@ -979,6 +992,8 @@ function fireEvent(event,todayKey){
     if(event.isEndEvent) addServerLog({type:'info',msg:`[למשך] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
     else addServerLog({type:'info',msg:`[תזמון] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
   }).catch(err=>console.error(`❌ שגיאה ממסר ${relayId}:`,err.message));
+  _pendingPublish[relayId] = pub;
+  return pub;
 }
 
 async function schedulerTick(){
