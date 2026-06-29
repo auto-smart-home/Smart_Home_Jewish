@@ -54,17 +54,7 @@ function loadConfigLocal() {
     if (cfg.ivrTodayEvents) { ivrTodayEvents = cfg.ivrTodayEvents; }
     if (cfg.haDevices) { 
       haDevices = cfg.haDevices; 
-      // תיקון התקנים ללא relayId (מ-config ישן)
-      const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
-      haDevices.forEach(dev => {
-        if (!dev.relayId) {
-          const usedIds = new Set(haDevices.filter(d => d.relayId).map(d => d.relayId));
-          let nextId = tasmotaMax + 1;
-          while (usedIds.has(nextId)) nextId++;
-          dev.relayId = nextId;
-          console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
-        }
-      });
+      // תיקון מאוחר — relayId יוקצה ב-rebuildHaRelayNames אחרי שה-CONTROLLERS נטענו
       console.log(`🏠 נטענו ${haDevices.length} התקני HA`); 
     }
     if (cfg.haToken) { haToken = cfg.haToken; }
@@ -326,11 +316,18 @@ CONTROLLERS.forEach(ctrl => {
 // מזהה ממסר HA (entity_id) → globalId: נוסף כשהמשתמש מוסיף התקן מ-HA
 // haDevices[].relayId → globalId (מסדרה אחרי offset הבקרים)
 function rebuildHaRelayNames() {
+  const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
   haDevices.forEach(dev => {
-    if (dev.relayId) {
-      schedulerRelayNames[dev.relayId] = dev.friendly_name || dev.entity_id;
-      if (!relayState[dev.relayId]) relayState[dev.relayId] = 'OFF';
+    // הקצה relayId אם חסר (מ-config ישן או באג)
+    if (!dev.relayId) {
+      const usedIds = new Set(haDevices.filter(d => d.relayId).map(d => d.relayId));
+      let nextId = tasmotaMax + 1;
+      while (usedIds.has(nextId)) nextId++;
+      dev.relayId = nextId;
+      console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
     }
+    schedulerRelayNames[dev.relayId] = dev.friendly_name || dev.entity_id;
+    if (!relayState[dev.relayId]) relayState[dev.relayId] = 'OFF';
   });
 }
 
