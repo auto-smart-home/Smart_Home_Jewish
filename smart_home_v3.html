@@ -1247,7 +1247,6 @@ function connectMQTT() {
   });
 
   socket.on('scheduler_fired', ({ progName, relayId, action }) => {
-    addLog('info', `[שרת] תוכנית "${progName}" — ממסר ${relayId} ${action}`);
     updateRelayUI(relayId, action === 'ON');
   });
   socket.on('mqtt_status', (data) => {
@@ -2929,6 +2928,8 @@ function renderUsers(){
       ${u.canEditPrograms?'<span class="perm-chip granted">עריכה</span>':'<span class="perm-chip denied">עריכה</span>'}
       ${u.canChangeMode?'<span class="perm-chip granted">החלף מצב</span>':'<span class="perm-chip denied">החלף מצב</span>'}
       ${u.canViewLog?'<span class="perm-chip granted">יומן</span>':'<span class="perm-chip denied">יומן</span>'}
+      ${u.canViewIvr?'<span class="perm-chip granted">IVR</span>':'<span class="perm-chip denied">IVR</span>'}
+      ${u.canViewHaDevices?'<span class="perm-chip granted">הגדרות התקנים</span>':'<span class="perm-chip denied">הגדרות התקנים</span>'}
       ${u.maxOnMinutes?`<span class="perm-chip denied">מקס\u2019 ${u.maxOnMinutes} דק'</span>`:''}
     </div>
   </div>`).join('')
@@ -2952,6 +2953,8 @@ function editUser(idx) {
     ['eu-canDelete','canDeletePrograms','מחיקת תוכנית'],
     ['eu-canMode','canChangeMode','החלף מצב'],
     ['eu-canLog','canViewLog','צפייה ביומן'],
+    ['eu-canIvr','canViewIvr','כרטיסיית IVR'],
+    ['eu-canHaDevices','canViewHaDevices','הגדרות התקנים'],
   ].map(([id,key,label])=>`<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="${id}" ${u[key]?'checked':''}><span style="font-size: 15px">${label}</span></label>`).join('');
   overlay.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:360px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
     <div style="font-size: 18px;font-weight:700">${idx<0?'הוסף משתמש':'עריכת משתמש'}</div>
@@ -2997,6 +3000,8 @@ function saveUser(idx) {
     canDeletePrograms: document.getElementById('eu-canDelete').checked,
     canChangeMode: document.getElementById('eu-canMode').checked,
     canViewLog: document.getElementById('eu-canLog').checked,
+    canViewIvr: document.getElementById('eu-canIvr').checked,
+    canViewHaDevices: document.getElementById('eu-canHaDevices').checked,
     maxOnMinutes: document.getElementById('eu-maxmin').value ? parseInt(document.getElementById('eu-maxmin').value) : null,
     allowedHours: document.getElementById('eu-from').value && document.getElementById('eu-to').value
       ? { from: parseInt(document.getElementById('eu-from').value), to: parseInt(document.getElementById('eu-to').value) }
@@ -3457,8 +3462,14 @@ function showTab(name,btn){
   if(name==='timeline')renderTimeline();
   if(name==='users')renderUsers();
   if(name==='modes')renderModes();
-  if(name==='ivr')renderIvrUsers();
-  if(name==='ha_devices')renderHaActive();
+  if(name==='ivr'){
+    if(currentUser?.role!=='admin' && !currentUser?.canViewIvr){ toast('⛔ אין הרשאה לכרטיסיית IVR'); return; }
+    renderIvrUsers();
+  }
+  if(name==='ha_devices'){
+    if(currentUser?.role!=='admin' && !currentUser?.canViewHaDevices){ toast('⛔ אין הרשאה להגדרות התקנים'); return; }
+    renderHaActive();
+  }
 }
 
 // ── HOME ASSISTANT DEVICES ────────────────────────────────
