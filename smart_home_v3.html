@@ -1108,6 +1108,9 @@ function applyPermissions() {
 
 function canControlRelay(relayId) {
   if (!currentUser) return false;
+  // admin עם relays ריק = גישה לכל, כולל התקני HA דינמיים
+  if (currentUser.role === 'admin') return true;
+  if (!currentUser.relays || !currentUser.relays.length) return false;
   if (!currentUser.relays.includes(relayId)) return false;
   if (currentUser.allowedHours) {
     const h = new Date().getHours();
