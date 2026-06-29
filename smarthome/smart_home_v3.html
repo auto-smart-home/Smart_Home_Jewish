@@ -3457,6 +3457,17 @@ function updateCalSection() {
 
 // ── SHOWtab ───────────────────────────────────────────────
 function showTab(name,btn){
+  // בדיקת הרשאות לפני כל פעולה
+  if(name==='ivr' && currentUser?.role!=='admin' && !currentUser?.canViewIvr){
+    toast('⛔ אין הרשאה לכרטיסיית IVR'); return;
+  }
+  if(name==='ha_devices' && currentUser?.role!=='admin' && !currentUser?.canViewHaDevices){
+    toast('⛔ אין הרשאה להגדרות התקנים'); return;
+  }
+  if(name==='log' && currentUser?.role!=='admin' && !currentUser?.canViewLog){
+    toast('⛔ אין הרשאה לצפייה ביומן'); return;
+  }
+
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   const panel=document.getElementById('tab-'+name);
@@ -3471,14 +3482,8 @@ function showTab(name,btn){
   if(name==='timeline')renderTimeline();
   if(name==='users')renderUsers();
   if(name==='modes')renderModes();
-  if(name==='ivr'){
-    if(currentUser?.role!=='admin' && !currentUser?.canViewIvr){ toast('⛔ אין הרשאה לכרטיסיית IVR'); return; }
-    renderIvrUsers();
-  }
-  if(name==='ha_devices'){
-    if(currentUser?.role!=='admin' && !currentUser?.canViewHaDevices){ toast('⛔ אין הרשאה להגדרות התקנים'); return; }
-    renderHaActive();
-  }
+  if(name==='ivr')renderIvrUsers();
+  if(name==='ha_devices')renderHaActive();
 }
 
 // ── HOME ASSISTANT DEVICES ────────────────────────────────
