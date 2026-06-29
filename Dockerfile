@@ -1,7 +1,6 @@
 FROM ghcr.io/home-assistant/amd64-base:3.19
 
-# התקן Node.js
-RUN apk add --no-cache nodejs npm
+RUN apk add --no-cache nodejs npm jq
 
 WORKDIR /app
 
