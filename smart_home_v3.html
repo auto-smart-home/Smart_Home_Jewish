@@ -494,13 +494,13 @@
 </div>
 <div class="main">
   <div class="tabs">
-    <button class="tab active" onclick="showTab('relays',this)">ממסרים</button>
+    <button class="tab active" onclick="showTab('relays',this)">ממסרים והתקנים</button>
     <button class="tab" onclick="showTab('programs',this)">תוכניות</button>
     <button class="tab" onclick="showTab('timeline',this)">ציר זמן</button>
     <button class="tab" onclick="showTab('modes',this)">מצבים</button>
     <button class="tab" onclick="showTab('users',this)">הרשאות</button>
     <button class="tab" onclick="showTab('ivr',this)">📞 IVR</button>
-    <button class="tab" onclick="showTab('ha_devices',this)">🏠 התקנים</button>
+    <button class="tab" onclick="showTab('ha_devices',this)">⚙️ הגדרות התקנים</button>
     <button class="tab" onclick="showTab('log',this)">יומן</button>
   </div>
 
@@ -1707,35 +1707,43 @@ function addMode(){
 function renderRelays(){
   const g=document.getElementById('relay-grid');
   let html='';
+  // בקרי Tasmota
   controllerGroups.forEach(ctrl=>{
     const ctrlRelays=relays.filter(r=>r.ctrl===ctrl.id);
     if(!ctrlRelays.length)return;
     html+=`<div class="ctrl-separator"><span class="ctrl-sep-label">🔌 ${ctrl.name}</span></div>`;
-    html+=ctrlRelays.map(r=>{
-      const cnt=programs.filter(p=>p.relay.includes(r.id)&&p.active&&isProgEffective(p)).length;
-      return `<div class="relay-card ${r.state?'relay-on':''}" id="card-${r.id}">
-      <div class="relay-header">
-        <span class="relay-num">ממסר ${r.id}</span>
-      </div>
-      <input class="relay-name-input" value="${r.name}"
-        onchange="saveRelayName(${r.id},this.value)" placeholder="שם הממסר...">
-      <div class="relay-controls">
-        <label class="toggle-switch">
-          <input type="checkbox" ${r.state?'checked':''} onchange="sendRelay(${r.id},this.checked)">
-          <div class="toggle-track"></div>
-          <div class="toggle-thumb"></div>
-        </label>
-        <span class="relay-state-label">${r.state?'פועל':'כבוי'}</span>
-        <button class="btn-timer" onclick="quickTimer(${r.id})">⏱ טיימר</button>
-      </div>
-      <div class="relay-footer">
-        <span class="last-action" id="last-${r.id}">—</span>
-        <span class="prog-count" onclick="showTab('programs',null);highlightRelayProgs(${r.id})" title="לחץ לתוכניות">${cnt} תוכניות</span>
-      </div>
-    </div>`;
-    }).join('');
+    html+=ctrlRelays.map(r=>relayCardHtml(r)).join('');
   });
+  // התקני HA
+  const haRelays=relays.filter(r=>r.ctrl==='ha');
+  if(haRelays.length){
+    html+=`<div class="ctrl-separator"><span class="ctrl-sep-label">🏠 התקני Home Assistant</span></div>`;
+    html+=haRelays.map(r=>relayCardHtml(r)).join('');
+  }
   g.innerHTML=html;
+}
+function relayCardHtml(r){
+  const cnt=programs.filter(p=>p.relay.includes(r.id)&&p.active&&isProgEffective(p)).length;
+  return `<div class="relay-card ${r.state?'relay-on':''}" id="card-${r.id}">
+    <div class="relay-header">
+      <span class="relay-num">${r.ctrl==='ha'?'🏠':''} ${r.id}</span>
+    </div>
+    <input class="relay-name-input" value="${r.name}"
+      onchange="saveRelayName(${r.id},this.value)" placeholder="שם...">
+    <div class="relay-controls">
+      <label class="toggle-switch">
+        <input type="checkbox" ${r.state?'checked':''} onchange="sendRelay(${r.id},this.checked)">
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+      <span class="relay-state-label">${r.state?'פועל':'כבוי'}</span>
+      <button class="btn-timer" onclick="quickTimer(${r.id})">⏱ טיימר</button>
+    </div>
+    <div class="relay-footer">
+      <span class="last-action" id="last-${r.id}">—</span>
+      <span class="prog-count" onclick="showTab('programs',null);highlightRelayProgs(${r.id})" title="לחץ לתוכניות">${cnt} תוכניות</span>
+    </div>
+  </div>`;
 }
 function saveRelayName(id,name){
   if(currentUser && currentUser.role!=='admin'){
