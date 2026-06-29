@@ -52,7 +52,21 @@ function loadConfigLocal() {
     if (cfg.yemotPermissions) { yemotPermissions = cfg.yemotPermissions; console.log(`📞 נטענו הרשאות IVR ל-${Object.keys(yemotPermissions).length} מזהים`); }
     if (cfg.ivrPendingTimers) { ivrPendingTimers = cfg.ivrPendingTimers; console.log(`⏱️ נטענו ${ivrPendingTimers.length} טיימרים ממתינים`); }
     if (cfg.ivrTodayEvents) { ivrTodayEvents = cfg.ivrTodayEvents; }
-    if (cfg.haDevices) { haDevices = cfg.haDevices; console.log(`🏠 נטענו ${haDevices.length} התקני HA`); }
+    if (cfg.haDevices) { 
+      haDevices = cfg.haDevices; 
+      // תיקון התקנים ללא relayId (מ-config ישן)
+      const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
+      haDevices.forEach(dev => {
+        if (!dev.relayId) {
+          const usedIds = new Set(haDevices.filter(d => d.relayId).map(d => d.relayId));
+          let nextId = tasmotaMax + 1;
+          while (usedIds.has(nextId)) nextId++;
+          dev.relayId = nextId;
+          console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
+        }
+      });
+      console.log(`🏠 נטענו ${haDevices.length} התקני HA`); 
+    }
     if (cfg.haToken) { haToken = cfg.haToken; }
     if (cfg.haUrl) { haUrl = cfg.haUrl; }
     if (cfg.yemotPhoneMap) { yemotPhoneMap = cfg.yemotPhoneMap; }
