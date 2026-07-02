@@ -48,6 +48,7 @@ function loadConfigLocal() {
     const cfg = JSON.parse(raw);
     if (cfg.programs)  { schedulerPrograms = cfg.programs; console.log(`📂 נטענו ${schedulerPrograms.length} תוכניות`); }
     if (cfg.activeModeId !== undefined) schedulerActiveModeId = cfg.activeModeId;
+    if (cfg.scheduledModes) { scheduledModes = cfg.scheduledModes; console.log(`🕐 נטענו ${scheduledModes.length} תזמוני מצב`); }
     if (cfg.serverConfig) serverConfig = cfg.serverConfig;
     if (cfg.yemotPermissions) { yemotPermissions = cfg.yemotPermissions; console.log(`📞 נטענו הרשאות IVR ל-${Object.keys(yemotPermissions).length} מזהים`); }
     if (cfg.ivrPendingTimers) { ivrPendingTimers = cfg.ivrPendingTimers; console.log(`⏱️ נטענו ${ivrPendingTimers.length} טיימרים ממתינים`); }
@@ -85,6 +86,7 @@ function saveConfigLocal() {
       const cfg = {
         programs: schedulerPrograms,
         activeModeId: schedulerActiveModeId,
+        scheduledModes,
         serverConfig,
         users: runtimeUsers,
         yemotPermissions,
@@ -371,6 +373,9 @@ function buildYemotAutoFiles() {
 // ── SCHEDULER STATE ──────────────────────────────────────
 let schedulerPrograms = [];
 let schedulerActiveModeId = 0;
+let scheduledModes = []; // תזמוני החלפת מצב
+let _previousModeId = null; // המצב לפני מעבר עם duration (לחזרה אוטומטית)
+let _activeScheduledModeTimer = null; // טיימר חזרה פעיל
 const _firedToday = new Set();
 const _actuallyFired = new Set();
 const _firedRunOnceToday = new Map();
@@ -567,6 +572,7 @@ io.on('connection', (socket) => {
   // שלח רשימת התקני HA
   socket.emit('ha_devices', haDevices);
   socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
+  socket.emit('scheduled_modes', scheduledModes);
 
   // ── Login ──
   socket.on('login', ({ name, password }) => {
@@ -837,6 +843,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('log_entry', (entry) => { addServerLog(entry); });
+
+  // ── תזמוני מצב ──
+  socket.on('get_scheduled_modes', () => {
+    socket.emit('scheduled_modes', scheduledModes);
+  });
+
+  socket.on('save_scheduled_modes', (modes) => {
+    scheduledModes = modes || [];
+    saveConfigLocal();
+    io.emit('scheduled_modes', scheduledModes);
+    socket.emit('scheduled_modes_saved', { ok: true, count: scheduledModes.length });
+  });
+
   socket.on('disconnect', () => { console.log('🖥️ ממשק התנתק'); });
 });
 
@@ -1068,8 +1087,148 @@ async function processIvrPendingTimers(){
   saveConfigLocal();
 }
 
+// ── תזמוני מצב אוטומטיים ───────────────────────────────
+const _firedScheduledModes = new Set(); // מונע ירי כפול באותו tick
+
+function commitAutoModeSwitch(newModeId, label) {
+  if (newModeId === schedulerActiveModeId) return;
+  try {
+    const impact = computeModeSwitchImpactGlobal(newModeId);
+    schedulerActiveModeId = newModeId;
+    saveConfigLocal();
+    // כבה ממסרים ממצב קודם
+    (impact.staleRelays || []).forEach(r => {
+      publishRelay(r.relayId, 'OFF').then(() => {
+        if (relayOwner[r.relayId]) delete relayOwner[r.relayId];
+      }).catch(() => {});
+    });
+    // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
+    (impact.missedPrograms || []).forEach(m => {
+      publishRelay(m.relayId, 'ON').then(() => {
+        relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
+      }).catch(() => {});
+    });
+    io.emit('mode_changed', { newModeId, label });
+    addServerLog({ type: 'info', msg: `🕐 [תזמון מצב] עבר למצב ${newModeId} — ${label}`, user: 'מערכת' });
+  } catch(e) {
+    console.error('❌ שגיאה ב-commitAutoModeSwitch:', e.message);
+  }
+}
+
+// גרסה גלובלית של computeModeSwitchImpact (לא בתוך io.on)
+function computeModeSwitchImpactGlobal(newModeId) {
+  const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const nowSec = getNowSecIL();
+  const staleRelays = [];
+  for (const relayIdStr of Object.keys(relayOwner)) {
+    const relayId = parseInt(relayIdStr, 10);
+    const owner = relayOwner[relayId];
+    const p = schedulerPrograms.find(x => String(x.id) === String(owner.progId));
+    const modeIds = p ? (p.modeIds ?? (p.modeId !== null ? [p.modeId] : [0])) : [];
+    if (!modeIds.includes(newModeId)) staleRelays.push({ relayId, relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`, ownerProgName: owner.name });
+  }
+  const savedMode = schedulerActiveModeId;
+  schedulerActiveModeId = newModeId;
+  const dow = nowIL.getDay(); const todayKey = nowIL.toDateString();
+  const zmanim = getZmanim(nowIL);
+  let newModeEvents = [];
+  try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
+  finally { schedulerActiveModeId = savedMode; }
+  const missedCandidatesByRelay = {};
+  for (const ev of newModeEvents) {
+    if (ev.action !== 'ON' || ev.isEndEvent) continue;
+    if (ev.fireSec > nowSec) continue;
+    if (nowSec - ev.fireSec <= 8) continue;
+    if (ev.endSec !== null && ev.endSec <= nowSec) continue;
+    const cur = missedCandidatesByRelay[ev.relayId];
+    if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
+    const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
+    if (!curWins) missedCandidatesByRelay[ev.relayId] = ev;
+  }
+  const missedPrograms = Object.values(missedCandidatesByRelay).map(ev => ({
+    relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
+    progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
+  }));
+  return { staleRelays, missedPrograms };
+}
+
+function processScheduledModes() {
+  if (!scheduledModes.length) return;
+  try {
+    const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const nowSec = getNowSecIL();
+    const dow = nowIL.getDay();
+    const todayKey = nowIL.toDateString();
+    const zmanim = getZmanim(nowIL);
+    const WINDOW_SEC = 15;
+
+    // נקה fired set יומי
+    _firedScheduledModes.forEach(k => { if (!k.endsWith(todayKey)) _firedScheduledModes.delete(k); });
+
+    for (const sm of scheduledModes) {
+      if (!sm.active) continue;
+      if (sm.days?.length && !sm.days.includes(dow)) continue;
+
+      // בדיקת תאריך
+      if (sm.calType && sm.calType !== 'none') {
+        const dd = String(nowIL.getDate()).padStart(2,'0');
+        const mm = String(nowIL.getMonth()+1).padStart(2,'0');
+        const yyyy = nowIL.getFullYear();
+        const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
+        if (!entry) continue;
+        const calDate = entry['תאריך עברי'] || '';
+        if (sm.calType === 'annual') {
+          if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
+        } else if (sm.calType === 'once') {
+          if (calDate !== sm.calLabel || yyyy !== sm.calYear) continue;
+        }
+      }
+
+      // חשב זמן הפעלה
+      let fireSec = -1;
+      if (sm.type === 'time') {
+        const [h,m] = (sm.time||'00:00').split(':').map(Number);
+        fireSec = h*3600 + m*60;
+      } else if (sm.type === 'zman') {
+        const zmKey = { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',mincha:'minchaGedola' }[sm.zman] || sm.zman;
+        const base = zmanim[zmKey];
+        if (!base) continue;
+        const [h,m] = base.split(':').map(Number);
+        const baseSec = h*3600 + m*60;
+        const offset = (sm.offsetVal||0) * 60;
+        fireSec = sm.offsetDir === '-' ? baseSec - offset : baseSec + offset;
+      }
+      if (fireSec < 0) continue;
+      if (fireSec > nowSec || fireSec < nowSec - WINDOW_SEC) continue;
+
+      const fireKey = `sm_${sm.id}_${todayKey}`;
+      if (_firedScheduledModes.has(fireKey)) continue;
+      _firedScheduledModes.add(fireKey);
+
+      // שמור מצב קודם אם יש duration
+      if (sm.durationOn) {
+        _previousModeId = schedulerActiveModeId;
+        const durationSec = ((sm.durationH||0)*3600 + (sm.durationM||0)*60);
+
+        // הגדר טיימר לחזרה
+        if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
+        const prevMode = _previousModeId;
+        _activeScheduledModeTimer = setTimeout(() => {
+          _activeScheduledModeTimer = null;
+          commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
+        }, durationSec * 1000);
+      }
+
+      commitAutoModeSwitch(sm.toModeId, sm.name || `תזמון מצב ${sm.id}`);
+    }
+  } catch(e) {
+    console.error('❌ שגיאה ב-processScheduledModes:', e.message);
+  }
+}
+
 setInterval(schedulerTick, 5000);
 setInterval(processIvrPendingTimers, 5000);
+setInterval(processScheduledModes, 10000);
 schedulerTick();
 processIvrPendingTimers();
 
