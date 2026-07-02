@@ -739,14 +739,18 @@ io.on('connection', (socket) => {
     (turnOffRelayIds || []).forEach(relayId => {
       publishRelay(relayId, 'OFF').then(() => { if (relayOwner[relayId]) delete relayOwner[relayId]; }).catch(() => {});
     });
-    (activateProgIds || []).forEach(progId => {
+    if ((activateProgIds || []).length) {
       const impact = computeModeSwitchImpact(newModeId);
-      const match = impact.missedPrograms.find(m => String(m.progId) === String(progId));
-      if (!match) return;
-      publishRelay(match.relayId, 'ON').then(() => {
-        relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
-      }).catch(() => {});
-    });
+      activateProgIds.forEach(progId => {
+        // filter — תוכנית יכולה לכלול מספר ממסרים
+        const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
+        matches.forEach(match => {
+          publishRelay(match.relayId, 'ON').then(() => {
+            relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
+          }).catch(() => {});
+        });
+      });
+    }
   });
 
   // ── Users ──
