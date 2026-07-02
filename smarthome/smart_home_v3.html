@@ -464,6 +464,7 @@
       <span class="ml" id="active-mode-label">רגיל</span>
       <select id="mode-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size: 14px;font-family:inherit;cursor:pointer"></select>
       <button class="mode-pill-btn" onclick="confirmModeChange()">אישור</button>
+      <button class="mode-pill-btn" onclick="openScheduledModesModal()" style="background:var(--surface2)">🕐 ניהול מצבים</button>
     </div>
   </div>
   <div class="status-pill" id="status-pill">
@@ -509,8 +510,14 @@
     <div class="quick-row">
       <button class="quick-btn" onclick="allOn()">☀️ הכל דלוק</button>
       <button class="quick-btn danger" onclick="allOff()">🌙 הכל כבוי</button>
-      <button class="quick-btn" onclick="shabbatMode()">✡️ מצב שבת</button>
-      <button class="quick-btn" onclick="morningMode()">🌅 בוקר טוב</button>
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button class="quick-btn" onclick="shabbatMode()">✡️ מצב שבת</button>
+        <button onclick="editQuickAction('shabbat')" title="עריכת מצב שבת" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:14px;color:var(--muted)">✏️</button>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button class="quick-btn" onclick="morningMode()">🌅 בוקר טוב</button>
+        <button onclick="editQuickAction('morning')" title="עריכת בוקר טוב" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:14px;color:var(--muted)">✏️</button>
+      </div>
     </div>
     <div class="relay-grid" id="relay-grid"></div>
   </div>
@@ -980,6 +987,7 @@ function migrateProg(p) {
 
 function applyServerConfig(d) {
   if (!d) return;
+  serverConfig = d; // שמור גלובלית לשימוש ב-quickActions וכו'
   if (d.relayNames) d.relayNames.forEach(rn => { const r=relays.find(x=>x.id===rn.id); if(r) r.name=rn.name; });
   if (d.programs?.length)  { programs.length=0;  d.programs.forEach(p=>programs.push(migrateProg(p))); }
   if (d.modes?.length)     { modes.length=0;     d.modes.forEach(m=>modes.push(m)); }
@@ -1052,6 +1060,8 @@ let activeModeId = 0;
 // המשתמשים והסיסמאות נשמרים בשרת בלבד
 // הדפדפן מקבל פרופיל ציבורי לאחר כניסה מוצלחת
 let currentUser = null; // המשתמש המחובר כרגע — מגיע מהשרת
+let serverConfig = {}; // הגדרות שרת (quickActions וכו')
+let _scheduledModes = []; // תזמוני החלפת מצב
 let mqttClient = null;
 let socket = null;
 let zmanim = {};
@@ -1102,17 +1112,19 @@ function applyPermissions() {
   if (!currentUser) return;
   const isAdmin = currentUser.role === 'admin';
 
-  // יומן
-  const logTab = document.querySelector('[onclick*="\'log\'"]');
-  if (logTab) logTab.style.display = (isAdmin || currentUser.canViewLog) ? '' : 'none';
-
-  // IVR
-  const ivrTab = document.querySelector('[onclick*="\'ivr\'"]');
-  if (ivrTab) ivrTab.style.display = (isAdmin || currentUser.canViewIvr) ? '' : 'none';
-
-  // הגדרות התקנים
-  const haTab = document.querySelector('[onclick*="\'ha_devices\'"]');
-  if (haTab) haTab.style.display = (isAdmin || currentUser.canViewHaDevices) ? '' : 'none';
+  // מציאה בטוחה של כרטיסיות לפי תוכן ה-onclick
+  document.querySelectorAll('.tab').forEach(btn => {
+    const oc = btn.getAttribute('onclick') || '';
+    if (oc.includes("'log'")) {
+      btn.style.display = (isAdmin || currentUser.canViewLog) ? '' : 'none';
+    }
+    if (oc.includes("'ivr'")) {
+      btn.style.display = (isAdmin || currentUser.canViewIvr) ? '' : 'none';
+    }
+    if (oc.includes("'ha_devices'")) {
+      btn.style.display = (isAdmin || currentUser.canViewHaDevices) ? '' : 'none';
+    }
+  });
 }
 
 function canControlRelay(relayId) {
@@ -1366,6 +1378,24 @@ function connectMQTT() {
     });
     renderRelays();
     if (document.getElementById('tab-ha_devices')?.classList.contains('active')) renderHaActive();
+  });
+
+  // ── תזמוני מצב ──
+  socket.on('scheduled_modes', (modes) => {
+    _scheduledModes = modes || [];
+    renderScheduledModes();
+  });
+
+  socket.on('scheduled_modes_saved', ({ ok, count }) => {
+    if (ok) toast(`✅ ${count} תזמוני מצב נשמרו`);
+  });
+
+  socket.on('mode_changed', ({ newModeId, label }) => {
+    activeModeId = newModeId;
+    renderModes(); renderPrograms(); renderRelays();
+    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    saveLS();
+    addLog('info', `🕐 מעבר מצב אוטומטי: ${label}`);
   });
 
   socket.on('disconnect', () => {
@@ -1851,6 +1881,20 @@ function scrollToProg(seqId){
     setTimeout(()=>el.style.boxShadow='',2200);
   }
 }
+function duplicateProg(id) {
+  const orig = programs.find(p => p.id === id);
+  if (!orig) return;
+  const newProg = JSON.parse(JSON.stringify(orig));
+  newProg.id = nextProgId++;
+  newProg.seqId = programs.length ? Math.max(...programs.map(p => p.seqId || 0)) + 1 : 1;
+  newProg.name = orig.name + ' (עותק)';
+  newProg.active = false;
+  programs.push(newProg);
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ תוכנית "${orig.name}" שוכפלה`);
+}
+
 function toggleProgActive(id){
   if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
     toast('אינך מורשה לשנות סטטוס תוכניות');return;
@@ -3598,6 +3642,267 @@ function toast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg;t.className='toast show';
   clearTimeout(t._tid);t._tid=setTimeout(()=>t.classList.remove('show'),2600);
+}
+
+// ── עריכת פעולות מהירות ──────────────────────────────────
+function getQuickActionConfig(key) {
+  return (serverConfig && serverConfig.quickActions && serverConfig.quickActions[key]) || null;
+}
+
+function editQuickAction(key) {
+  const label = key === 'shabbat' ? 'מצב שבת' : 'בוקר טוב';
+  const cfg = getQuickActionConfig(key) || {};
+  // cfg.relays: { "1": "ON", "2": "OFF", "3": null } — null = ללא שינוי
+  const overlayId = `qa-overlay-${key}`;
+  let existing = document.getElementById(overlayId);
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = overlayId;
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+  const relayRows = relays.map(r => {
+    const cur = cfg.relays ? cfg.relays[String(r.id)] : null;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span style="flex:1;font-size:14px">${r.name} (${r.id})</span>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="ON" ${cur==='ON'?'checked':''}> הדלק</label>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="OFF" ${cur==='OFF'?'checked':''}> כבה</label>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="none" ${!cur?'checked':''}> ללא שינוי</label>
+    </div>`;
+  }).join('');
+
+  overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:420px;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+    <div style="font-size:17px;font-weight:700">✏️ עריכת "${label}"</div>
+    <div style="font-size:13px;color:var(--muted)">הגדר לכל ממסר מה יקרה בלחיצה על הכפתור</div>
+    <div>${relayRows}</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="saveQuickAction('${key}','${overlayId}')" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px;font-family:inherit;font-size:14px;cursor:pointer">💾 שמור</button>
+      <button onclick="document.getElementById('${overlayId}').remove()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:inherit;cursor:pointer">ביטול</button>
+    </div>
+  </div>`;
+
+  document.body.appendChild(overlay);
+}
+
+function saveQuickAction(key, overlayId) {
+  const relaysCfg = {};
+  relays.forEach(r => {
+    const checked = document.querySelector(`input[name="qa-${key}-${r.id}"]:checked`);
+    const val = checked ? checked.value : 'none';
+    if (val !== 'none') relaysCfg[String(r.id)] = val;
+  });
+  if (!serverConfig) serverConfig = {};
+  if (!serverConfig.quickActions) serverConfig.quickActions = {};
+  serverConfig.quickActions[key] = { relays: relaysCfg };
+  // שלח לשרת דרך sync_programs
+  syncProgramsToServer();
+  document.getElementById(overlayId)?.remove();
+  toast(`✅ "${key === 'shabbat' ? 'מצב שבת' : 'בוקר טוב'}" עודכן`);
+}
+
+// עדכון פונקציות פעולה מהירה לשימוש בהגדרות
+function shabbatMode() {
+  const cfg = getQuickActionConfig('shabbat');
+  if (cfg && cfg.relays) {
+    Object.entries(cfg.relays).forEach(([id, state]) => sendRelay(parseInt(id), state === 'ON'));
+    toast('מצב שבת הופעל');
+  } else {
+    // ברירת מחדל
+    relays.forEach(r => sendRelay(r.id, false)); sendRelay(3, true);
+    toast('מצב שבת — רק תאורה פעילה');
+  }
+}
+
+function morningMode() {
+  const cfg = getQuickActionConfig('morning');
+  if (cfg && cfg.relays) {
+    Object.entries(cfg.relays).forEach(([id, state]) => sendRelay(parseInt(id), state === 'ON'));
+    toast('בוקר טוב הופעל');
+  } else {
+    sendRelay(1, true); setTimeout(() => sendRelay(2, true), 500);
+    toast('בוקר טוב — דוד ומזגן הודלקו');
+  }
+}
+
+// ── ניהול מצבים מתוזמנים ─────────────────────────────────
+const ZMAN_OPTIONS_SM = [
+  { val: 'time', label: 'שעה קבועה' },
+  { val: 'sunset', label: 'שקיעה' },
+  { val: 'sunrise', label: 'זריחה' },
+  { val: 'candles', label: 'הדלקת נרות' },
+  { val: 'havdalah', label: 'צאת שבת' },
+  { val: 'tzeit', label: 'צאת הכוכבים' },
+  { val: 'dawn', label: 'עלות השחר' },
+];
+
+function openScheduledModesModal() {
+  let overlay = document.getElementById('sm-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'sm-modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+    overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:680px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:17px;font-weight:700">🕐 ניהול מצבים מתוזמנים</div>
+        <button onclick="document.getElementById('sm-modal-overlay').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted)">✕</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:10px">
+        ⚠️ במעבר אוטומטי: כל הממסרים הדלוקים ממצב קודם יכובו, ותוכניות שהיו צריכות לדלוק כרגע במצב החדש יופעלו אוטומטית. לשליטה מדויקת יותר — בצע מעבר ידנית.
+      </div>
+      <div id="sm-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      <button onclick="addScheduledMode()" style="background:var(--accent2);color:#fff;border:none;border-radius:8px;padding:10px;font-family:inherit;font-size:14px;cursor:pointer;margin-top:4px">+ הוסף תזמון מצב</button>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="saveScheduledModes()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-family:inherit;font-size:14px;cursor:pointer">💾 שמור הכל</button>
+        <button onclick="document.getElementById('sm-modal-overlay').remove()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:inherit;cursor:pointer">סגור</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }
+  socket.emit('get_scheduled_modes');
+  renderScheduledModes();
+}
+
+function renderScheduledModes() {
+  const list = document.getElementById('sm-list');
+  if (!list) return;
+  if (!_scheduledModes.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--muted);text-align:center;padding:20px">אין תזמוני מצב — לחץ "+ הוסף"</div>';
+    return;
+  }
+  list.innerHTML = _scheduledModes.map((sm, idx) => buildSmRow(sm, idx)).join('');
+}
+
+function buildSmRow(sm, idx) {
+  const modeOpts = modes.map(m => `<option value="${m.id}" ${sm.toModeId===m.id?'selected':''}>${m.name}</option>`).join('');
+  const zmanOpts = ZMAN_OPTIONS_SM.map(z => `<option value="${z.val}" ${(sm.zman||sm.type)===z.val?'selected':''}>${z.label}</option>`).join('');
+  const isTime = (sm.type||'time') === 'time';
+  const daysHtml = ['א','ב','ג','ד','ה','ו','ש'].map((d,i) =>
+    `<label style="font-size:12px"><input type="checkbox" data-sm="${idx}" data-day="${i}" ${(sm.days||[]).includes(i)?'checked':''}> ${d}</label>`
+  ).join('');
+  const calType = sm.calType || 'none';
+
+  return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px" id="sm-row-${idx}">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input type="checkbox" ${sm.active?'checked':''} onchange="_scheduledModes[${idx}].active=this.checked" title="פעיל">
+      <span style="font-size:13px;color:var(--muted)">עבור למצב:</span>
+      <select onchange="_scheduledModes[${idx}].toModeId=parseInt(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${modeOpts}</select>
+      <button onclick="removeScheduledMode(${idx})" style="margin-right:auto;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:6px;padding:3px 8px;cursor:pointer;font-family:inherit">🗑</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">זמן:</span>
+      <select onchange="_scheduledModes[${idx}].type=this.value==='time'?'time':'zman';_scheduledModes[${idx}].zman=this.value!=='time'?this.value:null;renderScheduledModes()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${zmanOpts}</select>
+      ${isTime
+        ? `<input type="time" value="${sm.time||'00:00'}" onchange="_scheduledModes[${idx}].time=this.value" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`
+        : `<select onchange="_scheduledModes[${idx}].offsetDir=this.value" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">
+            <option value="+" ${sm.offsetDir!=='-'?'selected':''}>+</option>
+            <option value="-" ${sm.offsetDir==='-'?'selected':''}>-</option>
+           </select>
+           <input type="number" min="0" max="120" value="${sm.offsetVal||0}" onchange="_scheduledModes[${idx}].offsetVal=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> דקות`
+      }
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">ימים:</span>${daysHtml}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">תאריך:</span>
+      <select onchange="_scheduledModes[${idx}].calType=this.value;renderScheduledModes()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">
+        <option value="none" ${calType==='none'?'selected':''}>ללא</option>
+        <option value="annual" ${calType==='annual'?'selected':''}>שנתי (תאריך עברי)</option>
+        <option value="once" ${calType==='once'?'selected':''}>חד-פעמי</option>
+      </select>
+      ${calType!=='none'?`<input type="text" placeholder="חפש תאריך עברי..." value="${sm.calLabel||''}" oninput="searchCalendarSm(this.value,${idx})" style="width:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text)">
+      ${sm.calLabel?`<span style="font-size:12px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);border-radius:6px;padding:2px 8px;color:var(--accent2)">${sm.calLabel} <button onclick="_scheduledModes[${idx}].calLabel='';_scheduledModes[${idx}].calDay=null;_scheduledModes[${idx}].calMonth=null;renderScheduledModes()" style="background:none;border:none;cursor:pointer;color:var(--muted)">✕</button></span>`:''}
+      ${calType==='once'?`<input type="number" placeholder="שנה" value="${sm.calYear||''}" onchange="_scheduledModes[${idx}].calYear=parseInt(this.value)" style="width:70px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`:''}
+      <div id="sm-cal-results-${idx}" style="position:absolute;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:8px;max-height:150px;overflow-y:auto;display:none;min-width:200px"></div>`:''}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" ${sm.durationOn?'checked':''} onchange="_scheduledModes[${idx}].durationOn=this.checked;renderScheduledModes()"> למשך
+      </label>
+      ${sm.durationOn?`<input type="number" min="0" max="23" value="${sm.durationH||0}" onchange="_scheduledModes[${idx}].durationH=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> שעות
+      <input type="number" min="0" max="59" value="${sm.durationM||0}" onchange="_scheduledModes[${idx}].durationM=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> דקות
+      <span style="font-size:12px;color:var(--muted)">(אחר כך יחזור למצב הקודם)</span>`:''}
+    </div>
+  </div>`;
+}
+
+function addScheduledMode() {
+  const newId = (_scheduledModes.length ? Math.max(..._scheduledModes.map(s=>s.id)) : 0) + 1;
+  _scheduledModes.push({
+    id: newId, name: `תזמון ${newId}`, toModeId: modes[0]?.id || 0,
+    type: 'time', time: '00:00', zman: null, offsetDir: '+', offsetVal: 0,
+    days: [0,1,2,3,4,5,6], calType: 'none', calLabel: '', calDay: null, calMonth: null, calYear: null,
+    durationOn: false, durationH: 0, durationM: 0, active: true,
+  });
+  renderScheduledModes();
+}
+
+function removeScheduledMode(idx) {
+  if (!confirm('למחוק תזמון זה?')) return;
+  _scheduledModes.splice(idx, 1);
+  renderScheduledModes();
+}
+
+function saveScheduledModes() {
+  // אסוף ימים מה-checkboxes
+  _scheduledModes.forEach((sm, idx) => {
+    const days = [];
+    document.querySelectorAll(`input[data-sm="${idx}"][data-day]`).forEach(cb => {
+      if (cb.checked) days.push(parseInt(cb.getAttribute('data-day')));
+    });
+    sm.days = days;
+  });
+
+  // בדוק קונפליקטים — שני תזמונים לאותו יום+שעה
+  const conflicts = [];
+  for (let i = 0; i < _scheduledModes.length; i++) {
+    for (let j = i+1; j < _scheduledModes.length; j++) {
+      const a = _scheduledModes[i], b = _scheduledModes[j];
+      if (!a.active || !b.active) continue;
+      const sharedDays = (a.days||[]).filter(d => (b.days||[]).includes(d));
+      if (!sharedDays.length) continue;
+      const timeA = a.type==='time' ? a.time : `${a.zman}${a.offsetDir}${a.offsetVal}`;
+      const timeB = b.type==='time' ? b.time : `${b.zman}${b.offsetDir}${b.offsetVal}`;
+      if (timeA === timeB) conflicts.push(`תזמון ${a.id} ותזמון ${b.id} מופעלים באותו זמן`);
+    }
+  }
+  if (conflicts.length) {
+    alert('⚠️ קונפליקטים נמצאו — יש לתקן לפני שמירה:\n' + conflicts.join('\n'));
+    return;
+  }
+
+  socket.emit('save_scheduled_modes', _scheduledModes);
+}
+
+function searchCalendarSm(query, idx) {
+  const results = document.getElementById(`sm-cal-results-${idx}`);
+  if (!results) return;
+  if (!query || query.length < 2) { results.style.display='none'; return; }
+  const found = [];
+  const seen = new Set();
+  for (const entry of HOLIDAY_CALENDAR) {
+    const heb = entry['תאריך עברי'] || '';
+    if (heb.includes(query) && !seen.has(heb)) {
+      seen.add(heb);
+      const parts = heb.split(' ');
+      found.push({ label: heb, day: parts[0], month: parts.slice(1).join(' ') });
+      if (found.length >= 8) break;
+    }
+  }
+  if (!found.length) { results.style.display='none'; return; }
+  results.style.display = 'block';
+  results.innerHTML = found.map(f =>
+    `<div onclick="selectCalendarSm(${idx},'${f.label}','${f.day}','${f.month}')" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">${f.label}</div>`
+  ).join('');
+}
+
+function selectCalendarSm(idx, label, day, month) {
+  _scheduledModes[idx].calLabel = label;
+  _scheduledModes[idx].calDay = day;
+  _scheduledModes[idx].calMonth = month;
+  const results = document.getElementById(`sm-cal-results-${idx}`);
+  if (results) results.style.display = 'none';
+  renderScheduledModes();
 }
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
