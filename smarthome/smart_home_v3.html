@@ -1406,7 +1406,7 @@ function connectMQTT() {
 }
 function updateRelayUI(id,state){
   const r=relays.find(r=>parseInt(r.id)===id);
-  if(r&&r.state!==state){r.state=state;renderRelays();addLog('success',`ממסר ${id} (${r.name}): ${state?'ON':'OFF'}`);}
+  if(r&&r.state!==state){r.state=state;renderRelays();}
 }
 function sendRelay(id, state, source='ידני') {
   if (!canControlRelay(id)) return;
