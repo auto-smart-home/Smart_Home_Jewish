@@ -10,6 +10,7 @@ YEMOT_API_TOKEN=$(jq -r '.yemot_api_token // ""' $OPTIONS)
 YEMOT_API_LINK_URL=$(jq -r '.yemot_api_link_url // ""' $OPTIONS)
 ADMIN_PASSWORD=$(jq -r '.admin_password // ""' $OPTIONS)
 CONTROLLERS=$(jq -c '.controllers // []' $OPTIONS)
+GITHUB_REPO=$(jq -r '.github_repo // ""' $OPTIONS)
 
 export CONFIG_JSON="{\"MQTT_URL\":\"${MQTT_URL}\",\"MQTT_USER\":\"${MQTT_USER}\",\"MQTT_PASS\":\"${MQTT_PASS}\",\"YEMOT_PHONE_MAP\":{},\"CONTROLLERS\":${CONTROLLERS},\"USERS\":[{\"name\":\"admin\",\"password\":\"placeholder_will_be_overridden\",\"role\":\"admin\",\"relays\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]}],\"EMERGENCY_PASSWORD\":\"${ADMIN_PASSWORD}\"}"
 
@@ -17,10 +18,12 @@ export YEMOT_API_TOKEN
 export YEMOT_API_LINK_URL
 export PORT=3000
 
-# אם קיים קובץ HTML מעודכן ב-/share — השתמש בו במקום זה שב-image
-if [ -f /share/smarthome_ui/smart_home_v3.html ]; then
-  echo "📄 טוען HTML מ-/share/smarthome_ui/ (גרסה מעודכנת)"
-  cp /share/smarthome_ui/smart_home_v3.html /app/smart_home_v3.html
+# עדכון אוטומטי מ-GitHub בכל הפעלה
+if [ -n "$GITHUB_REPO" ]; then
+  BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/smarthome"
+  echo "🔄 מוריד קבצים עדכניים מ-GitHub: ${GITHUB_REPO}..."
+  wget -q -O /app/smart_home_v3.html "${BASE_URL}/smart_home_v3.html" && echo "✅ smart_home_v3.html עודכן" || echo "⚠️ לא הצליח להוריד HTML"
+  wget -q -O /app/index.js "${BASE_URL}/index.js" && echo "✅ index.js עודכן" || echo "⚠️ לא הצליח להוריד index.js"
 fi
 
 echo "🚀 מפעיל שרת בית חכם..."
