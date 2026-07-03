@@ -547,15 +547,31 @@ function pruneLog() {
   const cutoff = Date.now() - MAX_LOG_DAYS * 24 * 60 * 60 * 1000;
   while (serverLog.length && new Date(serverLog[serverLog.length-1].ts).getTime() < cutoff) serverLog.pop();
 }
+// ── LOGGER ───────────────────────────────────────────────
+const _origLog = console.log;
+const _origError = console.error;
+const _origWarn = console.warn;
+function _ts() {
+  return new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+console.log = (...a) => _origLog(`[${_ts()}]`, ...a);
+console.error = (...a) => _origError(`[${_ts()}] ❌`, ...a);
+console.warn = (...a) => _origWarn(`[${_ts()}] ⚠️`, ...a);
+
 function addServerLog(entry) {
   const now = new Date();
   const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  serverLog.unshift({ ...entry, ts: now.toISOString(),
+  const logEntry = { ...entry, ts: now.toISOString(),
     time: nowIL.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     date: nowIL.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' }),
-  });
+  };
+  serverLog.unshift(logEntry);
   pruneLog();
   io.emit('log_broadcast', serverLog[0]);
+  // שיקוף ליומן ה-Add-on לאירועים חשובים
+  if (['sent','warning','danger','info'].includes(entry.type)) {
+    _origLog(`[${logEntry.time}] ${entry.type.toUpperCase()}: ${entry.msg}`);
+  }
 }
 
 // ── SOCKET.IO ────────────────────────────────────────────
