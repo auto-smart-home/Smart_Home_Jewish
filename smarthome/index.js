@@ -708,15 +708,30 @@ io.on('connection', (socket) => {
     schedulerActiveModeId = newModeId;
     const dow = nowIL.getDay(); const todayKey = nowIL.toDateString();
     const zmanim = getZmanim(nowIL);
-    let newModeEvents;
+    let newModeEvents = [];
     try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
     finally { schedulerActiveModeId = savedMode; }
+
+    // בנה מפה של אירוע כיבוי אחרון שירה לפני עכשיו, לכל ממסר
+    // זה מייצג את המצב שהיה אמור להיות כעת לפי התזמון
+    const lastOffFiredByRelay = {};
+    for (const ev of newModeEvents) {
+      if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
+      const cur = lastOffFiredByRelay[ev.relayId];
+      if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelay[ev.relayId] = ev;
+    }
+
     const missedCandidatesByRelay = {};
     for (const ev of newModeEvents) {
       if (ev.action !== 'ON' || ev.isEndEvent) continue;
       if (ev.fireSec > nowSec) continue;
       if (nowSec - ev.fireSec <= 8) continue;
+      // אם ה-endSec עבר — הממסר כבר אמור להיות כבוי
       if (ev.endSec !== null && ev.endSec <= nowSec) continue;
+      // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
+      const lastOff = lastOffFiredByRelay[ev.relayId];
+      if (lastOff && lastOff.fireSec > ev.fireSec) continue;
+
       const cur = missedCandidatesByRelay[ev.relayId];
       if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
       const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
@@ -1138,12 +1153,24 @@ function computeModeSwitchImpactGlobal(newModeId) {
   let newModeEvents = [];
   try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
   finally { schedulerActiveModeId = savedMode; }
+
+  // בנה מפה של אירוע כיבוי אחרון שירה לפני עכשיו, לכל ממסר
+  const lastOffFiredByRelayG = {};
+  for (const ev of newModeEvents) {
+    if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
+    const cur = lastOffFiredByRelayG[ev.relayId];
+    if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelayG[ev.relayId] = ev;
+  }
+
   const missedCandidatesByRelay = {};
   for (const ev of newModeEvents) {
     if (ev.action !== 'ON' || ev.isEndEvent) continue;
     if (ev.fireSec > nowSec) continue;
     if (nowSec - ev.fireSec <= 8) continue;
     if (ev.endSec !== null && ev.endSec <= nowSec) continue;
+    // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
+    const lastOff = lastOffFiredByRelayG[ev.relayId];
+    if (lastOff && lastOff.fireSec > ev.fireSec) continue;
     const cur = missedCandidatesByRelay[ev.relayId];
     if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
     const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
