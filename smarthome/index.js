@@ -889,6 +889,7 @@ io.on('connection', (socket) => {
     saveConfigLocal();
     io.emit('scheduled_modes', scheduledModes);
     socket.emit('scheduled_modes_saved', { ok: true, count: scheduledModes.length });
+    addServerLog({ type: 'info', msg: `🕐 נשמרו ${scheduledModes.length} תזמוני מצב`, user: 'מערכת' });
   });
 
   socket.on('disconnect', () => { console.log('🖥️ ממשק התנתק'); });
