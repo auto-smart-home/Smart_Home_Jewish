@@ -8,7 +8,7 @@ COPY package.json ./
 RUN npm install --production --quiet
 
 # ARG CACHEBUST מאלץ Docker לא להשתמש ב-cache מכאן והלאה
-ARG CACHEBUST=4
+ARG CACHEBUST=5
 COPY index.js ./
 COPY smart_home_v3.html ./
 COPY calendar_data.js ./
