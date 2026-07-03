@@ -22,8 +22,9 @@ export PORT=3000
 if [ -n "$GITHUB_REPO" ]; then
   BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/smarthome"
   echo "🔄 מוריד קבצים עדכניים מ-GitHub: ${GITHUB_REPO}..."
-  wget -q -O /app/smart_home_v3.html "${BASE_URL}/smart_home_v3.html" && echo "✅ smart_home_v3.html עודכן" || echo "⚠️ לא הצליח להוריד HTML"
-  wget -q -O /app/index.js "${BASE_URL}/index.js" && echo "✅ index.js עודכן" || echo "⚠️ לא הצליח להוריד index.js"
+  TS=$(date +%s)
+  wget -q -O /app/smart_home_v3.html "${BASE_URL}/smart_home_v3.html?ts=${TS}" && echo "✅ smart_home_v3.html עודכן" || echo "⚠️ לא הצליח להוריד HTML"
+  wget -q -O /app/index.js "${BASE_URL}/index.js?ts=${TS}" && echo "✅ index.js עודכן" || echo "⚠️ לא הצליח להוריד index.js"
 fi
 
 echo "🚀 מפעיל שרת בית חכם..."
