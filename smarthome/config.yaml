@@ -23,6 +23,7 @@ options:
   yemot_api_token: ""
   yemot_api_link_url: ""
   admin_password: ""
+  github_repo: "auto-smart-home/Smart_Home_Jewish"
   controllers: []
 schema:
   mqtt_url: str
@@ -31,6 +32,7 @@ schema:
   yemot_api_token: str
   yemot_api_link_url: str
   admin_password: str
+  github_repo: str
   controllers:
     - id: str
       name: str
