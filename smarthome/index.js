@@ -650,34 +650,39 @@ io.on('connection', (socket) => {
 
   // הוספת/עדכון התקני HA שנבחרו
   socket.on('save_ha_devices', (selectedDevices) => {
-    // selectedDevices: [{ entity_id, friendly_name, domain }]
-    // הקצה relayId לכל התקן חדש (המשך מה-offset של הבקרים)
     const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
-    const existingIds = new Set(haDevices.map(d => d.entity_id));
 
-    selectedDevices.forEach(dev => {
-      if (!existingIds.has(dev.entity_id)) {
-        // מצא relayId חופשי
-        const usedIds = new Set(haDevices.map(d => d.relayId));
-        let nextId = tasmotaMax + 1;
-        while (usedIds.has(nextId)) nextId++;
-        haDevices.push({ ...dev, relayId: nextId });
-        existingIds.add(dev.entity_id);
-      } else {
-        // עדכן שם אם השתנה
-        const existing = haDevices.find(d => d.entity_id === dev.entity_id);
-        if (existing) existing.friendly_name = dev.friendly_name;
-      }
+    // בנה מפה של entity_id → relayId קיים (כולל תיקון null)
+    const existingRelayIds = {};
+    haDevices.forEach(d => {
+      if (d.entity_id && d.relayId) existingRelayIds[d.entity_id] = d.relayId;
     });
 
-    // מחק מה שהוסר
-    haDevices = haDevices.filter(d => selectedDevices.some(s => s.entity_id === d.entity_id));
+    // עדכן רשימה — שמור relayId קיים או הקצה חדש
+    haDevices = selectedDevices.map(dev => {
+      if (existingRelayIds[dev.entity_id]) {
+        // התקן קיים — שמור relayId ועדכן שם
+        return { ...dev, relayId: existingRelayIds[dev.entity_id] };
+      } else {
+        // התקן חדש — הקצה relayId חופשי
+        const usedIds = new Set([
+          ...Object.values(existingRelayIds),
+          ...haDevices.filter(d => d.relayId).map(d => d.relayId)
+        ]);
+        let nextId = tasmotaMax + 1;
+        while (usedIds.has(nextId)) nextId++;
+        existingRelayIds[dev.entity_id] = nextId; // עדכן למניעת כפילות בלולאה
+        console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
+        return { ...dev, relayId: nextId };
+      }
+    });
 
     rebuildHaRelayNames();
     saveConfigLocal();
     io.emit('ha_devices', haDevices);
     io.emit('relay_names_update', Object.entries(schedulerRelayNames).map(([id, name]) => ({ id: Number(id), name })));
     socket.emit('ha_save_status', { ok: true, msg: `${haDevices.length} התקנים נשמרו ✅` });
+    console.log(`🏠 נשמרו ${haDevices.length} התקני HA: ${haDevices.map(d => `${d.entity_id}→${d.relayId}`).join(', ')}`);
     console.log(`🏠 נשמרו ${haDevices.length} התקני HA`);
   });
 
