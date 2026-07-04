@@ -31,6 +31,17 @@ try {
     config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config_base.json'), 'utf-8'));
     console.log('📂 config בסיסי נטען מ-config_base.json');
   }
+  // אם CONTROLLERS חסר — נסה לטעון מ-/data/options.json (HA Add-on)
+  if (!config.CONTROLLERS && fs.existsSync('/data/options.json')) {
+    const opts = JSON.parse(fs.readFileSync('/data/options.json', 'utf-8'));
+    if (opts.controllers) {
+      config.CONTROLLERS = opts.controllers;
+      config.MQTT_URL = config.MQTT_URL || opts.mqtt_url;
+      config.MQTT_USER = config.MQTT_USER || opts.mqtt_user;
+      config.MQTT_PASS = config.MQTT_PASS || opts.mqtt_pass;
+      console.log(`📂 CONTROLLERS נטענו ישירות מ-/data/options.json (${opts.controllers.length} בקרים)`);
+    }
+  }
 } catch(e) {
   console.error('❌ שגיאה בטעינת config בסיסי:', e.message);
 }
