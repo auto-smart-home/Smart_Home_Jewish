@@ -1395,7 +1395,8 @@ function connectMQTT() {
     renderModes(); renderPrograms(); renderRelays();
     if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
     saveLS();
-    addLog('info', `🕐 מעבר מצב אוטומטי: ${label}`);
+    // ⚠️ לא מוסיפים כאן addLog — הרישום ליומן כבר מגיע מהשרת דרך 'log_broadcast'
+    // (addServerLog בתוך commitAutoModeSwitch). הוספה כאן גרמה לכפילות בשורת היומן.
   });
 
   socket.on('disconnect', () => {
