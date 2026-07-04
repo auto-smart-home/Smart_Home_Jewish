@@ -811,6 +811,7 @@ io.on('connection', (socket) => {
       missedPrograms.push({
         relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
         progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
+        fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx,
       });
     }
     return { staleRelays, missedPrograms };
@@ -824,16 +825,23 @@ io.on('connection', (socket) => {
     schedulerActiveModeId = newModeId;
     saveConfigLocal();
     (turnOffRelayIds || []).forEach(relayId => {
-      publishRelay(relayId, 'OFF').then(() => { if (relayOwner[relayId]) delete relayOwner[relayId]; }).catch(() => {});
+      publishRelay(relayId, 'OFF').then(() => {
+        if (relayOwner[relayId]) delete relayOwner[relayId];
+        io.emit('scheduler_fired', { progName: 'כיבוי — מעבר מצב ידני', relayId, action: 'OFF' });
+      }).catch(() => {});
     });
     if ((activateProgIds || []).length) {
       const impact = computeModeSwitchImpact(newModeId);
       activateProgIds.forEach(progId => {
         // filter — תוכנית יכולה לכלול מספר ממסרים
         const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
+        const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
         matches.forEach(match => {
           publishRelay(match.relayId, 'ON').then(() => {
             relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
+            io.emit('scheduler_fired', { progName: match.progName, relayId: match.relayId, action: 'ON' });
+            // אותו תיקון כמו במעבר האוטומטי — למנוע דילוג שקט על הכיבוי-לפי-משך העתידי
+            if (match.fireSec !== undefined) _actuallyFired.add(`${match.progId}_${match.relayId}_${match.segType}_${match.cycleIdx??'x'}_${match.fireSec}_start_${_catchupTodayKey}`);
           }).catch(() => {});
         });
       });
@@ -1197,11 +1205,15 @@ function commitAutoModeSwitch(newModeId, label) {
       }).catch(() => {});
     });
     // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
+    const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
     (impact.missedPrograms || []).forEach(m => {
       publishRelay(m.relayId, 'ON').then(() => {
         relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
         // אותו תיקון: לשדר scheduler_fired כדי שהדפדפן יראה מיד שהממסר עלה בעקבות ההשלמה
         io.emit('scheduler_fired', { progName: m.progName, relayId: m.relayId, action: 'ON' });
+        // קריטי: לרשום את זה כ"ירה באמת" — אחרת הכיבוי-לפי-משך העתידי של התוכנית הזו יידלג בשקט
+        // (schedulerTick בודק _actuallyFired לפני שהוא מרשה לאירוע-הסיום לירות, וההפעלה הזו לא עברה דרך fireEvent הרגיל)
+        if (m.fireSec !== undefined) _actuallyFired.add(`${m.progId}_${m.relayId}_${m.segType}_${m.cycleIdx??'x'}_${m.fireSec}_start_${_catchupTodayKey}`);
       }).catch(() => {});
     });
     io.emit('mode_changed', { newModeId, label });
@@ -1274,6 +1286,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
       relayId: ev.relayId,
       relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
       progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
+      fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx,
     });
   }
 
@@ -1341,8 +1354,16 @@ function processScheduledModes() {
         // הגדר טיימר לחזרה
         if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
         const prevMode = _previousModeId;
+        const modeJustSetTo = sm.toModeId;
         _activeScheduledModeTimer = setTimeout(() => {
           _activeScheduledModeTimer = null;
+          // הגנה מפני race condition: אם תזמון מצב אחר כבר החליף את המצב הפעיל בינתיים (למשל שני תזמונים
+          // שחלים כמעט באותו רגע), אסור לטיימר החזרה "העיוור" הזה לדרוס את המצב הנוכחי בחזרה — רק אם
+          // עדיין נמצאים באותו מצב שאליו עברנו במקור, מותר לחזור.
+          if (schedulerActiveModeId !== modeJustSetTo) {
+            addServerLog({ type: 'info', msg: `🕐 חזרה אוטומטית למצב ${prevMode} בוטלה — תזמון אחר כבר החליף את המצב בינתיים (נשארים במצב ${schedulerActiveModeId})`, user: 'מערכת' });
+            return;
+          }
           commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
         }, durationSec * 1000);
       }
