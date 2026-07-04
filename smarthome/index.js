@@ -712,6 +712,7 @@ io.on('connection', (socket) => {
   function computeModeSwitchImpact(newModeId) {
     const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
     const nowSec = getNowSecIL();
+    const todayKey = nowIL.toDateString();
     const staleRelays = [];
     for (const relayIdStr of Object.keys(relayOwner)) {
       const relayId = parseInt(relayIdStr, 10);
@@ -722,14 +723,12 @@ io.on('connection', (socket) => {
     }
     const savedMode = schedulerActiveModeId;
     schedulerActiveModeId = newModeId;
-    const dow = nowIL.getDay(); const todayKey = nowIL.toDateString();
+    const dow = nowIL.getDay();
     const zmanim = getZmanim(nowIL);
     let newModeEvents = [];
     try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
     finally { schedulerActiveModeId = savedMode; }
 
-    // בנה מפה של אירוע כיבוי אחרון שירה לפני עכשיו, לכל ממסר
-    // זה מייצג את המצב שהיה אמור להיות כעת לפי התזמון
     const lastOffFiredByRelay = {};
     for (const ev of newModeEvents) {
       if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
@@ -742,21 +741,33 @@ io.on('connection', (socket) => {
       if (ev.action !== 'ON' || ev.isEndEvent) continue;
       if (ev.fireSec > nowSec) continue;
       if (nowSec - ev.fireSec <= 8) continue;
-      // אם ה-endSec עבר — הממסר כבר אמור להיות כבוי
       if (ev.endSec !== null && ev.endSec <= nowSec) continue;
-      // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
       const lastOff = lastOffFiredByRelay[ev.relayId];
       if (lastOff && lastOff.fireSec > ev.fireSec) continue;
-
+      // סנן runOnce שכבר ירה היום
+      if (ev.runOnce && _firedRunOnceToday.has(ev.progId)) continue;
       const cur = missedCandidatesByRelay[ev.relayId];
       if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
       const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
       if (!curWins) missedCandidatesByRelay[ev.relayId] = ev;
     }
-    const missedPrograms = Object.values(missedCandidatesByRelay).map(ev => ({
-      relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
-      progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-    }));
+
+    // הרחב — כל הממסרים של כל תוכנית שפספסה
+    const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
+    const missedPrograms = [];
+    for (const ev of newModeEvents) {
+      if (ev.action !== 'ON' || ev.isEndEvent) continue;
+      if (!missedProgIds.has(ev.progId)) continue;
+      if (ev.fireSec > nowSec) continue;
+      if (ev.endSec !== null && ev.endSec <= nowSec) continue;
+      const lastOff = lastOffFiredByRelay[ev.relayId];
+      if (lastOff && lastOff.fireSec > ev.fireSec) continue;
+      if (missedCandidatesByRelay[ev.relayId]?.progId !== ev.progId) continue;
+      missedPrograms.push({
+        relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
+        progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
+      });
+    }
     return { staleRelays, missedPrograms };
   }
 
@@ -1155,6 +1166,7 @@ function commitAutoModeSwitch(newModeId, label) {
 function computeModeSwitchImpactGlobal(newModeId) {
   const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
   const nowSec = getNowSecIL();
+  const todayKey = nowIL.toDateString();
   const staleRelays = [];
   for (const relayIdStr of Object.keys(relayOwner)) {
     const relayId = parseInt(relayIdStr, 10);
@@ -1165,7 +1177,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
   }
   const savedMode = schedulerActiveModeId;
   schedulerActiveModeId = newModeId;
-  const dow = nowIL.getDay(); const todayKey = nowIL.toDateString();
+  const dow = nowIL.getDay();
   const zmanim = getZmanim(nowIL);
   let newModeEvents = [];
   try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
@@ -1179,6 +1191,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
     if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelayG[ev.relayId] = ev;
   }
 
+  // מצא תוכניות שפספסו — מועמד אחד לכל ממסר
   const missedCandidatesByRelay = {};
   for (const ev of newModeEvents) {
     if (ev.action !== 'ON' || ev.isEndEvent) continue;
@@ -1188,15 +1201,33 @@ function computeModeSwitchImpactGlobal(newModeId) {
     // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
     const lastOff = lastOffFiredByRelayG[ev.relayId];
     if (lastOff && lastOff.fireSec > ev.fireSec) continue;
+    // סנן runOnce שכבר ירה היום
+    if (ev.runOnce && _firedRunOnceToday.has(ev.progId)) continue;
     const cur = missedCandidatesByRelay[ev.relayId];
     if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
     const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
     if (!curWins) missedCandidatesByRelay[ev.relayId] = ev;
   }
-  const missedPrograms = Object.values(missedCandidatesByRelay).map(ev => ({
-    relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
-    progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-  }));
+
+  // הרחב — כל הממסרים של כל תוכנית שפספסה (לא רק הממסר הראשון)
+  const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
+  const missedPrograms = [];
+  for (const ev of newModeEvents) {
+    if (ev.action !== 'ON' || ev.isEndEvent) continue;
+    if (!missedProgIds.has(ev.progId)) continue;
+    if (ev.fireSec > nowSec) continue;
+    if (ev.endSec !== null && ev.endSec <= nowSec) continue;
+    const lastOff = lastOffFiredByRelayG[ev.relayId];
+    if (lastOff && lastOff.fireSec > ev.fireSec) continue;
+    // בדוק שהממסר הספציפי הזה לא כבוי כבר
+    if (missedCandidatesByRelay[ev.relayId]?.progId !== ev.progId) continue;
+    missedPrograms.push({
+      relayId: ev.relayId,
+      relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
+      progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
+    });
+  }
+
   return { staleRelays, missedPrograms };
 }
 
