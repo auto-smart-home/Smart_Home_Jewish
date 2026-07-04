@@ -1099,7 +1099,7 @@ function fireEvent(event,todayKey){
       const existingExpired=existing&&existing.endSec!==null&&existing.endSec<=getNowSecIL();
       const existingIsStronger=existing&&!existingExpired&&existing.progId!==candidate.progId&&existing.endSec!==null&&((existing.priority&&!candidate.priority)||(!existing.priority&&!candidate.priority&&candidate.endSec!==null&&existing.endSec>candidate.endSec));
       if(!existingIsStronger) relayOwner[relayId]=candidate;
-    } else if(relayOwner[relayId]?.progId===event.progId){delete relayOwner[relayId];}
+    } else if(relayOwner[relayId]){delete relayOwner[relayId];} // כל כיבוי שמגיע לכאן כבר עבר את checkRelayOwnerBlock (או שזו תוכנית הכיבוי של עצמה) — הממסר כבוי בפועל, אז אין יותר "בעלים", ללא קשר לאיזו תוכנית ביצעה את הכיבוי
     if(event.isEndEvent) addServerLog({type:'info',msg:`[למשך] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
     else addServerLog({type:'info',msg:`[תזמון] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
   }).catch(err=>console.error(`❌ שגיאה ממסר ${relayId}:`,err.message));
@@ -1192,12 +1192,16 @@ function commitAutoModeSwitch(newModeId, label) {
     (impact.staleRelays || []).forEach(r => {
       publishRelay(r.relayId, 'OFF').then(() => {
         if (relayOwner[r.relayId]) delete relayOwner[r.relayId];
+        // חובה לשדר scheduler_fired — זהו האירוע היחיד שגורם לדפדפן לעדכן את מצב הממסר בזמן אמת (ראה fireEvent). בלעדיו הממשק נשאר "תקוע" עד רענון ידני.
+        io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב (${r.ownerProgName || 'תוכנית קודמת'})`, relayId: r.relayId, action: 'OFF' });
       }).catch(() => {});
     });
     // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
     (impact.missedPrograms || []).forEach(m => {
       publishRelay(m.relayId, 'ON').then(() => {
         relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
+        // אותו תיקון: לשדר scheduler_fired כדי שהדפדפן יראה מיד שהממסר עלה בעקבות ההשלמה
+        io.emit('scheduler_fired', { progName: m.progName, relayId: m.relayId, action: 'ON' });
       }).catch(() => {});
     });
     io.emit('mode_changed', { newModeId, label });
