@@ -254,8 +254,11 @@ const MQTT_USER = config.MQTT_USER || process.env.MQTT_USER || '';
 const MQTT_PASS = config.MQTT_PASS || process.env.MQTT_PASS || '';
 
 // ── CONTROLLERS ──────────────────────────────────────────
-// נטען מ-config_base.json / CONFIG_JSON / env
-const CONTROLLERS = config.CONTROLLERS || [];
+// תמיכה בשני פורמטים: relayCount (camelCase) ו-relay_count (snake_case מ-HA options)
+const CONTROLLERS = (config.CONTROLLERS || []).map(c => ({
+  ...c,
+  relayCount: c.relayCount || c.relay_count || 0,
+}));
 
 // ── IVR STATE ────────────────────────────────────────────
 let yemotPhoneMap = config.YEMOT_PHONE_MAP || {};
