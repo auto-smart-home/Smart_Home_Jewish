@@ -333,18 +333,38 @@ CONTROLLERS.forEach(ctrl => {
 // haDevices[].relayId → globalId (מסדרה אחרי offset הבקרים)
 function rebuildHaRelayNames() {
   const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
+  let changed = false;
+  const usedHaIds = new Set();
+
+  // סבב ראשון — אסוף IDs תקינים וסמן קונפליקטים
   haDevices.forEach(dev => {
-    // הקצה relayId אם חסר (מ-config ישן או באג)
+    if (!dev.relayId || isNaN(dev.relayId)) {
+      dev.relayId = null; changed = true;
+    } else if (dev.relayId <= tasmotaMax) {
+      console.log(`⚠️ התקן ${dev.entity_id} relayId=${dev.relayId} מתנגש עם בקר (tasmotaMax=${tasmotaMax}) — מוקצה מחדש`);
+      dev.relayId = null; changed = true;
+    } else {
+      usedHaIds.add(dev.relayId);
+    }
+  });
+
+  // סבב שני — הקצה לכל מי שחסר
+  haDevices.forEach(dev => {
     if (!dev.relayId) {
-      const usedIds = new Set(haDevices.filter(d => d.relayId).map(d => d.relayId));
       let nextId = tasmotaMax + 1;
-      while (usedIds.has(nextId)) nextId++;
+      while (usedHaIds.has(nextId)) nextId++;
       dev.relayId = nextId;
+      usedHaIds.add(nextId);
       console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
     }
     schedulerRelayNames[dev.relayId] = dev.friendly_name || dev.entity_id;
     if (!relayState[dev.relayId]) relayState[dev.relayId] = 'OFF';
   });
+
+  if (changed) {
+    saveConfigLocal();
+    console.log(`🏠 התקני HA לאחר תיקון: ${haDevices.map(d => `${d.friendly_name}→${d.relayId}`).join(', ')}`);
+  }
 }
 
 function getControllerForRelay(globalRelayId) {
