@@ -652,26 +652,32 @@ io.on('connection', (socket) => {
   socket.on('save_ha_devices', (selectedDevices) => {
     const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
 
-    // בנה מפה של entity_id → relayId קיים (כולל תיקון null)
+    // בנה מפה של entity_id → relayId קיים (סנן null/NaN)
     const existingRelayIds = {};
     haDevices.forEach(d => {
-      if (d.entity_id && d.relayId) existingRelayIds[d.entity_id] = d.relayId;
+      if (d.entity_id && d.relayId && !isNaN(d.relayId)) {
+        existingRelayIds[d.entity_id] = d.relayId;
+      }
     });
+
+    // פונקציה למציאת relayId חופשי — בטוחה מפני NaN ולולאה אינסופית
+    function findNextRelayId() {
+      const usedIds = new Set([
+        ...Object.values(existingRelayIds).filter(id => id && !isNaN(id)),
+        ...haDevices.filter(d => d.relayId && !isNaN(d.relayId)).map(d => d.relayId)
+      ]);
+      let nextId = Math.max(tasmotaMax, 14) + 1; // לפחות 15
+      while (usedIds.has(nextId)) nextId++;
+      return nextId;
+    }
 
     // עדכן רשימה — שמור relayId קיים או הקצה חדש
     haDevices = selectedDevices.map(dev => {
       if (existingRelayIds[dev.entity_id]) {
-        // התקן קיים — שמור relayId ועדכן שם
         return { ...dev, relayId: existingRelayIds[dev.entity_id] };
       } else {
-        // התקן חדש — הקצה relayId חופשי
-        const usedIds = new Set([
-          ...Object.values(existingRelayIds),
-          ...haDevices.filter(d => d.relayId).map(d => d.relayId)
-        ]);
-        let nextId = tasmotaMax + 1;
-        while (usedIds.has(nextId)) nextId++;
-        existingRelayIds[dev.entity_id] = nextId; // עדכן למניעת כפילות בלולאה
+        const nextId = findNextRelayId();
+        existingRelayIds[dev.entity_id] = nextId; // עדכן למניעת כפילות
         console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
         return { ...dev, relayId: nextId };
       }
