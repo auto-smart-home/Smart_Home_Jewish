@@ -9,7 +9,7 @@ MQTT_PASS=$(jq -r '.mqtt_pass // ""' $OPTIONS)
 YEMOT_API_TOKEN=$(jq -r '.yemot_api_token // ""' $OPTIONS)
 YEMOT_API_LINK_URL=$(jq -r '.yemot_api_link_url // ""' $OPTIONS)
 ADMIN_PASSWORD=$(jq -r '.admin_password // ""' $OPTIONS)
-CONTROLLERS=$(jq -c '.controllers // []' $OPTIONS)
+CONTROLLERS=$(jq -c '[.controllers[] | {id: .id, name: .name, topic: .topic, relayCount: .relay_count, relayNames: {}}] // []' $OPTIONS)
 GITHUB_REPO=$(jq -r '.github_repo // ""' $OPTIONS)
 
 export CONFIG_JSON="{\"MQTT_URL\":\"${MQTT_URL}\",\"MQTT_USER\":\"${MQTT_USER}\",\"MQTT_PASS\":\"${MQTT_PASS}\",\"YEMOT_PHONE_MAP\":{},\"CONTROLLERS\":${CONTROLLERS},\"USERS\":[{\"name\":\"admin\",\"password\":\"placeholder_will_be_overridden\",\"role\":\"admin\",\"relays\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]}],\"EMERGENCY_PASSWORD\":\"${ADMIN_PASSWORD}\"}"
