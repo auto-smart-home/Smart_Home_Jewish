@@ -1376,6 +1376,16 @@ app.get('/status', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
+// טיפול בשגיאות לא מתוכננות — מונע קריסה שקטה
+process.on('uncaughtException', (err) => {
+  console.error(`💥 uncaughtException: ${err.message}`);
+  console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`💥 unhandledRejection: ${reason}`);
+});
+
 (async () => {
   loadConfigLocal();
   rebuildHaRelayNames();
