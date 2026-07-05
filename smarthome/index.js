@@ -774,9 +774,23 @@ io.on('connection', (socket) => {
     try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
     finally { schedulerActiveModeId = savedMode; }
 
+    // מפה של טווחי-בעלות של תוכניות עדיפות לכל ממסר — כדי לזהות "כיבוי-רפאים": כיבוי מתוזמן
+    // מתוכנית לא-עדיפות שבפועל היה נחסם ע"י תוכנית עדיפות אחרת שעדיין מחזיקה את הממסר (בדיוק
+    // כמו checkRelayOwnerBlock בזמן אמת) — כיבוי כזה אסור לספור כ"הממסר באמת כבה".
+    const priorityIntervalsByRelayA = {};
+    for (const ev of newModeEvents) {
+      if (ev.action !== 'ON' || ev.isEndEvent || !ev.isPriority) continue;
+      (priorityIntervalsByRelayA[ev.relayId] ||= []).push({ progId: ev.progId, start: ev.fireSec, end: ev.endSec });
+    }
+    const isBlockedByPriorityA = ev => {
+      const arr = priorityIntervalsByRelayA[ev.relayId];
+      return !!arr && arr.some(iv => iv.progId !== ev.progId && iv.start <= ev.fireSec && (iv.end === null || iv.end > ev.fireSec));
+    };
+
     const lastOffFiredByRelay = {};
     for (const ev of newModeEvents) {
       if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
+      if (!ev.isPriority && isBlockedByPriorityA(ev)) continue;
       const cur = lastOffFiredByRelay[ev.relayId];
       if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelay[ev.relayId] = ev;
     }
@@ -811,7 +825,7 @@ io.on('connection', (socket) => {
       missedPrograms.push({
         relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
         progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-        fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx,
+        fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx, runOnce: !!ev.runOnce,
       });
     }
     return { staleRelays, missedPrograms };
@@ -842,6 +856,16 @@ io.on('connection', (socket) => {
             io.emit('scheduler_fired', { progName: match.progName, relayId: match.relayId, action: 'ON' });
             // אותו תיקון כמו במעבר האוטומטי — למנוע דילוג שקט על הכיבוי-לפי-משך העתידי
             if (match.fireSec !== undefined) _actuallyFired.add(`${match.progId}_${match.relayId}_${match.segType}_${match.cycleIdx??'x'}_${match.fireSec}_start_${_catchupTodayKey}`);
+            // תוכנית runOnce שהופעלה כהשלמה — יש לכבות את הדגל בדיוק כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
+            if (match.runOnce) {
+              const p = schedulerPrograms.find(x => x.id === match.progId);
+              if (p && p.active) {
+                p.active = false;
+                _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
+                io.emit('program_updated', { id: p.id, active: false });
+                saveConfigLocal();
+              }
+            }
           }).catch(() => {});
         });
       });
@@ -1214,6 +1238,16 @@ function commitAutoModeSwitch(newModeId, label) {
         // קריטי: לרשום את זה כ"ירה באמת" — אחרת הכיבוי-לפי-משך העתידי של התוכנית הזו יידלג בשקט
         // (schedulerTick בודק _actuallyFired לפני שהוא מרשה לאירוע-הסיום לירות, וההפעלה הזו לא עברה דרך fireEvent הרגיל)
         if (m.fireSec !== undefined) _actuallyFired.add(`${m.progId}_${m.relayId}_${m.segType}_${m.cycleIdx??'x'}_${m.fireSec}_start_${_catchupTodayKey}`);
+        // תוכנית runOnce שהופעלה כהשלמה — כיבוי הדגל כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
+        if (m.runOnce) {
+          const p = schedulerPrograms.find(x => x.id === m.progId);
+          if (p && p.active) {
+            p.active = false;
+            _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
+            io.emit('program_updated', { id: p.id, active: false });
+            saveConfigLocal();
+          }
+        }
       }).catch(() => {});
     });
     io.emit('mode_changed', { newModeId, label });
@@ -1244,10 +1278,22 @@ function computeModeSwitchImpactGlobal(newModeId) {
   try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
   finally { schedulerActiveModeId = savedMode; }
 
+  // מפה של טווחי-בעלות של תוכניות עדיפות לכל ממסר — ראו הסבר מלא בגרסה הידנית של הפונקציה הזו למעלה
+  const priorityIntervalsByRelayG = {};
+  for (const ev of newModeEvents) {
+    if (ev.action !== 'ON' || ev.isEndEvent || !ev.isPriority) continue;
+    (priorityIntervalsByRelayG[ev.relayId] ||= []).push({ progId: ev.progId, start: ev.fireSec, end: ev.endSec });
+  }
+  const isBlockedByPriorityG = ev => {
+    const arr = priorityIntervalsByRelayG[ev.relayId];
+    return !!arr && arr.some(iv => iv.progId !== ev.progId && iv.start <= ev.fireSec && (iv.end === null || iv.end > ev.fireSec));
+  };
+
   // בנה מפה של אירוע כיבוי אחרון שירה לפני עכשיו, לכל ממסר
   const lastOffFiredByRelayG = {};
   for (const ev of newModeEvents) {
     if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
+    if (!ev.isPriority && isBlockedByPriorityG(ev)) continue;
     const cur = lastOffFiredByRelayG[ev.relayId];
     if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelayG[ev.relayId] = ev;
   }
@@ -1286,7 +1332,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
       relayId: ev.relayId,
       relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
       progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-      fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx,
+      fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx, runOnce: !!ev.runOnce,
     });
   }
 
