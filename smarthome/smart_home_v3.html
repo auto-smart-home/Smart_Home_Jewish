@@ -66,6 +66,7 @@
     display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted);
   }
   .zmanim-item { display: flex; align-items: center; gap: 5px; }
+  .zmanim-bar { position: sticky; z-index: 95; }
   .z-label { color: var(--accent); font-weight: 600; }
 
   /* MAIN */
@@ -76,6 +77,7 @@
     display: flex; gap: 2px; background: var(--surface);
     border: 1px solid var(--border); border-radius: 10px;
     padding: 2px 16px 0; margin-bottom: 6px; width: fit-content; flex-wrap: wrap;
+    position: sticky; z-index: 90;
   }
   .tab {
     padding: 7px 15px; border-radius: 7px; font-size: 15px; cursor: pointer;
@@ -176,7 +178,16 @@
   .quick-btn.danger:hover { border-color: rgba(239,68,68,0.35); color: var(--danger); }
 
   /* PROGRAMS */
-  .prog-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+  .prog-toolbar {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
+    position: sticky; z-index: 85; background: var(--bg); padding: 8px 0;
+  }
+  .add-btn-top {
+    padding: 6px 14px; border-radius: 7px; border: 1px solid var(--accent);
+    background: rgba(79,142,247,0.12); color: var(--accent); font-weight: 700;
+    font-size: 13px; cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .add-btn-top:hover { background: rgba(79,142,247,0.22); }
   .section-title { font-size: 15px; font-weight: 700; color: var(--text2); letter-spacing: 0.3px; }
   .toolbar-group { display: flex; gap: 6px; }
   .icon-btn {
@@ -244,6 +255,7 @@
     display: none; align-items: center; gap: 8px; flex-wrap: wrap;
     background: rgba(79,142,247,0.07); border: 1px solid rgba(79,142,247,0.25);
     border-radius: 9px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
+    position: sticky; z-index: 80;
   }
   .bulk-bar.show { display: flex; }
   .bulk-count { font-weight: 700; color: var(--accent); }
@@ -488,10 +500,11 @@
 <!-- ZMANIM BAR -->
 <div class="zmanim-bar">
   <div class="zmanim-item"><span class="z-label">תאריך:</span> <span id="z-date">טוען...</span></div>
+  <div class="zmanim-item"><span class="z-label">עלות השחר:</span> <span id="z-alot">—</span></div>
   <div class="zmanim-item"><span class="z-label">זריחה:</span> <span id="z-sunrise">—</span></div>
   <div class="zmanim-item"><span class="z-label">שקיעה:</span> <span id="z-sunset">—</span></div>
-  <div class="zmanim-item"><span class="z-label">הדלקת נרות:</span> <span id="z-candles">—</span></div>
-  <div class="zmanim-item"><span class="z-label">צאת שבת:</span> <span id="z-havdalah">—</span></div>
+  <div class="zmanim-item"><span class="z-label">הדלקת נרות הקרובה:</span> <span id="z-candles">—</span></div>
+  <div class="zmanim-item"><span class="z-label">הבדלה הקרובה:</span> <span id="z-havdalah">—</span></div>
 </div>
 <div class="main">
   <div class="tabs">
@@ -531,6 +544,7 @@
     <div class="prog-toolbar">
       <div class="section-title">תוכניות פעילות</div>
       <div class="toolbar-group">
+        <button class="add-btn-top" onclick="openAddProgram(null)">+ הוסף תוכנית</button>
         <button class="icon-btn" onclick="toggleSelectMode()" id="select-mode-btn">☑ בחירה מרובה</button>
         <button class="icon-btn" onclick="exportJSON()">📤 ייצוא JSON</button>
         <label class="icon-btn" style="cursor:pointer">📥 ייבוא JSON<input id="import-file-input" type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
@@ -549,7 +563,6 @@
       </span>
     </div>
     <div class="prog-list" id="prog-list"></div>
-    <button class="add-btn" onclick="openAddProgram(null)">+ הוסף תוכנית</button>
   </div>
 
   <!-- TIMELINE TAB -->
@@ -1154,6 +1167,10 @@ function syncLogToServer(entry) {
 loadLS();
 renderAll();
 loadZmanim();
+updateZmanimBarExtras();
+setInterval(updateZmanimBarExtras, 5 * 60 * 1000); // רענון כל 5 דק' — חשוב למי שמשאיר את הדף פתוח לאורך זמן
+updateStickyOffsets();
+window.addEventListener('resize', updateStickyOffsets);
 connectMQTT(); // רשימת משתמשים תיטען אחרי חיבור
 
 function renderAll() {
@@ -1470,6 +1487,82 @@ async function loadZmanim(){
   }catch(e){document.getElementById('z-date').textContent=new Date().toLocaleDateString('he-IL');}
 }
 
+// ── הדלקת נרות / הבדלה הקרובה — מהלוח המקומי (calendar_data.js) בלבד, אותו מקור-אמת שהשרת משתמש בו ──
+const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
+function isAssurMelachaEntryClient(entry){
+  if(!entry) return false;
+  if(entry['יום']==='שבת') return true;
+  return ASSUR_MELACHA_HOLIDAYS_CLIENT.has(entry['חג/אירוע']);
+}
+function labelForCalEntry(entry){
+  if(!entry) return '';
+  if(entry['חג/אירוע']) return entry['חג/אירוע'];
+  if(entry['פרשה']) return `פרשת ${entry['פרשה']}`;
+  return '';
+}
+function timeAlreadyPassed(timeStr, now){
+  if(!timeStr) return true;
+  const [hh,mm]=timeStr.split(':').map(Number);
+  const t=new Date(now); t.setHours(hh,mm,0,0);
+  return now.getTime() > t.getTime();
+}
+// סורק עד 10 ימים קדימה ומוצא את הדלקת הנרות/ההבדלה האמיתית הבאה (לא רק "האם היום"), עם תווית
+// (שם החג, או "פרשת X" לשבת רגילה) — בדיוק אותו היגיון כמו getZmanim בשרת (candlesOk/havdalahOk).
+function findNextCandlesAndHavdalah(fromDate){
+  let nextCandles=null, nextHavdalah=null;
+  for(let i=0;i<10 && (!nextCandles||!nextHavdalah);i++){
+    const d=new Date(fromDate); d.setDate(d.getDate()+i); d.setHours(0,0,0,0);
+    const entry=getCalEntry(d);
+    if(!entry) continue;
+    const tmrw=new Date(d); tmrw.setDate(tmrw.getDate()+1);
+    const tEntry=getCalEntry(tmrw);
+    if(!nextCandles && entry['שקיעה'] && isAssurMelachaEntryClient(tEntry)){
+      if(i>0 || !timeAlreadyPassed(entry['שקיעה'], fromDate)){
+        nextCandles={date:d, time:entry['שקיעה'], label:labelForCalEntry(tEntry)};
+      }
+    }
+    if(!nextHavdalah && entry['מוצאי שבת'] && isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry)){
+      if(i>0 || !timeAlreadyPassed(entry['מוצאי שבת'], fromDate)){
+        nextHavdalah={date:d, time:entry['מוצאי שבת'], label:labelForCalEntry(entry)};
+      }
+    }
+  }
+  return {nextCandles, nextHavdalah};
+}
+function fmtNextDateLabel(d, base){
+  if(d.toDateString()===base.toDateString()) return 'היום';
+  const tmrw=new Date(base); tmrw.setDate(tmrw.getDate()+1);
+  if(d.toDateString()===tmrw.toDateString()) return 'מחר';
+  return d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
+}
+function updateZmanimBarExtras(){
+  const now=new Date();
+  const todayEntry=getCalEntry(now);
+  const alotEl=document.getElementById('z-alot');
+  if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
+  const {nextCandles, nextHavdalah} = findNextCandlesAndHavdalah(now);
+  const cEl=document.getElementById('z-candles');
+  if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
+  const hEl=document.getElementById('z-havdalah');
+  if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
+}
+
+// ── מיקומי sticky דינמיים — נמדדים בפועל (offsetHeight), לא קבועים, כי הגבהים משתנים לפי רוחב מסך ──
+function updateStickyOffsets(){
+  const topbarH = document.querySelector('.topbar')?.offsetHeight || 0;
+  const zEl = document.querySelector('.zmanim-bar');
+  if(zEl) zEl.style.top = topbarH + 'px';
+  const zH = zEl?.offsetHeight || 0;
+  const tabsEl = document.querySelector('.tabs');
+  if(tabsEl) tabsEl.style.top = (topbarH + zH) + 'px';
+  const tabsH = tabsEl?.offsetHeight || 0;
+  const toolbarEl = document.querySelector('.prog-toolbar');
+  if(toolbarEl) toolbarEl.style.top = (topbarH + zH + tabsH) + 'px';
+  const toolbarH = toolbarEl?.offsetHeight || 0;
+  const bulkEl = document.getElementById('bulk-bar');
+  if(bulkEl) bulkEl.style.top = (topbarH + zH + tabsH + toolbarH) + 'px';
+}
+
 // ── HELPERS ───────────────────────────────────────────────
 // זמנים הלכתיים אמיתיים של היום, מתקבלים מהשרת (אירוע zmanim_today) — אותו מקור-אמת
 // שהשרת עצמו משתמש בו לתזמון בפועל. מתעדכן על כל חיבור/חיבור-מחדש.
@@ -1532,6 +1625,16 @@ function getRelayEventPairs(p, relayId){
     const segStart=start+i*cycleLen;
     pairs.push({fireMin:segStart, endMin:segStart+onMin, action:p.action, cycleIdx:i, segType:'on'});
     pairs.push({fireMin:segStart+onMin, endMin:segStart+cycleLen, action:p.action==='ON'?'OFF':'ON', cycleIdx:i, segType:'off'});
+  }
+  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה (אותו תיקון בדיוק כמו בשרת, ראו שם להסבר המלא)
+  const remainder = totalMin - fullCycles*cycleLen;
+  if (remainder > 0) {
+    const segStart = start + fullCycles*cycleLen;
+    const onPart = Math.min(remainder, onMin);
+    pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'on'});
+    if (remainder > onMin) {
+      pairs.push({fireMin:segStart+onPart, endMin:segStart+remainder, action:p.action==='ON'?'OFF':'ON', cycleIdx:fullCycles, segType:'off'});
+    }
   }
   if(!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action}];
   return pairs;
@@ -1925,6 +2028,12 @@ function toggleProgActive(id){
   const p=programs.find(x=>x.id===id);
   if(p){
     p.active=!p.active;
+    // השבתת הורה משביתה גם את תוכנית-הבת שלה — אחרת היא נשארת "רפאים" ומוצגת בציר-הזמן
+    // גם כשההורה כבוי (הבת לא מופיעה כשורה עצמאית ברשימה, ולכן משתמש עלול לא לשים לב שהיא נשארה פעילה)
+    if(!p.active && p.childProgId){
+      const child=programs.find(x=>x.id===p.childProgId);
+      if(child && child.active) child.active=false;
+    }
     addLog('info', `תוכנית "${p.name}" — ${p.active ? 'הופעלה ✅' : 'הושבתה ⏸'}`);
     renderPrograms();renderRelays();saveLS();
     if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
@@ -1951,6 +2060,7 @@ function toggleSelectMode(){
   document.getElementById('select-mode-btn').style.borderColor = selectMode ? 'rgba(79,142,247,0.4)' : '';
   populateBulkModeSelect();
   renderPrograms();
+  setTimeout(updateStickyOffsets, 0);
 }
 function toggleProgSelect(id){
   if(selectedProgIds.has(id)) selectedProgIds.delete(id); else selectedProgIds.add(id);
@@ -1997,7 +2107,14 @@ function bulkSetActive(active){
   let n=0;
   selectedProgIds.forEach(id=>{
     const p=programs.find(x=>x.id===id);
-    if(p && p.active!==active){p.active=active;n++;}
+    if(p && p.active!==active){
+      p.active=active;n++;
+      // אותו עיקרון כמו בכפתור היחיד — השבתת הורה משביתה גם את הבת שלו
+      if(!active && p.childProgId){
+        const child=programs.find(x=>x.id===p.childProgId);
+        if(child && child.active) child.active=false;
+      }
+    }
   });
   if(n) addLog('info', `${n} תוכניות ${active?'הופעלו ✅':'הושבתו ⏸'} (פעולה מרובה)`);
   renderPrograms();renderRelays();saveLS();
@@ -2701,8 +2818,9 @@ function _getRelayEvents(relayId, date) {
       if (!isProgModeMatch(p) || !progAppliesOnDate(p, scanDate)) return false;
       if (!p.relay.includes(relayId)) return false;
       if (p.parentProgId) {
-        // תוכנית-בת — active צריך להיות true, אבל ההורה לא חייב (ייבדק ב-getChildEventPairs)
-        return p.active;
+        // תוכנית-בת — צריכה גם את ה-active של עצמה וגם של ההורה (בלי הורה פעיל אין הפסקות לגזור מהן)
+        const parent = programs.find(x => x.id === p.parentProgId);
+        return p.active && !!parent && parent.active;
       }
       return p.active;
     });
@@ -2825,6 +2943,12 @@ function renderTimeline(){
           // תוכניות רגילות
           programs.forEach(p=>{
             if(!p.active||!isProgModeMatch(p)||!progAppliesOnDate(p,dayDate)||!p.relay.includes(r.id))return;
+            // הגנה נוספת: תוכנית-בת לא רלוונטית אם ההורה שלה לא פעיל (גם אם הבת עצמה עדיין מסומנת active
+            // ממצב ישן/לא-עקבי) — בלי הורה פעיל אין הפסקות שממנן נגזרים זמני הבת.
+            if(p.parentProgId){
+              const parent=programs.find(x=>x.id===p.parentProgId);
+              if(!parent||!parent.active) return;
+            }
             getRelayEventPairs(p,r.id).forEach(seg=>{
               if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
                 fireEvents.push({p, seg});
