@@ -955,6 +955,14 @@ const DAYS_HE   = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 const DAYS_FULL = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
 const ZMAN_LABELS = {sunset:'שקיעה',sunrise:'זריחה',candles:'הדלקת נרות',havdalah:'צאת שבת',chatzot:'חצות',alot_hashachar:'עלות השחר'};
 const LS_KEY = 'smarthome_v2';
+// זמנים הלכתיים אמיתיים מהשרת (אירוע zmanim_today) — מוכרז כאן, ממש בתחילת הסקריפט,
+// כי getProgMinutes נקרא כבר בתוך renderAll() ב-INIT, לפני שהיה אפשר להגיע לשורה הזו
+// אם היא מוכרזת מאוחר יותר בקובץ (TDZ — ReferenceError שמקריס את כל שאר הסקריפט,
+// כולל connectMQTT() וטעינת רשימת המשתמשים — זה בדיוק מה שגרם ל"לא טוען משתמשים").
+let serverZmanim = {};
+// אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
+// זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
+const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
 
 // ── LOCALSTORAGE ─────────────────────────────────────────
 function saveLS() {
@@ -1488,7 +1496,6 @@ async function loadZmanim(){
 }
 
 // ── הדלקת נרות / הבדלה הקרובה — מהלוח המקומי (calendar_data.js) בלבד, אותו מקור-אמת שהשרת משתמש בו ──
-const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
 function isAssurMelachaEntryClient(entry){
   if(!entry) return false;
   if(entry['יום']==='שבת') return true;
@@ -1566,7 +1573,7 @@ function updateStickyOffsets(){
 // ── HELPERS ───────────────────────────────────────────────
 // זמנים הלכתיים אמיתיים של היום, מתקבלים מהשרת (אירוע zmanim_today) — אותו מקור-אמת
 // שהשרת עצמו משתמש בו לתזמון בפועל. מתעדכן על כל חיבור/חיבור-מחדש.
-let serverZmanim = {};
+// (המשתנה עצמו הוכרז מוקדם יותר בקובץ, לפני ה-INIT — ראו שם להסבר)
 function zmanimKeyForZmanClient(zman){
   return {sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam'}[zman] || zman;
 }
@@ -1626,14 +1633,18 @@ function getRelayEventPairs(p, relayId){
     pairs.push({fireMin:segStart, endMin:segStart+onMin, action:p.action, cycleIdx:i, segType:'on'});
     pairs.push({fireMin:segStart+onMin, endMin:segStart+cycleLen, action:p.action==='ON'?'OFF':'ON', cycleIdx:i, segType:'off'});
   }
-  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה (אותו תיקון בדיוק כמו בשרת, ראו שם להסבר המלא)
+  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה. אם זו שארית ON-בלבד (בלי OFF אחריה, כי היא
+  // מסתיימת עם סוף התוכנית) — היא segType:'single' (לא 'on'), כי רק תצוגת 'single' יודעת "לסגור" חזותית
+  // בהמשך הרינדור; אותו עיקרון תיקון בדיוק כמו בשרת.
   const remainder = totalMin - fullCycles*cycleLen;
   if (remainder > 0) {
     const segStart = start + fullCycles*cycleLen;
     const onPart = Math.min(remainder, onMin);
-    pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'on'});
     if (remainder > onMin) {
+      pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'on'});
       pairs.push({fireMin:segStart+onPart, endMin:segStart+remainder, action:p.action==='ON'?'OFF':'ON', cycleIdx:fullCycles, segType:'off'});
+    } else {
+      pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'single'});
     }
   }
   if(!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action}];
