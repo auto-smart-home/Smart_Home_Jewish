@@ -1380,6 +1380,12 @@ function connectMQTT() {
     if (document.getElementById('tab-ha_devices')?.classList.contains('active')) renderHaActive();
   });
 
+  // זמנים הלכתיים אמיתיים מהשרת — ראו getProgMinutes ותיקון ה-19:20 הקשיח
+  socket.on('zmanim_today', (z) => {
+    serverZmanim = z || {};
+    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+
   // ── תזמוני מצב ──
   socket.on('scheduled_modes', (modes) => {
     _scheduledModes = modes || [];
@@ -1465,13 +1471,29 @@ async function loadZmanim(){
 }
 
 // ── HELPERS ───────────────────────────────────────────────
+// זמנים הלכתיים אמיתיים של היום, מתקבלים מהשרת (אירוע zmanim_today) — אותו מקור-אמת
+// שהשרת עצמו משתמש בו לתזמון בפועל. מתעדכן על כל חיבור/חיבור-מחדש.
+let serverZmanim = {};
+function zmanimKeyForZmanClient(zman){
+  return {sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam'}[zman] || zman;
+}
 function getProgMinutes(p, relayIndex){
   // relayIndex: which relay in p.relay[] (for stagger delay). Default 0.
   const ri = relayIndex || 0;
   const delayMin = ri * Math.round((p.delay||0) / 60 * 100) / 100; // seconds → minutes (fractional)
   let base;
   if(p.type==='time'){const[hh,mm]=p.time.split(':').map(Number);base=hh*60+mm;}
-  else{const b=19*60+20;base=b+(p.offsetDir==='-'?-p.offsetVal:p.offsetVal);}
+  else{
+    const key = zmanimKeyForZmanClient(p.zman);
+    const timeStr = serverZmanim[key];
+    if(!timeStr){
+      // נפילה זמנית — עד שהשרת שולח zmanim_today (בדרך כלל תוך שניות מהחיבור). לא אמור לקרות בפועל.
+      base = 19*60+20;
+    } else {
+      const [hh,mm]=timeStr.split(':').map(Number);
+      base = hh*60+mm + (p.offsetDir==='-'?-1:1)*(p.offsetVal||0);
+    }
+  }
   return base + delayMin;
 }
 // Integer minutes for a specific relay in a program (for block placement)
