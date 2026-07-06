@@ -623,6 +623,10 @@ io.on('connection', (socket) => {
   socket.emit('ha_devices', haDevices);
   socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
   socket.emit('scheduled_modes', scheduledModes);
+  // זמנים הלכתיים אמיתיים של היום — מאותו מקור-אמת שהשרת עצמו משתמש בו לתזמון בפועל.
+  // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
+  // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
+  socket.emit('zmanim_today', getZmanim(new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
 
   // ── Login ──
   socket.on('login', ({ name, password }) => {
@@ -754,85 +758,12 @@ io.on('connection', (socket) => {
   });
 
   // ── Mode Switch ──
-  function computeModeSwitchImpact(newModeId) {
-    const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-    const nowSec = getNowSecIL();
-    const todayKey = nowIL.toDateString();
-    const staleRelays = [];
-    for (const relayIdStr of Object.keys(relayOwner)) {
-      const relayId = parseInt(relayIdStr, 10);
-      const owner = relayOwner[relayId];
-      const p = schedulerPrograms.find(x => String(x.id) === String(owner.progId));
-      const modeIds = p ? (p.modeIds ?? (p.modeId !== null ? [p.modeId] : [0])) : [];
-      if (!modeIds.includes(newModeId)) staleRelays.push({ relayId, relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`, ownerProgName: owner.name });
-    }
-    const savedMode = schedulerActiveModeId;
-    schedulerActiveModeId = newModeId;
-    const dow = nowIL.getDay();
-    const zmanim = getZmanim(nowIL);
-    let newModeEvents = [];
-    try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
-    finally { schedulerActiveModeId = savedMode; }
-
-    // מפה של טווחי-בעלות של תוכניות עדיפות לכל ממסר — כדי לזהות "כיבוי-רפאים": כיבוי מתוזמן
-    // מתוכנית לא-עדיפות שבפועל היה נחסם ע"י תוכנית עדיפות אחרת שעדיין מחזיקה את הממסר (בדיוק
-    // כמו checkRelayOwnerBlock בזמן אמת) — כיבוי כזה אסור לספור כ"הממסר באמת כבה".
-    const priorityIntervalsByRelayA = {};
-    for (const ev of newModeEvents) {
-      if (ev.action !== 'ON' || ev.isEndEvent || !ev.isPriority) continue;
-      (priorityIntervalsByRelayA[ev.relayId] ||= []).push({ progId: ev.progId, start: ev.fireSec, end: ev.endSec });
-    }
-    const isBlockedByPriorityA = ev => {
-      const arr = priorityIntervalsByRelayA[ev.relayId];
-      return !!arr && arr.some(iv => iv.progId !== ev.progId && iv.start <= ev.fireSec && (iv.end === null || iv.end > ev.fireSec));
-    };
-
-    const lastOffFiredByRelay = {};
-    for (const ev of newModeEvents) {
-      if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
-      if (!ev.isPriority && isBlockedByPriorityA(ev)) continue;
-      const cur = lastOffFiredByRelay[ev.relayId];
-      if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelay[ev.relayId] = ev;
-    }
-
-    const missedCandidatesByRelay = {};
-    for (const ev of newModeEvents) {
-      if (ev.action !== 'ON' || ev.isEndEvent) continue;
-      if (ev.fireSec > nowSec) continue;
-      if (nowSec - ev.fireSec <= 8) continue;
-      if (ev.endSec !== null && ev.endSec <= nowSec) continue;
-      const lastOff = lastOffFiredByRelay[ev.relayId];
-      if (lastOff && lastOff.fireSec > ev.fireSec) continue;
-      // סנן runOnce שכבר ירה היום
-      if (ev.runOnce && _firedRunOnceToday.has(ev.progId)) continue;
-      const cur = missedCandidatesByRelay[ev.relayId];
-      if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
-      const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
-      if (!curWins) missedCandidatesByRelay[ev.relayId] = ev;
-    }
-
-    // הרחב — כל הממסרים של כל תוכנית שפספסה
-    const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
-    const missedPrograms = [];
-    for (const ev of newModeEvents) {
-      if (ev.action !== 'ON' || ev.isEndEvent) continue;
-      if (!missedProgIds.has(ev.progId)) continue;
-      if (ev.fireSec > nowSec) continue;
-      if (ev.endSec !== null && ev.endSec <= nowSec) continue;
-      const lastOff = lastOffFiredByRelay[ev.relayId];
-      if (lastOff && lastOff.fireSec > ev.fireSec) continue;
-      if (missedCandidatesByRelay[ev.relayId]?.progId !== ev.progId) continue;
-      missedPrograms.push({
-        relayId: ev.relayId, relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
-        progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-        fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx, runOnce: !!ev.runOnce,
-      });
-    }
-    return { staleRelays, missedPrograms };
-  }
+  // הערה: computeModeSwitchImpact הוסרה מכאן (הייתה מוגדרת כפול, זהה ל-computeModeSwitchImpactGlobal
+  // שבסקופ המודול) — כדי שכל תיקון עתידי לא ייאלץ להתבצע פעמיים בשתי עותקים זהים.
+  // שני ה-handlers למטה משתמשים כעת ישירות ב-computeModeSwitchImpactGlobal.
 
   socket.on('request_mode_switch', ({ newModeId }) => {
-    socket.emit('mode_switch_review', { newModeId, ...computeModeSwitchImpact(newModeId) });
+    socket.emit('mode_switch_review', { newModeId, ...computeModeSwitchImpactGlobal(newModeId) });
   });
 
   socket.on('confirm_mode_switch', ({ newModeId, turnOffRelayIds, activateProgIds }) => {
@@ -845,7 +776,7 @@ io.on('connection', (socket) => {
       }).catch(() => {});
     });
     if ((activateProgIds || []).length) {
-      const impact = computeModeSwitchImpact(newModeId);
+      const impact = computeModeSwitchImpactGlobal(newModeId);
       activateProgIds.forEach(progId => {
         // filter — תוכנית יכולה לכלול מספר ממסרים
         const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
@@ -984,20 +915,48 @@ io.on('connection', (socket) => {
 });
 
 // ── SCHEDULER ENGINE (זהה לגרסה המקורית) ───────────────
+// ימים/חגים שבהם מלאכה אסורה — קובע מתי הדלקת נרות/הבדלה רלוונטיים.
+// מבוסס על אימות ישיר של calendar_data.js בפועל (36,524 רשומות, 2026-2125):
+// שדה 'יום' מכיל שמות ימים בעברית ('שבת' וכו'), ושדה 'חג/אירוע' מתייג כל יום בנפרד —
+// כולל חגים דו-יומיים (וידאתי בפועל: ראש השנה מתויג "ראש השנה" בשני התאריכים ברצף,
+// לא רק ביום הראשון) — ולכן מספיק לבדוק את היום עצמו + מחר, בלי טיפול מיוחד לחג דו-יומי.
+// 'חול המועד פסח/סוכות' אינם ברשימה בכוונה (אסור-מלאכה לא חל עליהם).
+const ASSUR_MELACHA_HOLIDAYS = new Set(['פסח', 'פסח (שביעי)', 'שבועות', 'ראש השנה', 'יום כיפור', 'סוכות', 'שמחת תורה']);
+function isAssurMelachaEntry(entry) {
+  if (!entry) return false;
+  if (entry['יום'] === 'שבת') return true;
+  return ASSUR_MELACHA_HOLIDAYS.has(entry['חג/אירוע']);
+}
 function getZmanim(date) {
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const yyyy = date.getFullYear();
   const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
   if (!entry) return {};
+  const tomorrow = new Date(date);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tEntry = _calendarIndex[`${String(tomorrow.getDate()).padStart(2, '0')}/${String(tomorrow.getMonth() + 1).padStart(2, '0')}/${tomorrow.getFullYear()}`];
+  // הדלקת נרות: היום הוא ערב של יום אסור-מלאכה (מחר אסור-מלאכה).
+  // הבדלה/צאת שבת: היום עצמו אסור-מלאכה, ומחר כבר לא (סוף הרצף — לא באמצע חג דו-יומי).
+  const candlesOk = isAssurMelachaEntry(tEntry);
+  const havdalahOk = isAssurMelachaEntry(entry) && !isAssurMelachaEntry(tEntry);
+  // חצות = בדיוק אמצע הזמן בין נץ החמה לשקיעה (לא קיים כשדה בקובץ הלוח, מחושב)
+  const sunriseMin = timeStrToMinutes(entry['נץ החמה']);
+  const sunsetMin = timeStrToMinutes(entry['שקיעה']);
+  const chatzotStr = (sunriseMin !== null && sunsetMin !== null)
+    ? `${String(Math.floor(Math.round((sunriseMin + sunsetMin) / 2) / 60)).padStart(2, '0')}:${String(Math.round((sunriseMin + sunsetMin) / 2) % 60).padStart(2, '0')}`
+    : null;
   return {
-    sunrise: entry['נץ החמה'], sunset: entry['שקיעה'], candles: entry['שקיעה'],
-    havdalah: entry['מוצאי שבת'], tzeit: entry['צאת הכוכבים'],
+    sunrise: entry['נץ החמה'], sunset: entry['שקיעה'],
+    candles: candlesOk ? entry['שקיעה'] : null,
+    havdalah: havdalahOk ? entry['מוצאי שבת'] : null,
+    tzeit: entry['צאת הכוכבים'],
     alotHaShachar: entry['עלות השחר'], minchaGedola: entry['מנחה גדולה'], rabeinuTam: entry['רבינו תם'],
+    chatzot: chatzotStr,
   };
 }
 function zmanimKeyForZman(zman) {
-  return { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',mincha:'minchaGedola',rabeinuTam:'rabeinuTam' }[zman] || zman;
+  return { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam' }[zman] || zman;
 }
 function timeStrToMinutes(t) { if (!t) return null; const [h,m]=t.split(':').map(Number); return h*60+m; }
 function getProgMinutes(p, zmanim) {
