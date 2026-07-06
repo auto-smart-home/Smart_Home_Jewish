@@ -61,7 +61,8 @@
 
   /* ZMANIM */
   .zmanim-bar {
-    background: linear-gradient(90deg, rgba(79,142,247,0.05), rgba(52,211,153,0.05));
+    background-color: var(--surface);
+    background-image: linear-gradient(90deg, rgba(79,142,247,0.08), rgba(52,211,153,0.08));
     border-bottom: 1px solid var(--border); padding: 2px 18px; margin-bottom:0;
     display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted);
   }
@@ -253,7 +254,9 @@
   .prog-select-chk { width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
   .bulk-bar {
     display: none; align-items: center; gap: 8px; flex-wrap: wrap;
-    background: rgba(79,142,247,0.07); border: 1px solid rgba(79,142,247,0.25);
+    background-color: var(--surface);
+    background-image: linear-gradient(rgba(79,142,247,0.10), rgba(79,142,247,0.10));
+    border: 1px solid rgba(79,142,247,0.25);
     border-radius: 9px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
     position: sticky; z-index: 80;
   }
@@ -963,6 +966,9 @@ let serverZmanim = {};
 // אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
 // זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
 const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
+// אינדקס-חיפוש של קובץ הלוח (calendar_data.js) — נבנה פעם אחת, בשימוש ב-getCalEntry. גם הוא חייב
+// להיות מוכרז כאן, לפני ה-INIT, מאותה סיבה בדיוק (updateZmanimBarExtras קוראת ל-getCalEntry ב-INIT).
+let _calIndexCache = null;
 
 // ── LOCALSTORAGE ─────────────────────────────────────────
 function saveLS() {
@@ -1543,15 +1549,20 @@ function fmtNextDateLabel(d, base){
   return d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
 }
 function updateZmanimBarExtras(){
-  const now=new Date();
-  const todayEntry=getCalEntry(now);
-  const alotEl=document.getElementById('z-alot');
-  if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
-  const {nextCandles, nextHavdalah} = findNextCandlesAndHavdalah(now);
-  const cEl=document.getElementById('z-candles');
-  if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
-  const hEl=document.getElementById('z-havdalah');
-  if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
+  try {
+    const now=new Date();
+    const todayEntry=getCalEntry(now);
+    const alotEl=document.getElementById('z-alot');
+    if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
+    const {nextCandles, nextHavdalah} = findNextCandlesAndHavdalah(now);
+    const cEl=document.getElementById('z-candles');
+    if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
+    const hEl=document.getElementById('z-havdalah');
+    if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
+  } catch(e) {
+    console.error('❌ updateZmanimBarExtras נכשל:', e);
+    if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב הדלקת נרות/הבדלה: ${e.message}`);
+  }
 }
 
 // ── מיקומי sticky דינמיים — נמדדים בפועל (offsetHeight), לא קבועים, כי הגבהים משתנים לפי רוחב מסך ──
@@ -3566,12 +3577,15 @@ function fmtHebDate(raw, includeYear=true) {
 
 // Get calendar entry for a JS Date
 function getCalEntry(date) {
-  const cal = getCalData();
+  if (!_calIndexCache) {
+    _calIndexCache = {};
+    getCalData().forEach(e => { _calIndexCache[e['תאריך לועזי']] = e; });
+  }
   const dd = String(date.getDate()).padStart(2,'0');
   const mm = String(date.getMonth()+1).padStart(2,'0');
   const yyyy = date.getFullYear();
   const key = `${dd}/${mm}/${yyyy}`;
-  return cal.find(e => e['תאריך לועזי'] === key) || null;
+  return _calIndexCache[key] || null;
 }
 
 // Get calendar entry by DD/MM (ignore year) — for annual matching
