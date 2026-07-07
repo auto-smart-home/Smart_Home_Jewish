@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-E (מוסיף: אבחון-זמן ביומן במקום שישרוד - אחרי טעינת server_log) -->
+<!-- BUILD_MARKER: v2026-07-08-F (מוסיף: אבחון מקטעי-מצב גולמיים ביומן) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -3123,6 +3123,16 @@ function renderTimeline(){
     console.error('❌ computeModeSegments נכשל:', e);
     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב מקטעי-מצב לציר הזמן: ${e.message} — חוזר להצגת המצב הנוכחי בלבד`);
     modeSegments = [{ startMs: dates[0].getTime(), endMs: dates[0].getTime() + dates.length*86400000, modeId: activeModeId }];
+  }
+  // אבחון חד-פעמי (פעם אחת לכל טעינת-דף, לא בכל רינדור) — מדפיס ליומן את מקטעי-המצב "המעניינים"
+  // (שונים מהמצב הנוכחי), כדי לדעת בוודאות אם הבעיה כבר בחישוב עצמו או רק בשלב שאחריו (בלוקים/תצוגה).
+  if (!window._tlSegDiagDone) {
+    window._tlSegDiagDone = true;
+    try {
+      const interesting = modeSegments.filter(s => s.modeId !== activeModeId);
+      const summary = interesting.map(s => `[${new Date(s.startMs).toString()} - ${new Date(s.endMs).toString()} → מצב ${s.modeId}]`).join(' | ');
+      addLog('info', `🕵️ אבחון-מקטעי-מצב (activeModeId=${activeModeId}): ${summary || '(אין מקטעים שונים מהמצב הנוכחי)'}`);
+    } catch(e) { addLog('danger', `❌ שגיאה באבחון-מקטעי-מצב: ${e.message}`); }
   }
   const tbl=document.getElementById('tl-table');
   let html='<thead><tr><th>זמן / יום</th>';
