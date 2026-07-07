@@ -1588,6 +1588,7 @@ function computeModeSegments(fromDate, rangeDays){
   const segments = [];
   const rangeStart = fromDate.getTime();
   const rangeEnd = rangeStart + rangeDays*86400000;
+  const nowMs = Date.now();
 
   // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח, ממוינים לפי זמן.
   const fireEvents = [];
@@ -1608,6 +1609,10 @@ function computeModeSegments(fromDate, rangeDays){
       if(fireMin===null || fireMin<0) continue;
       const atMs = dayDate.getTime() + fireMin*60000;
       if(atMs<rangeStart || atMs>rangeEnd) continue;
+      // קריטי: תזמון שכבר ירה *בעבר האמיתי* (לפני "עכשיו") אסור לדמות מחדש — הוא כבר "אפוי" בתוך
+      // activeModeId (המצב הנוכחי בפועל) ו/או serverPendingRevert (אם עוד רץ). לדמות אותו מחדש כאן
+      // יוצר טיימר-חזרה כפול/סותר שמוחק את כל התוצאה (זה בדיוק הבאג שנמצא בבדיקה בפועל).
+      if(atMs < nowMs) continue;
       const durationSec = sm.durationOn ? ((sm.durationH||0)*3600+(sm.durationM||0)*60) : 0;
       fireEvents.push({ atMs, toModeId: sm.toModeId, durationSec, smName: sm.name });
     }
