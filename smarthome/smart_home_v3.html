@@ -2862,9 +2862,10 @@ function _getRelayEvents(relayId, date) {
         // קטעי מחזור ביניים: ה"סיום" שלהם הוא כבר ה"תחילה" של הקטע הבא (אותה דקה, action הפוך).
         const isLast = idx===pairs.length-1;
         if(seg.endMin !== null && isLast){
-          // קטע מחזור — בסיום נשארים באותו מצב שהקטע היה (לא הופכים).
-          // קטע רגיל (ללא מחזורים) — הופכים, חזרה לברירת מחדל (כיבוי אוטומטי).
-          const endState = (seg.cycleIdx!==undefined) ? (seg.action==='ON') : (seg.action!=='ON');
+          // קטע מחזור אמיתי (on/off) — בסיום נשארים באותו מצב שהקטע היה (לא הופכים).
+          // קטע רגיל, או קטע 'single' (השארית האחרונה של תוכנית-מחזור, שכן מקבלת כיבוי-אוטומטי-בתום-משך
+          // מהשרת) — הופכים, חזרה למצב הפוך (כיבוי אוטומטי).
+          const endState = (seg.cycleIdx!==undefined && seg.segType!=='single') ? (seg.action==='ON') : (seg.action!=='ON');
           // אם זה כיבוי (endState===false) שבפועל מבוטל ע"י תוכנית אחרת שמחזיקה את הממסר —
           // לא דוחפים את האירוע הזה בכלל, כך שהמצב "דולק" ממשיך עד שהבעלים האמיתי מכבה.
           const suppressedBy = (!endState) ? isEndEventSuppressed(p, seg, relayId, scanDate) : null;
@@ -3013,7 +3014,9 @@ function renderTimeline(){
           });
           fireEvents.forEach(({p,seg})=>{
             const fireMin=seg.fireMin;
-            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child';
+            // segType:'single' תמיד מוצג כבלוק רגיל עם משך משלו — גם אם יש לו cycleIdx (זה קורה בקטע ה"שארית"
+            // האחרון של תוכנית-מחזור, שצריך סימון-סיום נפרד משלו, בניגוד לזוגות on/off רגילים של מחזור)
+            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
             const isChildSeg = seg.segType==='child';
             const tc = p._firedDone ? 't-fired'
               : (isCycleSeg||isChildSeg)
@@ -3036,7 +3039,7 @@ function renderTimeline(){
           });
           endEvents.forEach(({p,seg})=>{
             const endMin=seg.endMin;
-            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child';
+            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
             if(isCycleSeg||seg.segType==='child') return; // מחזורים ובלוקי-בת מוצגים כ-fireEvent בלבד (כל קטע עומד בפני עצמו)
             const reverseAction=p.action==='ON'?'כיבוי':'הדלקה';
             const timeStr=fmtMin(Math.floor(endMin));
