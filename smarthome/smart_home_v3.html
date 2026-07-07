@@ -4038,7 +4038,11 @@ function saveScheduledModes() {
     for (let j = i+1; j < _scheduledModes.length; j++) {
       const a = _scheduledModes[i], b = _scheduledModes[j];
       if (!a.active || !b.active) continue;
-      const sharedDays = (a.days||[]).filter(d => (b.days||[]).includes(d));
+      // מערך ימים ריק = "כל יום" (בדיוק כמו שהמתזמן עצמו מפרש את זה) — לא "אף יום", אחרת קונפליקט
+      // בין שני תזמונים ש"כל יום" לא היה מתגלה לעולם.
+      const daysA = (a.days && a.days.length) ? a.days : [0,1,2,3,4,5,6];
+      const daysB = (b.days && b.days.length) ? b.days : [0,1,2,3,4,5,6];
+      const sharedDays = daysA.filter(d => daysB.includes(d));
       if (!sharedDays.length) continue;
       const timeA = a.type==='time' ? a.time : `${a.zman}${a.offsetDir}${a.offsetVal}`;
       const timeB = b.type==='time' ? b.time : `${b.zman}${b.offsetDir}${b.offsetVal}`;
