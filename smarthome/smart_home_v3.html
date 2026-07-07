@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-A (מכיל: computeModeSegments, ceil-block-boundaries, isEndEventSuppressed-effMode) -->
+<!-- BUILD_MARKER: v2026-07-08-B (מוסיף: getTimeBlocksForDate-mode-aware, updateZmanimBarExtras-TDZ-fix#4, retry-mechanism) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -973,6 +973,9 @@ const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','�
 // אינדקס-חיפוש של קובץ הלוח (calendar_data.js) — נבנה פעם אחת, בשימוש ב-getCalEntry. גם הוא חייב
 // להיות מוכרז כאן, לפני ה-INIT, מאותה סיבה בדיוק (updateZmanimBarExtras קוראת ל-getCalEntry ב-INIT).
 let _calIndexCache = null;
+// מונה ניסיונות-חוזרים לחישוב הדלקת נרות/הבדלה — גם הוא חייב להיות מוכרז לפני ה-INIT,
+// מאותה סיבה בדיוק (updateZmanimBarExtras נקראת ב-INIT ומשתמשת בו).
+let _zmanimBarRetryCount = 0;
 
 // ── LOCALSTORAGE ─────────────────────────────────────────
 function saveLS() {
@@ -1663,6 +1666,19 @@ function modeAtTime(segments, ms){
 
 function updateZmanimBarExtras(){
   try {
+    // אם קובץ הלוח (calendar_data.js, 20MB) עדיין לא נטען/נפרס במלואו — ננסה שוב בעוד 2 שניות,
+    // במקום לחכות עד 5 דקות לרענון התקופתי הבא. עד 15 ניסיונות (30 שניות) לפני שמוותרים ומתעדים.
+    if (getCalData().length === 0) {
+      _zmanimBarRetryCount++;
+      if (_zmanimBarRetryCount <= 15) {
+        setTimeout(updateZmanimBarExtras, 2000);
+        return;
+      }
+      console.error('❌ קובץ הלוח (calendar_data.js) לא נטען אחרי 30 שניות');
+      if (typeof addLog === 'function') addLog('danger', '❌ קובץ הלוח ההלכתי (calendar_data.js) לא נטען אחרי 30 שניות — הדלקת נרות/הבדלה לא יוצגו. בדוק חיבור רשת/גודל הקובץ.');
+      return;
+    }
+    _zmanimBarRetryCount = 0;
     const now=new Date();
     const todayEntry=getCalEntry(now);
     const alotEl=document.getElementById('z-alot');
@@ -1672,6 +1688,8 @@ function updateZmanimBarExtras(){
     if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
     const hEl=document.getElementById('z-havdalah');
     if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
+    // אם ציר-הזמן פתוח כרגע וקודם רץ בלי נתוני-לוח (calendar_data.js עוד לא היה מוכן) — רענן אותו עכשיו
+    if (document.getElementById('tab-timeline')?.classList.contains('active') && typeof renderTimeline==='function') renderTimeline();
   } catch(e) {
     console.error('❌ updateZmanimBarExtras נכשל:', e);
     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב הדלקת נרות/הבדלה: ${e.message}`);
@@ -2774,15 +2792,41 @@ function progAppliesOnDate(p,date){
   return true;
 }
 
-function getTimeBlocksForDate(date){
+function getTimeBlocksForDate(date, daySegments){
   const di=date.getDay();
-  const dayProgs=programs.filter(p=>p.active&&isProgModeMatch(p)&&progAppliesOnDate(p,date));
+  // אילו מצבים בכלל רלוונטיים ליום הזה — מתוך מקטעי-הסימולציה (אם הועברו), אחרת רק המצב הנוכחי
+  // (תאימות-לאחור). בלי זה, תוכנית ממצב שיהיה פעיל רק באמצע היום (עקב תזמון-מצב) לא הייתה משפיעה
+  // בכלל על גבולות הבלוקים — וכל היום היה מוצג כבלוק ריק אחד, עם "מצב-בזמן-חצות" (הישן) בלבד.
+  const relevantModes = new Set();
+  if(daySegments && daySegments.length){
+    const dayStart=date.getTime(), dayEnd=dayStart+1440*60000;
+    daySegments.forEach(seg=>{ if(seg.startMs<dayEnd && seg.endMs>dayStart) relevantModes.add(seg.modeId); });
+  } else {
+    relevantModes.add(activeModeId);
+  }
+  const dayProgs=programs.filter(p=>{
+    if(!p.active||!progAppliesOnDate(p,date)) return false;
+    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+    return modeIds.some(mid=>relevantModes.has(mid));
+  });
   const dateKey=date.toISOString().slice(0,10);
   const dayManual=manualEvents.filter(e=>e.date===dateKey); // ← אירועים ידניים/IVR של היום הזה
-  if(!dayProgs.length && !dayManual.length)return [{startMin:0,endMin:1440,hasEvents:false,empty:true}];
+
+  // גבולות ממעברי-מצב עצמם בתוך היום הזה — גם אם אין שום תוכנית בדיוק באותו רגע
+  const modeTransitionMins=[];
+  if(daySegments && daySegments.length){
+    const dayStart=date.getTime();
+    daySegments.forEach(seg=>{
+      const sm=Math.round((seg.startMs-dayStart)/60000), em=Math.round((seg.endMs-dayStart)/60000);
+      if(sm>0&&sm<1440) modeTransitionMins.push(sm);
+      if(em>0&&em<1440) modeTransitionMins.push(em);
+    });
+  }
+
+  if(!dayProgs.length && !dayManual.length && !modeTransitionMins.length)return [{startMin:0,endMin:1440,hasEvents:false,empty:true}];
 
   // אסוף את כל נקודות האירוע — הדלקה וכיבוי בלבד (ללא padding)
-  const mins=new Set([0,1440]);
+  const mins=new Set([0,1440,...modeTransitionMins]);
   dayProgs.forEach(p=>{
     p.relay.forEach((rId)=>{
       getRelayEventPairs(p,rId).forEach(seg=>{
@@ -2823,7 +2867,10 @@ function getTimeBlocksForDate(date){
       const evE=ev.endMin!==null?Math.floor(ev.endMin):1440;
       return (evS>=s&&evS<e)||(evE>=s&&evE<e);
     });
-    raw.push({startMin:s,endMin:e,hasEvents:hasProg||hasManual});
+    // בלוק שנפתח רק בגלל מעבר-מצב (בלי תוכנית/אירוע ממש בטווח שלו) — עדיין נחשב "hasEvents", אחרת
+    // הוא יתמזג לבלוק-ריק שכן ולא יקבל את תגית-המצב בתצוגה.
+    const hasModeTransition = modeTransitionMins.includes(s);
+    raw.push({startMin:s,endMin:e,hasEvents:hasProg||hasManual||hasModeTransition});
   }
 
   // מיזוג בלוקים ריקים רצופים לבלוק אחד
@@ -3061,7 +3108,8 @@ function renderTimeline(){
   for(const dayDate of dates){
    try{
     const di=dayDate.getDay();
-    const blocks=getTimeBlocksForDate(dayDate);
+    const daySegmentsForThisDay = modeSegments.filter(seg => seg.startMs < dayDate.getTime()+1440*60000 && seg.endMs > dayDate.getTime());
+    const blocks=getTimeBlocksForDate(dayDate, daySegmentsForThisDay);
     const calEntry=getCalEntry(dayDate);
     const hebDate=calEntry?fmtHebDate(calEntry['תאריך עברי'],true):'';
     const latDate=dayDate.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
