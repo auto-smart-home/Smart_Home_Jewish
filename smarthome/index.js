@@ -410,6 +410,7 @@ let schedulerActiveModeId = 0;
 let scheduledModes = []; // תזמוני החלפת מצב
 let _previousModeId = null; // המצב לפני מעבר עם duration (לחזרה אוטומטית)
 let _activeScheduledModeTimer = null; // טיימר חזרה פעיל
+let _pendingRevertInfo = null; // מידע חשוף ללקוח: { revertToMode, revertAtEpochMs } | null
 const _firedToday = new Set();
 const _actuallyFired = new Set();
 const _firedRunOnceToday = new Map();
@@ -627,6 +628,8 @@ io.on('connection', (socket) => {
   // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
   // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
   socket.emit('zmanim_today', getZmanim(new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
+  // מידע על טיימר-חזרה ממתין (אם יש) — כדי שלקוח שנטען באמצע הספירה-לאחור יראה מיד את המידע הנכון
+  socket.emit('pending_mode_revert', _pendingRevertInfo);
 
   // ── Login ──
   socket.on('login', ({ name, password }) => {
@@ -1376,8 +1379,14 @@ function processScheduledModes() {
         if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
         const prevMode = _previousModeId;
         const modeJustSetTo = sm.toModeId;
+        // חשיפה ללקוח: "יש כרגע טיימר-חזרה ממתין" — נדרש כדי שציר-הזמן בממשק ידע לדמות נכון
+        // את המצב הצפוי, גם אם הדף נטען *אחרי* שהטיימר כבר החל לרוץ.
+        _pendingRevertInfo = { revertToMode: prevMode, revertAtEpochMs: Date.now() + durationSec * 1000 };
+        io.emit('pending_mode_revert', _pendingRevertInfo);
         _activeScheduledModeTimer = setTimeout(() => {
           _activeScheduledModeTimer = null;
+          _pendingRevertInfo = null;
+          io.emit('pending_mode_revert', null);
           // הגנה מפני race condition: אם תזמון מצב אחר כבר החליף את המצב הפעיל בינתיים (למשל שני תזמונים
           // שחלים כמעט באותו רגע), אסור לטיימר החזרה "העיוור" הזה לדרוס את המצב הנוכחי בחזרה — רק אם
           // עדיין נמצאים באותו מצב שאליו עברנו במקור, מותר לחזור.
