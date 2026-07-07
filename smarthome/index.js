@@ -982,16 +982,20 @@ function getRelayEventPairs(p, baseMin, relayId) {
   const totalMin=totalEnd-start,fullCycles=Math.floor(totalMin/cycleLen);
   const pairs=[];
   for(let i=0;i<fullCycles;i++){const s=start+i*cycleLen;pairs.push({fireMin:s,endMin:s+onMin,action:p.action,segType:'on',cycleIdx:i});pairs.push({fireMin:s+onMin,endMin:s+cycleLen,action:p.action==='ON'?'OFF':'ON',segType:'off',cycleIdx:i});}
-  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה! מוסיפים עוד קטע ON (ואם נשאר עוד זמן אחריו, גם OFF),
-  // חתוכים בגבול סוף התוכנית. בלי זה, כל זמן שלא מתחלק בול במחזור נעלם בשקט (למשל 4/2 למשך 10 דק' —
-  // המחזור השני מעולם לא ירה בפועל).
+  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה! בלי זה, כל משך שלא מתחלק בול במחזור נעלם
+  // בשקט (למשל 4/2 למשך 10 דק' — המחזור השני מעולם לא ירה בפועל).
+  // חשוב: אם השארית היא ON-בלבד (אין אחריה OFF, כי היא מסתיימת עם סוף התוכנית עצמו) — היא חייבת
+  // segType:'single' (לא 'on'), כי רק 'single' מקבל כיבוי-אוטומטי-בתום-משך; 'on'/'off' לעולם לא נסגרים
+  // לבד (הם נסגרים ע"י הקטע הבא בתור, וכאן אין קטע הבא).
   const remainder = totalMin - fullCycles*cycleLen;
   if (remainder > 0) {
     const s = start + fullCycles*cycleLen;
     const onPart = Math.min(remainder, onMin);
-    pairs.push({fireMin:s,endMin:s+onPart,action:p.action,segType:'on',cycleIdx:fullCycles});
     if (remainder > onMin) {
+      pairs.push({fireMin:s,endMin:s+onPart,action:p.action,segType:'on',cycleIdx:fullCycles});
       pairs.push({fireMin:s+onPart,endMin:s+remainder,action:p.action==='ON'?'OFF':'ON',segType:'off',cycleIdx:fullCycles});
+    } else {
+      pairs.push({fireMin:s,endMin:s+onPart,action:p.action,segType:'single',cycleIdx:fullCycles});
     }
   }
   if(!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action,segType:'single'}];
