@@ -2788,7 +2788,10 @@ function getTimeBlocksForDate(date){
         const fireM=Math.floor(seg.fireMin);
         if(fireM>=0&&fireM<=1440) mins.add(fireM);
         if(seg.endMin!==null){
-          const em=Math.floor(seg.endMin);
+          // עיגול כלפי מעלה (לא מטה!) — אחרת שני ממסרים באותה תוכנית עם delay, שמסתיימים בתוך אותה
+          // דקה (למשל 08:05:00 ו-08:05:30), "נבלעים" לאותו גבול-בלוק, והרקע של הבלוק שאחרי מציג את
+          // הממסר השני כאילו הוא עדיין דולק לאורך כל הבלוק (עד האירוע הבא), במקום לכבות בזמן.
+          const em=Math.ceil(seg.endMin);
           if(em>=0&&em<=1440) mins.add(em);
         }
       });
@@ -2810,7 +2813,7 @@ function getTimeBlocksForDate(date){
       getRelayEventPairs(p,rId).some(seg=>{
         const m=Math.floor(seg.fireMin);
         if(m>=s&&m<e)return true;
-        return seg.endMin!==null&&Math.floor(seg.endMin)>=s&&Math.floor(seg.endMin)<e;
+        return seg.endMin!==null&&Math.ceil(seg.endMin)>=s&&Math.ceil(seg.endMin)<e;
       })
     ));
     // ← הוספה: בלוק עם אירוע ידני/IVR שמתחיל/מסתיים בטווח הזה נחשב "hasEvents" גם בלי תוכנית
@@ -2925,13 +2928,15 @@ function rebuildIvrManualEvents(events) {
 // scanDate), מבוטל בפועל ע"י תוכנית אחרת שמחזיקה את הממסר באותו רגע — אותו היגיון בדיוק
 // כמו checkRelayOwnerBlock בשרת, רק מחושב סטטית מראש (מתוך תכנון התוכניות), כדי שציר הזמן
 // יציג את המצב בפועל ולא רק את ה"תכנון הגולמי" של כל תוכנית בנפרד.
-function isEndEventSuppressed(p, seg, relayId, scanDate){
+function isEndEventSuppressed(p, seg, relayId, scanDate, effMode){
+  const checkMode = effMode !== undefined && effMode !== null ? effMode : activeModeId;
   if (p.priority) return null; // תוכנית עדיפות לעולם לא מבוטלת, גם לא ע"י תוכנית-עדיפות אחרת (מקרה קצה נדיר)
   const endMin = seg.endMin;
   let suppressor = null;
   for (const other of programs) {
     if (other.id === p.id) continue;
-    if (!other.active || !isProgModeMatch(other) || !progAppliesOnDate(other, scanDate)) continue;
+    const otherModeIds = other.modeIds ?? (other.modeId!==null&&other.modeId!==undefined?[other.modeId]:[0]);
+    if (!other.active || !otherModeIds.includes(checkMode) || !progAppliesOnDate(other, scanDate)) continue;
     if (!other.relay.includes(relayId)) continue;
     const otherPairs = getRelayEventPairs(other, relayId);
     for (const oseg of otherPairs) {
@@ -2992,7 +2997,7 @@ function _getRelayEvents(relayId, date, modeId) {
           const endState = (seg.cycleIdx!==undefined && seg.segType!=='single') ? (seg.action==='ON') : (seg.action!=='ON');
           // אם זה כיבוי (endState===false) שבפועל מבוטל ע"י תוכנית אחרת שמחזיקה את הממסר —
           // לא דוחפים את האירוע הזה בכלל, כך שהמצב "דולק" ממשיך עד שהבעלים האמיתי מכבה.
-          const suppressedBy = (!endState) ? isEndEventSuppressed(p, seg, relayId, scanDate) : null;
+          const suppressedBy = (!endState) ? isEndEventSuppressed(p, seg, relayId, scanDate, effMode) : null;
           if (!suppressedBy) {
             allEvents.push({min: seg.endMin + offsetMin, state: endState});
           }
@@ -3120,7 +3125,7 @@ function renderTimeline(){
               if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
                 fireEvents.push({p, seg});
               }
-              if(seg.endMin!==null&&Math.floor(seg.endMin)>=b.startMin&&Math.floor(seg.endMin)<b.endMin){
+              if(seg.endMin!==null&&Math.ceil(seg.endMin)>=b.startMin&&Math.ceil(seg.endMin)<b.endMin){
                 endEvents.push({p, seg});
               }
             });
@@ -3187,7 +3192,7 @@ function renderTimeline(){
             if(isCycleSeg||seg.segType==='child') return; // מחזורים ובלוקי-בת מוצגים כ-fireEvent בלבד (כל קטע עומד בפני עצמו)
             const reverseAction=p.action==='ON'?'כיבוי':'הדלקה';
             const timeStr=fmtMin(Math.floor(endMin));
-            const suppressedBy = (reverseAction==='כיבוי') ? isEndEventSuppressed(p, seg, r.id, dayDate) : null;
+            const suppressedBy = (reverseAction==='כיבוי') ? isEndEventSuppressed(p, seg, r.id, dayDate, blockEffMode) : null;
             if (suppressedBy) {
               const shortOwnerName = shortRelayName(suppressedBy.name); // קיצור ל-2 מילים, כמו בכותרות הממסרים
               html+=`<div class="tl-prog-block" style="opacity:0.85;border:1px dashed rgba(250,204,21,0.7);background:rgba(250,204,21,0.08)" onclick="openAddProgram(${p.id});showTab('programs',null)" title="כיבוי אוטומטי ב-${timeStr} בוטל — הממסר בשליטת '${suppressedBy.name}' (${suppressedBy.priority?'עדיפות':'מסתיים מאוחר יותר'})">
