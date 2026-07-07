@@ -963,6 +963,9 @@ const LS_KEY = 'smarthome_v2';
 // אם היא מוכרזת מאוחר יותר בקובץ (TDZ — ReferenceError שמקריס את כל שאר הסקריפט,
 // כולל connectMQTT() וטעינת רשימת המשתמשים — זה בדיוק מה שגרם ל"לא טוען משתמשים").
 let serverZmanim = {};
+// מידע על טיימר-חזרה ממתין בשרת (אם יש): { revertToMode, revertAtEpochMs } | null.
+// מתעדכן ע"י אירוע 'pending_mode_revert' מהשרת. נחוץ לסימולציית ציר-הזמן (computeModeSegments).
+let serverPendingRevert = null;
 // אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
 // זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
 const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
@@ -1417,6 +1420,12 @@ function connectMQTT() {
     if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
   });
 
+  // טיימר-חזרה ממתין (אם יש) — נחוץ לסימולציית ציר-הזמן כדי להתחיל מנקודה מדויקת "מעכשיו"
+  socket.on('pending_mode_revert', (info) => {
+    serverPendingRevert = info || null;
+    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+
   // ── תזמוני מצב ──
   socket.on('scheduled_modes', (modes) => {
     _scheduledModes = modes || [];
@@ -1548,6 +1557,104 @@ function fmtNextDateLabel(d, base){
   if(d.toDateString()===tmrw.toDateString()) return 'מחר';
   return d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
 }
+
+// ═══ סימולציית מקטעי-מצב לציר הזמן ═══════════════════════════════════════
+// מדמה קדימה (בדיוק לפי אותה לוגיקה כמו processScheduledModes/commitAutoModeSwitch בשרת:
+// טיימר-חזרה יחיד גלובלי, שכל תזמון-מצב חדש — עם duration או בלי — מבטל) איזה מצב פעיל
+// בכל רגע, לאורך טווח הימים המוצג בציר הזמן. מחזיר מערך של {startMs, endMs, modeId}.
+function timeStrToMinutesLocal(t){ if(!t) return null; const [h,m]=t.split(':').map(Number); return h*60+m; }
+
+const ZMAN_SM_FIELD_MAP = { sunset:'שקיעה', sunrise:'נץ החמה', tzeit:'צאת הכוכבים', dawn:'עלות השחר' };
+function getZmanMinutesForDateSM(zmanVal, dayDate){
+  const entry = getCalEntry(dayDate);
+  if(!entry) return null;
+  if(zmanVal==='candles' || zmanVal==='havdalah'){
+    const tmrw = new Date(dayDate); tmrw.setDate(tmrw.getDate()+1);
+    const tEntry = getCalEntry(tmrw);
+    if(zmanVal==='candles'){
+      if(!isAssurMelachaEntryClient(tEntry)) return null;
+      return timeStrToMinutesLocal(entry['שקיעה']);
+    } else {
+      if(!(isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry))) return null;
+      return timeStrToMinutesLocal(entry['מוצאי שבת']);
+    }
+  }
+  const field = ZMAN_SM_FIELD_MAP[zmanVal];
+  if(!field) return null;
+  return timeStrToMinutesLocal(entry[field]);
+}
+
+function computeModeSegments(fromDate, rangeDays){
+  const segments = [];
+  const rangeStart = fromDate.getTime();
+  const rangeEnd = rangeStart + rangeDays*86400000;
+
+  // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח, ממוינים לפי זמן.
+  const fireEvents = [];
+  for(let d=0; d<=rangeDays; d++){
+    const dayDate = new Date(fromDate); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
+    const dow = dayDate.getDay();
+    for(const sm of (_scheduledModes||[])){
+      if(!sm.active) continue;
+      if(sm.days && sm.days.length && !sm.days.includes(dow)) continue;
+      let fireMin = null;
+      if((sm.type||'time')==='time'){
+        fireMin = timeStrToMinutesLocal(sm.time||'00:00');
+      } else {
+        const base = getZmanMinutesForDateSM(sm.zman, dayDate);
+        if(base===null) continue;
+        fireMin = base + (sm.offsetDir==='-'?-1:1)*(sm.offsetVal||0);
+      }
+      if(fireMin===null || fireMin<0) continue;
+      const atMs = dayDate.getTime() + fireMin*60000;
+      if(atMs<rangeStart || atMs>rangeEnd) continue;
+      const durationSec = sm.durationOn ? ((sm.durationH||0)*3600+(sm.durationM||0)*60) : 0;
+      fireEvents.push({ atMs, toModeId: sm.toModeId, durationSec, smName: sm.name });
+    }
+  }
+  fireEvents.sort((a,b)=>a.atMs-b.atMs);
+
+  let curMode = activeModeId;
+  let curTime = rangeStart;
+  // אם יש טיימר-חזרה שכבר רץ בשרת (מלפני שהדף נטען) — מתחילים איתו כ"אירוע" הראשון הממתין.
+  let pendingRevert = (serverPendingRevert && serverPendingRevert.revertAtEpochMs>rangeStart)
+    ? { atMs: serverPendingRevert.revertAtEpochMs, toModeId: serverPendingRevert.revertToMode }
+    : null;
+  let fireIdx = 0;
+
+  while(curTime < rangeEnd){
+    const nextFire = fireEvents[fireIdx];
+    let nextAtMs = Infinity, nextType = null;
+    if(nextFire && (!pendingRevert || nextFire.atMs <= pendingRevert.atMs)){ nextAtMs = nextFire.atMs; nextType = 'fire'; }
+    else if(pendingRevert){ nextAtMs = pendingRevert.atMs; nextType = 'revert'; }
+    if(nextType===null || nextAtMs > rangeEnd) break;
+
+    segments.push({ startMs: curTime, endMs: nextAtMs, modeId: curMode });
+    curTime = nextAtMs;
+
+    if(nextType==='fire'){
+      const prevMode = curMode;
+      curMode = nextFire.toModeId;
+      pendingRevert = null; // כל תזמון-מצב חדש מבטל טיימר-חזרה קודם — בדיוק כמו בשרת
+      if(nextFire.durationSec>0){
+        pendingRevert = { atMs: nextFire.atMs + nextFire.durationSec*1000, toModeId: prevMode };
+      }
+      fireIdx++;
+    } else {
+      curMode = pendingRevert.toModeId;
+      pendingRevert = null;
+    }
+  }
+  segments.push({ startMs: curTime, endMs: rangeEnd, modeId: curMode });
+  return segments;
+}
+
+// מוצא את המצב האפקטיבי (מדומה) בזמן נתון, מתוך מקטעים שכבר חושבו
+function modeAtTime(segments, ms){
+  for(const seg of segments){ if(ms>=seg.startMs && ms<seg.endMs) return seg.modeId; }
+  return activeModeId;
+}
+
 function updateZmanimBarExtras(){
   try {
     const now=new Date();
@@ -1700,6 +1807,16 @@ function isProgModeMatch(p){
   // תמיכה ב-modeIds (מערך חדש) וב-modeId (ישן — migration אוטומטי)
   const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
   return modeIds.includes(activeModeId);
+}
+// פלטת צבעים למצבים — לתצוגת "מה יקרה בכל מצב" בציר הזמן. אינדקס לפי מספר המצב עצמו (עם חזרה מעגלית
+// אם יש הרבה מצבים). מצב 0 (הנוכחי בדרך כלל) לא מקבל סימון מיוחד — רק מצבים "אחרים" מהמצב הפעיל עכשיו.
+const MODE_COLORS = ['#4f8ef7','#f7a94f','#a94ff7','#2dd4bf','#f74f8e','#84cc16','#eab308'];
+function getModeColorInfo(p){
+  const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+  if(modeIds.includes(activeModeId)) return null; // שייך (גם) למצב הנוכחי — בלי סימון מיוחד
+  const mId = modeIds[0];
+  const modeName = (modes.find(m=>m.id===mId)||{}).name || `מצב ${mId}`;
+  return { color: MODE_COLORS[((mId%MODE_COLORS.length)+MODE_COLORS.length)%MODE_COLORS.length], modeName };
 }
 function isProgEffective(p){
   if(!isProgModeMatch(p))return false;
@@ -2825,9 +2942,10 @@ function isEndEventSuppressed(p, seg, relayId, scanDate){
   return suppressor;
 }
 
-function _getRelayEvents(relayId, date) {
+function _getRelayEvents(relayId, date, modeId) {
+  const effMode = modeId !== undefined && modeId !== null ? modeId : activeModeId;
   const dateKey = date.toISOString().slice(0,10);
-  const cacheKey = `${relayId}|${dateKey}`;
+  const cacheKey = `${relayId}|${dateKey}|${effMode}`;
   if (_relayEventsCache[cacheKey]) return _relayEventsCache[cacheKey];
   const LOOKBACK_DAYS = 30;
   const allEvents = [];
@@ -2837,7 +2955,8 @@ function _getRelayEvents(relayId, date) {
     const scanDi = scanDate.getDay();
     const offsetMin = -d * 1440;
     const progs = programs.filter(p => {
-      if (!isProgModeMatch(p) || !progAppliesOnDate(p, scanDate)) return false;
+      const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+      if (!modeIds.includes(effMode) || !progAppliesOnDate(p, scanDate)) return false;
       if (!p.relay.includes(relayId)) return false;
       if (p.parentProgId) {
         // תוכנית-בת — צריכה גם את ה-active של עצמה וגם של ההורה (בלי הורה פעיל אין הפסקות לגזור מהן)
@@ -2892,8 +3011,8 @@ function _getRelayEvents(relayId, date) {
   return allEvents;
 }
 
-function getRelayStateAtTime(relayId,date,atMin){
-  const allEvents = _getRelayEvents(relayId, date);
+function getRelayStateAtTime(relayId,date,atMin,modeId){
+  const allEvents = _getRelayEvents(relayId, date, modeId);
   let state = false;
   for(const e of allEvents){ if(e.min <= atMin) state = e.state; }
   return state;
@@ -2910,6 +3029,8 @@ function renderTimeline(){
   _runOnceDateCache = {}; // reset per-render cache
   initTlDates();
   const dates=getTlDates();
+  // מדמה קדימה איזה מצב יהיה פעיל בכל רגע לאורך כל טווח התאריכים המוצג — ראו computeModeSegments
+  const modeSegments = computeModeSegments(dates[0], dates.length);
   const tbl=document.getElementById('tl-table');
   let html='<thead><tr><th>זמן / יום</th>';
   relays.forEach(r=>{
@@ -2949,23 +3070,31 @@ function renderTimeline(){
     html+=`<tr class="tl-day-row">${hdrCells}</tr>`;
     blocks.forEach(b=>{
       html+='<tr>';
+      // המצב האפקטיבי (מדומה) שיהיה פעיל בפועל בזמן הבלוק הזה — לא בהכרח המצב הנוכחי!
+      const blockEffMode = modeAtTime(modeSegments, dayDate.getTime()+b.startMin*60000);
+      const modeChanged = blockEffMode !== activeModeId;
+      const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
+      const modeTagHtml = modeChanged ? `<div style="font-size:9px;color:var(--accent);font-weight:700;margin-top:1px">🔀 ${modeName}</div>` : '';
       if(!b.hasEvents||b.empty){
         const lbl=b.empty?'כל היום':`${fmtMin(b.startMin)} – ${fmtMin(b.endMin)}`;
-        html+=`<td><div class="tl-time-label" style="opacity:0.5;font-size: 11px">${lbl}</div></td>`;
+        html+=`<td><div class="tl-time-label" style="opacity:0.5;font-size: 11px">${lbl}</div>${modeTagHtml}</td>`;
         relays.forEach(r=>{
-          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin);
+          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
           const bg=isOn?'background:rgba(52,211,153,0.07);':'';
           html+=`<td style="background:${isOn?'rgba(34,197,94,0.30)':'#2a3142'};${bg}"><div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.6)':'rgba(148,163,184,0.4)'}">${isOn?'●':'·'}</div></td>`;
         });
       } else {
-        html+=`<td><div class="tl-time-label">${fmtMin(b.startMin)}<div class="tl-time-sub">– ${fmtMin(b.endMin)}</div></div></td>`;
+        html+=`<td><div class="tl-time-label">${fmtMin(b.startMin)}<div class="tl-time-sub">– ${fmtMin(b.endMin)}</div></div>${modeTagHtml}</td>`;
         relays.forEach(r=>{
           // Collect fire/end events for this relay in this block — מחזורים = כמה זוגות לתוכנית אחת
           const fireEvents=[];
           const endEvents=[];
           // תוכניות רגילות
           programs.forEach(p=>{
-            if(!p.active||!isProgModeMatch(p)||!progAppliesOnDate(p,dayDate)||!p.relay.includes(r.id))return;
+            // ציר-הזמן מציג את התוכניות ששייכות ל*מצב שיהיה פעיל בפועל בזמן הזה* (blockEffMode) —
+            // מדומה מראש לפי תזמוני-המצב הקיימים — לא בהכרח למצב הנוכחי הגלובלי.
+            const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+            if(!p.active||!modeIds.includes(blockEffMode)||!progAppliesOnDate(p,dayDate)||!p.relay.includes(r.id))return;
             // הגנה נוספת: תוכנית-בת לא רלוונטית אם ההורה שלה לא פעיל (גם אם הבת עצמה עדיין מסומנת active
             // ממצב ישן/לא-עקבי) — בלי הורה פעיל אין הפסקות שממנן נגזרים זמני הבת.
             if(p.parentProgId){
@@ -2993,7 +3122,7 @@ function renderTimeline(){
               });
             });
           }
-          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin);
+          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
           const bgStyle=isOn
             ?'background:rgba(34,197,94,0.35);border-right:4px solid rgba(34,197,94,0.75);'
             :'background:#2a3142;';
