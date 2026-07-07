@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-D (מוסיף: אבחון-זמן ביומן בעליית הדף) -->
+<!-- BUILD_MARKER: v2026-07-08-E (מוסיף: אבחון-זמן ביומן במקום שישרוד - אחרי טעינת server_log) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1187,13 +1187,6 @@ function syncLogToServer(entry) {
 // ── INIT ─────────────────────────────────────────────────
 loadLS();
 renderAll();
-// אבחון חד-פעמי לזמן/אזור-זמן — כדי לאתר במדויק פערי-שעות בלי לנחש. יופיע ביומן פעם אחת בכל טעינת דף.
-try {
-  const _diagRaw = new Date();
-  const _diagIL = new Date(_diagRaw.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
-} catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
 loadZmanim();
 updateZmanimBarExtras();
 setInterval(updateZmanimBarExtras, 5 * 60 * 1000); // רענון כל 5 דק' — חשוב למי שמשאיר את הדף פתוח לאורך זמן
@@ -1300,6 +1293,14 @@ function connectMQTT() {
       entries.forEach(e => logEntries.push(e));
       renderLog();
     }
+    // אבחון-זמן — כאן, לא ב-INIT הכללי, כי כל דבר שנוסף ליומן לפני החיבור לשרת נמחק ברגע שמגיעה
+    // היסטוריית-הלוג האמיתית מהשרת (השורות מעל). כאן זה בטוח, כי זה קורה *אחרי* ההחלפה.
+    try {
+      const _diagRaw = new Date();
+      const _diagIL = new Date(_diagRaw.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+      const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
+    } catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
   });
 
   socket.on('log_broadcast', (entry) => {
