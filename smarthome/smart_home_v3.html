@@ -1187,6 +1187,13 @@ function syncLogToServer(entry) {
 // ── INIT ─────────────────────────────────────────────────
 loadLS();
 renderAll();
+// אבחון חד-פעמי לזמן/אזור-זמן — כדי לאתר במדויק פערי-שעות בלי לנחש. יופיע ביומן פעם אחת בכל טעינת דף.
+try {
+  const _diagRaw = new Date();
+  const _diagIL = new Date(_diagRaw.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
+} catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
 loadZmanim();
 updateZmanimBarExtras();
 setInterval(updateZmanimBarExtras, 5 * 60 * 1000); // רענון כל 5 דק' — חשוב למי שמשאיר את הדף פתוח לאורך זמן
