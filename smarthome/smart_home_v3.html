@@ -3029,8 +3029,17 @@ function renderTimeline(){
   _runOnceDateCache = {}; // reset per-render cache
   initTlDates();
   const dates=getTlDates();
-  // מדמה קדימה איזה מצב יהיה פעיל בכל רגע לאורך כל טווח התאריכים המוצג — ראו computeModeSegments
-  const modeSegments = computeModeSegments(dates[0], dates.length);
+  // מדמה קדימה איזה מצב יהיה פעיל בכל רגע לאורך כל טווח התאריכים המוצג — ראו computeModeSegments.
+  // רשת-ביטחון: אם החישוב נכשל מכל סיבה (נתון לא-צפוי בתזמוני-המצב וכו') — נופלים חזרה להתנהגות
+  // הישנה (מקטע אחד = המצב הנוכחי, לכל הטווח) במקום שציר-הזמן כולו ייעלם/יקרוס בשקט.
+  let modeSegments;
+  try {
+    modeSegments = computeModeSegments(dates[0], dates.length);
+  } catch(e) {
+    console.error('❌ computeModeSegments נכשל:', e);
+    if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב מקטעי-מצב לציר הזמן: ${e.message} — חוזר להצגת המצב הנוכחי בלבד`);
+    modeSegments = [{ startMs: dates[0].getTime(), endMs: dates[0].getTime() + dates.length*86400000, modeId: activeModeId }];
+  }
   const tbl=document.getElementById('tl-table');
   let html='<thead><tr><th>זמן / יום</th>';
   relays.forEach(r=>{
@@ -3039,6 +3048,7 @@ function renderTimeline(){
   });
   html+='</tr></thead><tbody>';
   for(const dayDate of dates){
+   try{
     const di=dayDate.getDay();
     const blocks=getTimeBlocksForDate(dayDate);
     const calEntry=getCalEntry(dayDate);
@@ -3189,6 +3199,11 @@ function renderTimeline(){
       }
       html+='</tr>';
     });
+   } catch(e) {
+     console.error(`❌ renderTimeline נכשל ליום ${dayDate.toDateString()}:`, e);
+     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בהצגת ציר-הזמן ליום ${dayDate.toLocaleDateString('he-IL')}: ${e.message}`);
+     html += `<tr><td colspan="${relays.length+1}" style="color:#ef4444;padding:8px">⚠️ שגיאה בהצגת היום הזה — ראה יומן</td></tr>`;
+   }
   }
   html+='</tbody>';
   tbl.innerHTML=html;
