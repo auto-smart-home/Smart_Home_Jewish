@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-B (מוסיף: getTimeBlocksForDate-mode-aware, updateZmanimBarExtras-TDZ-fix#4, retry-mechanism) -->
+<!-- BUILD_MARKER: v2026-07-08-C (מוסיף: תיקון אזור-זמן ל-getTlDates + pendingRevert, תיקון TDZ#4) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1588,11 +1588,21 @@ function getZmanMinutesForDateSM(zmanVal, dayDate){
   return timeStrToMinutesLocal(entry[field]);
 }
 
+// ממיר זמן-שרת אמיתי (UTC אמיתי, כמו Date.now() בשרת) ל"בסיס-הזמן" שכל שאר קוד הלקוח כבר מניח
+// (תאריכי JS שנבנים מקומית בדפדפן, למשל dayDate.setHours(0,0,0,0)) — בלי זה, אם אזור-הזמן המוגדר
+// בדפדפן שונה מ-Asia/Jerusalem (למשל UTC), יש הפרש-שעות קבוע (למשל 3 שעות בקיץ) בין הזמן ה"אמיתי"
+// שהשרת שולח לבין הזמן שנבנה מקומית — זה בדיוק מה שגרם לתגית "מצב חופשה" להופיע בשעה לא נכונה.
+function toLocalBasisFromServerEpoch(trueEpochMs){
+  return new Date(new Date(trueEpochMs).toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).getTime();
+}
+function nowInLocalBasis(){
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).getTime();
+}
 function computeModeSegments(fromDate, rangeDays){
   const segments = [];
   const rangeStart = fromDate.getTime();
   const rangeEnd = rangeStart + rangeDays*86400000;
-  const nowMs = Date.now();
+  const nowMs = nowInLocalBasis();
 
   // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח, ממוינים לפי זמן.
   const fireEvents = [];
@@ -1626,8 +1636,11 @@ function computeModeSegments(fromDate, rangeDays){
   let curMode = activeModeId;
   let curTime = rangeStart;
   // אם יש טיימר-חזרה שכבר רץ בשרת (מלפני שהדף נטען) — מתחילים איתו כ"אירוע" הראשון הממתין.
-  let pendingRevert = (serverPendingRevert && serverPendingRevert.revertAtEpochMs>rangeStart)
-    ? { atMs: serverPendingRevert.revertAtEpochMs, toModeId: serverPendingRevert.revertToMode }
+  // הזמן מהשרת הוא epoch אמיתי (UTC) — חייבים להמיר אותו ל"מטבע-הזמן" המקומית של שאר הקוד כאן
+  // (ראו toLocalBasisFromServerEpoch), אחרת יש הפרש קבוע של שעות אם אזור-הזמן של הדפדפן שונה מישראל.
+  const pendingRevertAtMsLocal = serverPendingRevert ? toLocalBasisFromServerEpoch(serverPendingRevert.revertAtEpochMs) : null;
+  let pendingRevert = (serverPendingRevert && pendingRevertAtMsLocal>rangeStart)
+    ? { atMs: pendingRevertAtMsLocal, toModeId: serverPendingRevert.revertToMode }
     : null;
   let fireIdx = 0;
 
@@ -1679,7 +1692,8 @@ function updateZmanimBarExtras(){
       return;
     }
     _zmanimBarRetryCount = 0;
-    const now=new Date();
+    // "עכשיו" מעוגן לזמן ישראל במפורש — ראו הסבר מלא ב-getTlDates
+    const now=new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
     const todayEntry=getCalEntry(now);
     const alotEl=document.getElementById('z-alot');
     if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
@@ -2737,7 +2751,11 @@ function setTlRange(days){
 function getTlDates(){
   const fEl=document.getElementById('tl-from-date');
   const tEl=document.getElementById('tl-to-date');
-  const today=new Date();today.setHours(0,0,0,0);
+  // "היום" מעוגן במפורש לזמן ישראל (לא לאזור-הזמן הגולמי שהדפדפן/מכשיר מוגדר אליו) — כדי שזה יהיה
+  // נכון גם אם המכשיר מוגדר לאזור-זמן אחר (למשל UTC). כל שאר החישוב (גם מנוע מקטעי-המצב) בונה על
+  // הערך הזה, כך שהכל נשאר עקבי כלפי עצמו וגם נכון כלפי השעון האמיתי בישראל.
+  const today=new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  today.setHours(0,0,0,0);
   const from=fEl&&fEl.value?new Date(fEl.value):today;
   const to=tEl&&tEl.value?new Date(tEl.value):new Date(today.getTime()+6*86400000);
   const dates=[];
