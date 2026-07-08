@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-I (השורש האמיתי: initTlDates כתבה תאריך-UTC לשדה, getTlDates קראה אותו כ-UTC) -->
+<!-- BUILD_MARKER: v2026-07-08-J (אבחוני-הפיתוח הושבתו/בהערה - כל התיקונים יציבים) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1293,8 +1293,9 @@ function connectMQTT() {
       entries.forEach(e => logEntries.push(e));
       renderLog();
     }
-    // אבחון-זמן — כאן, לא ב-INIT הכללי, כי כל דבר שנוסף ליומן לפני החיבור לשרת נמחק ברגע שמגיעה
-    // היסטוריית-הלוג האמיתית מהשרת (השורות מעל). כאן זה בטוח, כי זה קורה *אחרי* ההחלפה.
+    // אבחון-זמן חד-פעמי — הושבת אחרי שהשתמשנו בו לאיתור ולתיקון באג ה-3-שעות (ראה סיכום פרויקט).
+    // להפעלה מחדש במקרה הצורך: הסר את ה-/* */ מסביב לבלוק למטה.
+    /*
     try {
       const _diagRaw = new Date();
       const _diagP = getIsraelParts(_diagRaw);
@@ -1302,6 +1303,7 @@ function connectMQTT() {
       const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
     } catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
+    */
   });
 
   socket.on('log_broadcast', (entry) => {
@@ -3149,8 +3151,9 @@ function renderTimeline(){
     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב מקטעי-מצב לציר הזמן: ${e.message} — חוזר להצגת המצב הנוכחי בלבד`);
     modeSegments = [{ startMs: dates[0].getTime(), endMs: dates[0].getTime() + dates.length*86400000, modeId: activeModeId }];
   }
-  // אבחון חד-פעמי (פעם אחת לכל טעינת-דף, לא בכל רינדור) — מדפיס ליומן את מקטעי-המצב "המעניינים"
-  // (שונים מהמצב הנוכחי), כדי לדעת בוודאות אם הבעיה כבר בחישוב עצמו או רק בשלב שאחריו (בלוקים/תצוגה).
+  // אבחון-מקטעי-מצב — הושבת אחרי שהשתמשנו בו לאיתור באג ה-3-שעות (ראה סיכום פרויקט).
+  // להפעלה מחדש: הסר את ה-/* */ מסביב לבלוק.
+  /*
   if (!window._tlSegDiagDone) {
     window._tlSegDiagDone = true;
     try {
@@ -3159,6 +3162,7 @@ function renderTimeline(){
       addLog('info', `🕵️ אבחון-מקטעי-מצב (activeModeId=${activeModeId}): ${summary || '(אין מקטעים שונים מהמצב הנוכחי)'}`);
     } catch(e) { addLog('danger', `❌ שגיאה באבחון-מקטעי-מצב: ${e.message}`); }
   }
+  */
   const tbl=document.getElementById('tl-table');
   let html='<thead><tr><th>זמן / יום</th>';
   relays.forEach(r=>{
@@ -3203,8 +3207,9 @@ function renderTimeline(){
       // המצב האפקטיבי (מדומה) שיהיה פעיל בפועל בזמן הבלוק הזה — לא בהכרח המצב הנוכחי!
       const blockEffMode = modeAtTime(modeSegments, dayDate.getTime()+b.startMin*60000);
       const modeChanged = blockEffMode !== activeModeId;
-      // אבחון ממוקד חד-פעמי — בדיוק בנקודת החיבור בין מקטעי-המצב (שאושרו נכונים) לבין הבלוק המוצג,
-      // כדי לתפוס את הפער המדויק אם יש כזה (למשל פער-שעות בין dayDate.getTime() לבין seg.startMs).
+      // אבחון-בלוק — הושבת אחרי שאיתר את שורש באג ה-3-שעות (initTlDates/getTlDates, ראה סיכום פרויקט).
+      // להפעלה מחדש: הסר את ה-/* */ מסביב לבלוק.
+      /*
       if (modeChanged && !window._tlBlockDiagDone) {
         window._tlBlockDiagDone = true;
         try {
@@ -3212,6 +3217,7 @@ function renderTimeline(){
           addLog('info', `🕵️ אבחון-בלוק: dayDate="${dayDate.toString()}" (getTime=${dayDate.getTime()}) | b.startMin=${b.startMin} | blockEffMode=${blockEffMode} | dayDate+startMin="${new Date(dayDate.getTime()+b.startMin*60000).toString()}" | מקטעים-תואמים=${relevantSegs.map(s=>`[${new Date(s.startMs).toString()} - ${new Date(s.endMs).toString()}]`).join(', ')}`);
         } catch(e) { addLog('danger', `❌ שגיאה באבחון-בלוק: ${e.message}`); }
       }
+      */
       const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
       const modeTagHtml = modeChanged ? `<div style="font-size:9px;color:var(--accent);font-weight:700;margin-top:1px">🔀 ${modeName}</div>` : '';
       if(!b.hasEvents||b.empty){
