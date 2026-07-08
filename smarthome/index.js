@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 2;
+const IDX_TOP_MARK = 3;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -564,6 +564,11 @@ async function publishRelay(relayId, state, originLabel = null) {
       if (err) { reject(err); return; }
       relayState[relayId] = state;
       addServerLog({ type: 'sent', msg: `📤 שרת שלח: ${relayName} → ${state}${originLabel ? ` [${originLabel}]` : ''}`, user: (originLabel && originLabel.startsWith('IVR')) ? originLabel : 'שרת' });
+      // שידור מיידי לכל הדפדפנים המחוברים — כך שהמחוון בממשק מתעדכן תמיד לפי הפקודה שנשלחה,
+      // בלי תלות באישור-פיזי מהבקר (שיכול לקחת זמן, או לא להגיע כלל אם הבקר מנותק/איטי). בלי זה,
+      // רק דפדפן שביצע לחיצה-ידנית-מקומית "ראה" את השינוי (עדכון-אופטימי מקומי בצד הלקוח בלבד) —
+      // כל מקור אחר (IVR, תוכנית מתוזמנת, דפדפן אחר) לא היה משודר לאף אחד.
+      io.emit('relay_state', { id: relayId, state });
       const confirmTimer = setTimeout(() => {
         addServerLog({ type: 'warning', msg: `⚠️ לא התקבל אישור מהבקר: ${relayName} (${state})`, user: 'בקר' });
       }, 5000);
@@ -1499,4 +1504,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 2;
+const IDX_BOTTOM_MARK = 3;
