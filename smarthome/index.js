@@ -8,6 +8,11 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 
+// סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
+// ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
+// שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
+const IDX_TOP_MARK = 1;
+
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
 // ── DATA DIR — /share/smarthome-data במצב add-on, ./data במצב ידני ──
@@ -630,6 +635,8 @@ io.on('connection', (socket) => {
   socket.emit('zmanim_today', getZmanim(new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
   // מידע על טיימר-חזרה ממתין (אם יש) — כדי שלקוח שנטען באמצע הספירה-לאחור יראה מיד את המידע הנכון
   socket.emit('pending_mode_revert', _pendingRevertInfo);
+  // סימוני-בנייה (ראו הסבר ליד IDX_TOP_MARK) — כדי שהלקוח יוכל להציג את שלמות-שני-הקבצים יחד
+  socket.emit('server_build_marks', { top: IDX_TOP_MARK, bottom: IDX_BOTTOM_MARK });
 
   // ── Login ──
   socket.on('login', ({ name, password }) => {
@@ -1489,3 +1496,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.log(`\n🏠 שרת בית חכם (גרסה מקומית) פועל על פורט ${PORT}\n`);
   });
 })();
+
+// אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
+// היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
+const IDX_BOTTOM_MARK = 1;
