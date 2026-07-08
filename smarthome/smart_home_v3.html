@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-H (תיקון שורש: הסרת string round-trip לא-אחיד-בין-דפדפנים, ב-5 מקומות) -->
+<!-- BUILD_MARKER: v2026-07-08-I (השורש האמיתי: initTlDates כתבה תאריך-UTC לשדה, getTlDates קראה אותו כ-UTC) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -2756,19 +2756,23 @@ function initTlDates(){
   const to=document.getElementById('tl-to-date');
   if(!from||!to)return;
   if(!from.value){
-    const today=new Date();
-    from.value=today.toISOString().split('T')[0];
-    const end=new Date(today);end.setDate(today.getDate()+6);
-    to.value=end.toISOString().split('T')[0];
+    // קריטי: לא toISOString() (תמיד UTC!) — משתמשים בחלקים המספריים המתוקנים לישראל, כדי שהמחרוזת
+    // שנכתבת לשדה עצמו כבר תהיה נכונה, ולא תגרום ל-new Date(string) לפרש אותה כ-UTC בהמשך.
+    const p = getIsraelParts(new Date());
+    const fmt = (y,m,d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    from.value = fmt(p.year, p.month, p.day);
+    const end=new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+6);
+    to.value = fmt(end.getFullYear(), end.getMonth()+1, end.getDate());
   }
 }
 function setTlRange(days){
-  const today=new Date();
+  const p = getIsraelParts(new Date());
+  const fmt = (y,m,d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
   const from=document.getElementById('tl-from-date');
   const to=document.getElementById('tl-to-date');
-  from.value=today.toISOString().split('T')[0];
-  const end=new Date(today);end.setDate(today.getDate()+days-1);
-  to.value=end.toISOString().split('T')[0];
+  from.value = fmt(p.year, p.month, p.day);
+  const end=new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+days-1);
+  to.value = fmt(end.getFullYear(), end.getMonth()+1, end.getDate());
   renderTimeline();
 }
 function getTlDates(){
@@ -2779,8 +2783,15 @@ function getTlDates(){
   // הערך הזה, כך שהכל נשאר עקבי כלפי עצמו וגם נכון כלפי השעון האמיתי בישראל.
   const _todayParts = getIsraelParts(new Date());
   const today=new Date(_todayParts.year, _todayParts.month-1, _todayParts.day, 0, 0, 0, 0);
-  const from=fEl&&fEl.value?new Date(fEl.value):today;
-  const to=tEl&&tEl.value?new Date(tEl.value):new Date(today.getTime()+6*86400000);
+  // קריטי: לא new Date(fEl.value)! מחרוזת "YYYY-MM-DD" (בלי שעה) תמיד מתפרשת כ-UTC ע"י JS, בכל
+  // דפדפן, ללא יוצא מן הכלל — גם אם המחרוזת עצמה כבר נכונה. מפרקים אותה ידנית ובונים עם הקונסטרוקטור
+  // המספרי (שתמיד מקומי, לא תלוי-פרשנות), כדי שזה יישאר נכון בלי קשר לפורמט המחרוזת.
+  const parseDateInput = (val) => {
+    const [y,m,d] = val.split('-').map(Number);
+    return new Date(y, m-1, d, 0, 0, 0, 0);
+  };
+  const from=fEl&&fEl.value?parseDateInput(fEl.value):today;
+  const to=tEl&&tEl.value?parseDateInput(tEl.value):new Date(today.getTime()+6*86400000);
   const dates=[];
   for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1))dates.push(new Date(d));
   return dates;
