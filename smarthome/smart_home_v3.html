@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-L (זריחה/שקיעה עברו מ-hebcal חיצוני לקובץ הלוח המקומי - אין יותר תלות ברשת) -->
+<!-- BUILD_MARKER: v2026-07-08-M (ציר-הזמן מנותק מ-activeModeId - תמיד תחזית קבועה, לא משתנה במעבר מצב) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -963,7 +963,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 2;
+const BUILD_TOP_MARK = 3;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -1677,15 +1677,14 @@ function computeModeSegments(fromDate, rangeDays){
   }
   fireEvents.sort((a,b)=>a.atMs-b.atMs);
 
-  let curMode = activeModeId;
+  // ציר-הזמן הוא תחזית קבועה על סמך התזמונים המוגדרים בלבד — לא תלוי מה קורה בפועל ברגע הנוכחי.
+  // לכן הסימולציה תמיד מתחילה מ"מצב 0" (רגיל) כנקודת-ייחוס קבועה, ומתעלמת הן מ-activeModeId
+  // (המצב הפעיל בפועל, שיכול להשתנות ע"י מעבר-מצב ידני) והן מטיימר-חזרה אמיתי שכבר רץ בשרת —
+  // אחרת מעבר-מצב ידני היה "מאפס" את התצוגה למשתמש, בניגוד לכוונה (לראות תמיד את אותה תחזית).
+  const TIMELINE_HOME_MODE = 0;
+  let curMode = TIMELINE_HOME_MODE;
   let curTime = rangeStart;
-  // אם יש טיימר-חזרה שכבר רץ בשרת (מלפני שהדף נטען) — מתחילים איתו כ"אירוע" הראשון הממתין.
-  // הזמן מהשרת הוא epoch אמיתי (UTC) — חייבים להמיר אותו ל"מטבע-הזמן" המקומית של שאר הקוד כאן
-  // (ראו toLocalBasisFromServerEpoch), אחרת יש הפרש קבוע של שעות אם אזור-הזמן של הדפדפן שונה מישראל.
-  const pendingRevertAtMsLocal = serverPendingRevert ? toLocalBasisFromServerEpoch(serverPendingRevert.revertAtEpochMs) : null;
-  let pendingRevert = (serverPendingRevert && pendingRevertAtMsLocal>rangeStart)
-    ? { atMs: pendingRevertAtMsLocal, toModeId: serverPendingRevert.revertToMode }
-    : null;
+  let pendingRevert = null;
   let fireIdx = 0;
 
   while(curTime < rangeEnd){
@@ -3234,7 +3233,7 @@ function renderTimeline(){
       html+='<tr>';
       // המצב האפקטיבי (מדומה) שיהיה פעיל בפועל בזמן הבלוק הזה — לא בהכרח המצב הנוכחי!
       const blockEffMode = modeAtTime(modeSegments, dayDate.getTime()+b.startMin*60000);
-      const modeChanged = blockEffMode !== activeModeId;
+      const modeChanged = blockEffMode !== 0; // השוואה מול נקודת-הייחוס הקבועה (מצב 0), לא activeModeId
       // אבחון-בלוק — הושבת אחרי שאיתר את שורש באג ה-3-שעות (initTlDates/getTlDates, ראה סיכום פרויקט).
       // להפעלה מחדש: הסר את ה-/* */ מסביב לבלוק.
       /*
@@ -4400,7 +4399,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 2;
+BUILD_BOTTOM_MARK = 3;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
