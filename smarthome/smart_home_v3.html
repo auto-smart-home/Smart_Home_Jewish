@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-N (תיקון: nowIL לא-מוגדר ב-addManualEvent, שארית משיפוץ-אזור-הזמן) -->
+<!-- BUILD_MARKER: v2026-07-09-A (תיקון: dateKey של אירועי IVR/ידניים היה מבוסס-UTC, גרם ליום-שגוי בציר-הזמן ליד גבולות-חצות; גם ייחוס-משתמש ל-IVR ביומן) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -963,7 +963,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 4;
+const BUILD_TOP_MARK = 5;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -1633,6 +1633,13 @@ function getIsraelParts(date){
   }).formatToParts(date);
   const get = t => parseInt(parts.find(p => p.type === t).value, 10);
   return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour')%24, minute: get('minute'), second: get('second') };
+}
+// המרת תאריך ל-"YYYY-MM-DD" לפי זמן ישראל (לא UTC!) — כל שימוש קודם ב-date.toISOString().slice(0,10)
+// לצורך "מפתח-יום" עלול לסמן את היום הלא-נכון ליד גבולות-חצות (הפרש 3 שעות בקיץ בישראל) — בדיוק
+// מה שגרם לאירוע IVR של יום חמישי להיות משויך ליום שישי בציר-הזמן. תמיד להשתמש בזו במקום.
+function ilDateKey(date){
+  const p = getIsraelParts(date);
+  return `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`;
 }
 function toLocalBasisFromServerEpoch(trueEpochMs){
   const p = getIsraelParts(new Date(trueEpochMs));
@@ -2842,7 +2849,7 @@ function getRunOnceTargetDateKey(p){
     cand.setDate(cand.getDate()+d);
     const di=cand.getDay();
     if((!hasDays||p.days.includes(di)) && matchesCalFilterForDate(p,cand)){
-      const key=cand.toISOString().slice(0,10);
+      const key=ilDateKey(cand);
       _runOnceDateCache[p.id]=key;
       return key;
     }
@@ -2867,7 +2874,7 @@ function progAppliesOnDate(p,date){
   if(p.runOnce){
     const target=getRunOnceTargetDateKey(p);
     if(!target) return false;
-    const dateKey=date.toISOString().slice(0,10);
+    const dateKey=ilDateKey(date);
     return dateKey===target;
   }
   return true;
@@ -2890,7 +2897,7 @@ function getTimeBlocksForDate(date, daySegments){
     const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
     return modeIds.some(mid=>relevantModes.has(mid));
   });
-  const dateKey=date.toISOString().slice(0,10);
+  const dateKey=ilDateKey(date);
   const dayManual=manualEvents.filter(e=>e.date===dateKey); // ← אירועים ידניים/IVR של היום הזה
 
   // גבולות ממעברי-מצב עצמם בתוך היום הזה — גם אם אין שום תוכנית בדיוק באותו רגע
@@ -3046,7 +3053,7 @@ function rebuildIvrManualEvents(events) {
   // ניקוי רגיל — אירועי IVR ישנים (יותר מיומיים) לא צריכים להישאר לנצח
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 2);
-  const cutoffKey = cutoff.toISOString().slice(0, 10);
+  const cutoffKey = ilDateKey(cutoff);
   for (let i = manualEvents.length - 1; i >= 0; i--) {
     if (manualEvents[i].source?.startsWith('IVR') && manualEvents[i].date < cutoffKey) manualEvents.splice(i, 1);
   }
@@ -3083,7 +3090,7 @@ function isEndEventSuppressed(p, seg, relayId, scanDate, effMode){
 
 function _getRelayEvents(relayId, date, modeId) {
   const effMode = modeId !== undefined && modeId !== null ? modeId : activeModeId;
-  const dateKey = date.toISOString().slice(0,10);
+  const dateKey = ilDateKey(date);
   const cacheKey = `${relayId}|${dateKey}|${effMode}`;
   if (_relayEventsCache[cacheKey]) return _relayEventsCache[cacheKey];
   const LOOKBACK_DAYS = 30;
@@ -3138,7 +3145,7 @@ function _getRelayEvents(relayId, date, modeId) {
   for(let d = 30; d >= 0; d--){
     const scanDate2 = new Date(date);
     scanDate2.setDate(scanDate2.getDate() - d);
-    const scanKey2 = scanDate2.toISOString().slice(0,10);
+    const scanKey2 = ilDateKey(scanDate2);
     const offsetMin2 = -d * 1440;
     manualEvents.filter(e => e.relayId === relayId && e.date === scanKey2).forEach(e => {
       allEvents.push({ min: e.startMin + offsetMin2, state: true, manual: true, source: e.source });
@@ -3306,7 +3313,7 @@ function renderTimeline(){
             html+=`<div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.8)':'rgba(148,163,184,0.35)'}">${isOn?'━━ דולק':'·'}</div>`;
           }
           // הצג אירועים ידניים לאותו בלוק
-          const dayDateKey = dayDate.toISOString().slice(0,10);
+          const dayDateKey = ilDateKey(dayDate);
           manualEvents.filter(e => e.relayId===r.id && e.date===dayDateKey &&
             e.startMin>=b.startMin && e.startMin<b.endMin).forEach(e=>{
             const timeStr=fmtMin(e.startMin);
@@ -4400,7 +4407,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 4;
+BUILD_BOTTOM_MARK = 5;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
