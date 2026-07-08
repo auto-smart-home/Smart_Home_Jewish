@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-G (מוסיף: אבחון-בלוק ממוקד - dayDate מול segments) -->
+<!-- BUILD_MARKER: v2026-07-08-H (תיקון שורש: הסרת string round-trip לא-אחיד-בין-דפדפנים, ב-5 מקומות) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1297,7 +1297,8 @@ function connectMQTT() {
     // היסטוריית-הלוג האמיתית מהשרת (השורות מעל). כאן זה בטוח, כי זה קורה *אחרי* ההחלפה.
     try {
       const _diagRaw = new Date();
-      const _diagIL = new Date(_diagRaw.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+      const _diagP = getIsraelParts(_diagRaw);
+      const _diagIL = new Date(_diagP.year, _diagP.month-1, _diagP.day, _diagP.hour, _diagP.minute, _diagP.second);
       const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
     } catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
@@ -1326,9 +1327,9 @@ function connectMQTT() {
   });
   socket.on('all_states', (states) => {
     const now = new Date();
-    const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-    const nowMin = nowIL.getHours() * 60 + nowIL.getMinutes();
-    const dateKey = nowIL.toISOString().slice(0, 10);
+    const _p1 = getIsraelParts(now);
+    const nowMin = _p1.hour * 60 + _p1.minute;
+    const dateKey = `${_p1.year}-${String(_p1.month).padStart(2,'0')}-${String(_p1.day).padStart(2,'0')}`;
     relays.forEach(r => {
       const s = states[r.id];
       if (!s) return;
@@ -1600,11 +1601,24 @@ function getZmanMinutesForDateSM(zmanVal, dayDate){
 // (תאריכי JS שנבנים מקומית בדפדפן, למשל dayDate.setHours(0,0,0,0)) — בלי זה, אם אזור-הזמן המוגדר
 // בדפדפן שונה מ-Asia/Jerusalem (למשל UTC), יש הפרש-שעות קבוע (למשל 3 שעות בקיץ) בין הזמן ה"אמיתי"
 // שהשרת שולח לבין הזמן שנבנה מקומית — זה בדיוק מה שגרם לתגית "מצב חופשה" להופיע בשעה לא נכונה.
+// מחלץ שנה/חודש/יום/שעה/דקה/שנייה לפי זמן ישראל, ברגע נתון — באמצעות formatToParts (מספרים בלבד),
+// לא new Date(string). זה קריטי: פענוח מחרוזות-תאריך לא-ISO (כמו מה שtoLocaleString מפיק) הוא
+// *לא אחיד בין דפדפנים* — זה בדיוק מה שגרם לפער-3-שעות אצל משתמש אחד ולא אצל אחר, על אותו קוד בדיוק.
+function getIsraelParts(date){
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).formatToParts(date);
+  const get = t => parseInt(parts.find(p => p.type === t).value, 10);
+  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour')%24, minute: get('minute'), second: get('second') };
+}
 function toLocalBasisFromServerEpoch(trueEpochMs){
-  return new Date(new Date(trueEpochMs).toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).getTime();
+  const p = getIsraelParts(new Date(trueEpochMs));
+  return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
 }
 function nowInLocalBasis(){
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).getTime();
+  const p = getIsraelParts(new Date());
+  return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
 }
 function computeModeSegments(fromDate, rangeDays){
   const segments = [];
@@ -1700,8 +1714,9 @@ function updateZmanimBarExtras(){
       return;
     }
     _zmanimBarRetryCount = 0;
-    // "עכשיו" מעוגן לזמן ישראל במפורש — ראו הסבר מלא ב-getTlDates
-    const now=new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    // "עכשיו" מעוגן לזמן ישראל במפורש, בלי string round-trip (ראו getIsraelParts להסבר המלא)
+    const _nowParts = getIsraelParts(new Date());
+    const now=new Date(_nowParts.year, _nowParts.month-1, _nowParts.day, _nowParts.hour, _nowParts.minute, _nowParts.second);
     const todayEntry=getCalEntry(now);
     const alotEl=document.getElementById('z-alot');
     if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
@@ -2762,8 +2777,8 @@ function getTlDates(){
   // "היום" מעוגן במפורש לזמן ישראל (לא לאזור-הזמן הגולמי שהדפדפן/מכשיר מוגדר אליו) — כדי שזה יהיה
   // נכון גם אם המכשיר מוגדר לאזור-זמן אחר (למשל UTC). כל שאר החישוב (גם מנוע מקטעי-המצב) בונה על
   // הערך הזה, כך שהכל נשאר עקבי כלפי עצמו וגם נכון כלפי השעון האמיתי בישראל.
-  const today=new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  today.setHours(0,0,0,0);
+  const _todayParts = getIsraelParts(new Date());
+  const today=new Date(_todayParts.year, _todayParts.month-1, _todayParts.day, 0, 0, 0, 0);
   const from=fEl&&fEl.value?new Date(fEl.value):today;
   const to=tEl&&tEl.value?new Date(tEl.value):new Date(today.getTime()+6*86400000);
   const dates=[];
@@ -2918,9 +2933,9 @@ const manualEvents = [];
 
 function addManualEvent(relayId, state, source, durationMin=null) {
   const now = new Date();
-  const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const dateKey = nowIL.toISOString().slice(0,10);
-  const nowMin = nowIL.getHours()*60 + nowIL.getMinutes();
+  const _p2 = getIsraelParts(now);
+  const dateKey = `${_p2.year}-${String(_p2.month).padStart(2,'0')}-${String(_p2.day).padStart(2,'0')}`;
+  const nowMin = _p2.hour*60 + _p2.minute;
 
   if (state) {
     // הפעלה — הוסף אירוע פתוח
@@ -2961,9 +2976,8 @@ function addManualEvent(relayId, state, source, durationMin=null) {
 // בעתיד אותו id מגיע עם dueAt לא-null (כיבוי קבוע שסוגר הדלקה קבועה), מעדכנים את
 // הבלוק הקיים במקום (לפי הפניה לאובייקט, לא לפי אינדקס — שורד גם ניקוי/splice).
 function _ilDateParts(epochMs) {
-  const d = new Date(epochMs);
-  const dIL = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  return { dateKey: dIL.toISOString().slice(0, 10), min: dIL.getHours() * 60 + dIL.getMinutes() };
+  const p = getIsraelParts(new Date(epochMs));
+  return { dateKey: `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`, min: p.hour * 60 + p.minute };
 }
 const _ivrEventRefs = {}; // id → הפניה ישירה לאובייקט ב-manualEvents (לעדכון endMin בעתיד)
 function rebuildIvrManualEvents(events) {
@@ -3325,8 +3339,9 @@ function schedulerTick(){
   // (UI/יומן), לא שליטה אמיתית בממסר — שליטה אמיתית בממסר תמיד עוברת דרך השרת.
   if (socket && socket.connected) return;
   const now = new Date();
-  const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const nowMin = nowIL.getHours()*60 + nowIL.getMinutes() + nowIL.getSeconds()/60;
+  const _p4 = getIsraelParts(now);
+  const nowIL = new Date(_p4.year, _p4.month-1, _p4.day, _p4.hour, _p4.minute, _p4.second);
+  const nowMin = _p4.hour*60 + _p4.minute + _p4.second/60;
   const todayKey = nowIL.toDateString();
   const dow = nowIL.getDay();
   const WINDOW_MIN = 35/60; // חלון סבילות של 35 שניות (מעט יותר מה-tick של 30 שניות)
