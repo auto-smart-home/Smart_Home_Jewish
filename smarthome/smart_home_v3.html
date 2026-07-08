@@ -3219,17 +3219,19 @@ function renderTimeline(){
       }
       */
       const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
-      const modeTagHtml = modeChanged ? `<div style="font-size:9px;color:var(--accent);font-weight:700;margin-top:1px">🔀 ${modeName}</div>` : '';
+      const modeTagHtml = modeChanged ? `<div style="font-size:12px;color:#facc15;font-weight:800;margin-top:2px;letter-spacing:0.2px">🔀 ${modeName}</div>` : '';
+      // רקע צהוב-בהיר — רק על תא-העמודה-הימנית (השעה) של בלוק ששייך למצב אחר, לא על כל השורה
+      const modeTdStyle = modeChanged ? 'background:rgba(250,204,21,0.14);' : '';
       if(!b.hasEvents||b.empty){
         const lbl=b.empty?'כל היום':`${fmtMin(b.startMin)} – ${fmtMin(b.endMin)}`;
-        html+=`<td><div class="tl-time-label" style="opacity:0.5;font-size: 11px">${lbl}</div>${modeTagHtml}</td>`;
+        html+=`<td style="${modeTdStyle}"><div class="tl-time-label" style="opacity:0.5;font-size: 11px">${lbl}</div>${modeTagHtml}</td>`;
         relays.forEach(r=>{
           const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
           const bg=isOn?'background:rgba(52,211,153,0.07);':'';
           html+=`<td style="background:${isOn?'rgba(34,197,94,0.30)':'#2a3142'};${bg}"><div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.6)':'rgba(148,163,184,0.4)'}">${isOn?'●':'·'}</div></td>`;
         });
       } else {
-        html+=`<td><div class="tl-time-label">${fmtMin(b.startMin)}<div class="tl-time-sub">– ${fmtMin(b.endMin)}</div></div>${modeTagHtml}</td>`;
+        html+=`<td style="${modeTdStyle}"><div class="tl-time-label">${fmtMin(b.startMin)}<div class="tl-time-sub">– ${fmtMin(b.endMin)}</div></div>${modeTagHtml}</td>`;
         relays.forEach(r=>{
           // Collect fire/end events for this relay in this block — מחזורים = כמה זוגות לתוכנית אחת
           const fireEvents=[];
