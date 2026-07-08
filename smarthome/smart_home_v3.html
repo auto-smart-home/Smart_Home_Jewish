@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-J (אבחוני-הפיתוח הושבתו/בהערה - כל התיקונים יציבים) -->
+<!-- BUILD_MARKER: v2026-07-08-K (מוסיף: אינדיקטור שלמות-קבצים 4-ספרות בכותרת, 1.1.1.1 = הכל שלם) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -475,6 +475,7 @@
 <div class="topbar">
   <div class="topbar-left">
     <div class="topbar-title">בית <span>חכם</span></div>
+    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:var(--muted);opacity:0.5;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
     <div class="mode-pill">
       <span style="font-size: 12px;color:var(--muted)">מצב:</span>
       <span class="ml" id="active-mode-label">רגיל</span>
@@ -959,6 +960,17 @@ const DAYS_HE   = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 const DAYS_FULL = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
 const ZMAN_LABELS = {sunset:'שקיעה',sunrise:'זריחה',candles:'הדלקת נרות',havdalah:'צאת שבת',chatzot:'חצות',alot_hashachar:'עלות השחר'};
 const LS_KEY = 'smarthome_v2';
+// סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
+// תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
+// מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
+const BUILD_TOP_MARK = 1;
+let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
+let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
+function updateBuildVersionIndicator(){
+  const el = document.getElementById('build-version-indicator');
+  if(!el) return;
+  el.textContent = `${BUILD_TOP_MARK}.${BUILD_BOTTOM_MARK}.${serverBuildTop}.${serverBuildBottom}`;
+}
 // זמנים הלכתיים אמיתיים מהשרת (אירוע zmanim_today) — מוכרז כאן, ממש בתחילת הסקריפט,
 // כי getProgMinutes נקרא כבר בתוך renderAll() ב-INIT, לפני שהיה אפשר להגיע לשורה הזו
 // אם היא מוכרזת מאוחר יותר בקובץ (TDZ — ReferenceError שמקריס את כל שאר הסקריפט,
@@ -1439,6 +1451,12 @@ function connectMQTT() {
   socket.on('pending_mode_revert', (info) => {
     serverPendingRevert = info || null;
     if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+
+  socket.on('server_build_marks', (marks) => {
+    serverBuildTop = marks?.top ?? 0;
+    serverBuildBottom = marks?.bottom ?? 0;
+    updateBuildVersionIndicator();
   });
 
   // ── תזמוני מצב ──
@@ -4369,6 +4387,11 @@ function selectCalendarSm(idx, label, day, month) {
   if (results) results.style.display = 'none';
   renderScheduledModes();
 }
+
+// שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
+// בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
+BUILD_BOTTOM_MARK = 1;
+updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
   <div class="conflict-modal">
