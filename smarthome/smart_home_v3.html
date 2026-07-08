@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-K (מוסיף: אינדיקטור שלמות-קבצים 4-ספרות בכותרת, 1.1.1.1 = הכל שלם) -->
+<!-- BUILD_MARKER: v2026-07-08-L (זריחה/שקיעה עברו מ-hebcal חיצוני לקובץ הלוח המקומי - אין יותר תלות ברשת) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -963,7 +963,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 1;
+const BUILD_TOP_MARK = 2;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -1199,7 +1199,9 @@ function syncLogToServer(entry) {
 // ── INIT ─────────────────────────────────────────────────
 loadLS();
 renderAll();
-loadZmanim();
+// loadZmanim() הוסרה מכאן בכוונה — זריחה/שקיעה עכשיו מגיעות מקובץ הלוח המקומי (updateZmanimBarExtras),
+// לא מ-hebcal (API חיצוני שתלוי בזמינות-רשת שאינה בשליטתנו). הפונקציה עצמה עדיין קיימת בקובץ
+// (למקרה שנרצה בעתיד השוואה/גיבוי), פשוט לא נקראת יותר אוטומטית.
 updateZmanimBarExtras();
 setInterval(updateZmanimBarExtras, 5 * 60 * 1000); // רענון כל 5 דק' — חשוב למי שמשאיר את הדף פתוח לאורך זמן
 updateStickyOffsets();
@@ -1740,6 +1742,14 @@ function updateZmanimBarExtras(){
     const todayEntry=getCalEntry(now);
     const alotEl=document.getElementById('z-alot');
     if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
+    // זריחה/שקיעה — מקובץ הלוח המקומי, לא מ-hebcal (API חיצוני שתלוי בזמינות-רשת ולא בשליטתנו).
+    // אותו עיקרון בדיוק כמו עלות-השחר/הדלקת-נרות — מקור-אמת אחד, בלי תלות ברשת חיצונית.
+    const sunriseEl=document.getElementById('z-sunrise');
+    if(sunriseEl) sunriseEl.textContent = todayEntry?.['נץ החמה'] || '—';
+    const sunsetEl=document.getElementById('z-sunset');
+    if(sunsetEl) sunsetEl.textContent = todayEntry?.['שקיעה'] || '—';
+    const dateEl=document.getElementById('z-date');
+    if(dateEl) dateEl.textContent = now.toLocaleDateString('he-IL');
     const {nextCandles, nextHavdalah} = findNextCandlesAndHavdalah(now);
     const cEl=document.getElementById('z-candles');
     if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
@@ -4390,7 +4400,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 1;
+BUILD_BOTTOM_MARK = 2;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
