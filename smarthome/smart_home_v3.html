@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-M (ציר-הזמן מנותק מ-activeModeId - תמיד תחזית קבועה, לא משתנה במעבר מצב) -->
+<!-- BUILD_MARKER: v2026-07-08-N (תיקון: nowIL לא-מוגדר ב-addManualEvent, שארית משיפוץ-אזור-הזמן) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -963,7 +963,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 3;
+const BUILD_TOP_MARK = 4;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -2999,10 +2999,11 @@ function addManualEvent(relayId, state, source, durationMin=null) {
       }
     });
   }
-  // נקה אירועים ישנים (יותר מ-2 ימים)
-  const cutoff = new Date(nowIL);
-  cutoff.setDate(cutoff.getDate() - 2);
-  const cutoffKey = cutoff.toISOString().slice(0,10);
+  // נקה אירועים ישנים (יותר מ-2 ימים) — cutoff מחושב באותה שיטה עקבית (getIsraelParts), לא new Date(nowIL)
+  // (nowIL לא קיים בפונקציה הזו כלל — זו הייתה שארית ממשתנה שהוסר, וגרמה ל-ReferenceError בכל שימוש)
+  const cutoffDate = new Date(now.getTime() - 2*86400000);
+  const _pCutoff = getIsraelParts(cutoffDate);
+  const cutoffKey = `${_pCutoff.year}-${String(_pCutoff.month).padStart(2,'0')}-${String(_pCutoff.day).padStart(2,'0')}`;
   for (let i = manualEvents.length-1; i >= 0; i--) {
     if (manualEvents[i].date < cutoffKey) manualEvents.splice(i,1);
   }
@@ -4399,7 +4400,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 3;
+BUILD_BOTTOM_MARK = 4;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
