@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-08-F (מוסיף: אבחון מקטעי-מצב גולמיים ביומן) -->
+<!-- BUILD_MARKER: v2026-07-08-G (מוסיף: אבחון-בלוק ממוקד - dayDate מול segments) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -3178,6 +3178,15 @@ function renderTimeline(){
       // המצב האפקטיבי (מדומה) שיהיה פעיל בפועל בזמן הבלוק הזה — לא בהכרח המצב הנוכחי!
       const blockEffMode = modeAtTime(modeSegments, dayDate.getTime()+b.startMin*60000);
       const modeChanged = blockEffMode !== activeModeId;
+      // אבחון ממוקד חד-פעמי — בדיוק בנקודת החיבור בין מקטעי-המצב (שאושרו נכונים) לבין הבלוק המוצג,
+      // כדי לתפוס את הפער המדויק אם יש כזה (למשל פער-שעות בין dayDate.getTime() לבין seg.startMs).
+      if (modeChanged && !window._tlBlockDiagDone) {
+        window._tlBlockDiagDone = true;
+        try {
+          const relevantSegs = modeSegments.filter(s => s.modeId === blockEffMode);
+          addLog('info', `🕵️ אבחון-בלוק: dayDate="${dayDate.toString()}" (getTime=${dayDate.getTime()}) | b.startMin=${b.startMin} | blockEffMode=${blockEffMode} | dayDate+startMin="${new Date(dayDate.getTime()+b.startMin*60000).toString()}" | מקטעים-תואמים=${relevantSegs.map(s=>`[${new Date(s.startMs).toString()} - ${new Date(s.endMs).toString()}]`).join(', ')}`);
+        } catch(e) { addLog('danger', `❌ שגיאה באבחון-בלוק: ${e.message}`); }
+      }
       const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
       const modeTagHtml = modeChanged ? `<div style="font-size:9px;color:var(--accent);font-weight:700;margin-top:1px">🔀 ${modeName}</div>` : '';
       if(!b.hasEvents||b.empty){
