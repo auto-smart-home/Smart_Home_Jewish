@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-09-D (תיקון: עמעום-כרטיס-תוכנית התבסס גם על תאריך-עתידי, לא רק מצב; אינדיקטור-גרסה בצהוב) -->
+<!-- BUILD_MARKER: v2026-07-09-E (תיקון קריטי: TDZ נוסף - HEB_DAY_MAP הוכרז מאוחר מדי, קרס את כל הכניסה למערכת) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -965,7 +965,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 8;
+const BUILD_TOP_MARK = 9;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -984,6 +984,15 @@ let serverPendingRevert = null;
 // אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
 // זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
 const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
+// מיפוי יום-בחודש-העברי (המחרוזת שמופיעה בתחילת שדה "תאריך עברי") למספר 1-30 — אומת מול קובץ
+// הלוח המלא (36,524 רשומות, 100 שנה) בלי שגיאה אחת. נדרש לזיהוי "ראש חודש" (יום א או ל בחודש).
+// מוכרז כאן, לפני ה-INIT, כי renderAll()←renderRelays()←relayCardHtml()←isProgEffective() יכולה
+// להגיע לתוכנית עם calType מוגדר כבר בטעינת-העמוד הראשונה — בדיוק כמו כל שאר מקרי ה-TDZ בפרויקט הזה.
+const HEB_DAY_MAP = {
+  "א'":1, "ב'":2, "ג'":3, "ד'":4, "ה'":5, "ו'":6, "ז'":7, "ח'":8, "ט'":9, "י'":10,
+  'י"א':11, 'י"ב':12, 'י"ג':13, 'י"ד':14, 'ט"ו':15, 'ט"ז':16, 'י"ז':17, 'י"ח':18, 'י"ט':19, "כ'":20,
+  'כ"א':21, 'כ"ב':22, 'כ"ג':23, 'כ"ד':24, 'כ"ה':25, 'כ"ו':26, 'כ"ז':27, 'כ"ח':28, 'כ"ט':29, "ל'":30
+};
 // אינדקס-חיפוש של קובץ הלוח (calendar_data.js) — נבנה פעם אחת, בשימוש ב-getCalEntry. גם הוא חייב
 // להיות מוכרז כאן, לפני ה-INIT, מאותה סיבה בדיוק (updateZmanimBarExtras קוראת ל-getCalEntry ב-INIT).
 let _calIndexCache = null;
@@ -3947,13 +3956,6 @@ function getCalEntryAnnual(dd, mm) {
 }
 
 // Check if today matches a program's calendar filter
-// מיפוי יום-בחודש-העברי (המחרוזת שמופיעה בתחילת שדה "תאריך עברי") למספר 1-30 — אומת מול קובץ
-// הלוח המלא (36,524 רשומות, 100 שנה) בלי שגיאה אחת. נדרש לזיהוי "ראש חודש" (יום א או ל בחודש).
-const HEB_DAY_MAP = {
-  "א'":1, "ב'":2, "ג'":3, "ד'":4, "ה'":5, "ו'":6, "ז'":7, "ח'":8, "ט'":9, "י'":10,
-  'י"א':11, 'י"ב':12, 'י"ג':13, 'י"ד':14, 'ט"ו':15, 'ט"ז':16, 'י"ז':17, 'י"ח':18, 'י"ט':19, "כ'":20,
-  'כ"א':21, 'כ"ב':22, 'כ"ג':23, 'כ"ד':24, 'כ"ה':25, 'כ"ו':26, 'כ"ז':27, 'כ"ח':28, 'כ"ט':29, "ל'":30
-};
 function getHebrewDayNumber(entry){
   if(!entry || !entry['תאריך עברי']) return null;
   const dayPart = entry['תאריך עברי'].split(' ')[0];
@@ -4459,7 +4461,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 8;
+BUILD_BOTTOM_MARK = 9;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
