@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 3;
+const IDX_TOP_MARK = 4;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -678,6 +678,28 @@ io.on('connection', (socket) => {
     } catch(err) { console.error('❌', err.message); }
   });
 
+  // טיימר-ידני מהיר (כפתור "⏱ טיימר" בטאב ממסרים) — רץ **בשרת**, לא ב-setTimeout של הדפדפן.
+  // בלי זה, סגירת/רענון הדפדפן, או המחשב/טלפון שנרדם, היה מוחק את הכיבוי-המתוזמן לצמיתות
+  // והממסר היה נשאר דלוק ללא הגבלה. משתמש באותו מנגנון בדיוק כמו טיימרי-IVR (ivrPendingTimers),
+  // ששורד גם Stop→Start של ה-Add-on עצמו (נשמר ל-config.json).
+  socket.on('quick_timer', async ({ relayId, minutes, userName }) => {
+    const relayName = schedulerRelayNames[relayId] || `ממסר ${relayId}`;
+    const m = parseInt(minutes, 10);
+    if (!relayId || isNaN(m) || m <= 0) return;
+    try {
+      await publishRelay(relayId, 'ON', 'טיימר ידני');
+      const timerId = `manual_${Date.now()}_${Math.round(Math.random()*1e6)}`;
+      const startedAt = Date.now(), dueAt = startedAt + m * 60000;
+      ivrPendingTimers.push({ id: timerId, relayId, revertAction: 'OFF', startedAt, dueAt, label: `${relayName} (טיימר ידני)`, callerId: null });
+      ivrTodayEvents.push({ id: timerId, relayId, callerId: null, startedAt, dueAt, dateKey: new Date(startedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) });
+      saveConfigLocal();
+      io.emit('ivr_today_events', ivrTodayEvents);
+      addServerLog({ type: 'info', msg: `⏱️ טיימר ידני: ${relayName} → ON, יחזור אוטומטית בעוד ${m} דקות`, user: userName || 'משתמש' });
+    } catch (err) {
+      addServerLog({ type: 'danger', msg: `❌ טיימר ידני נכשל: ${relayName} — ${err.message}`, user: 'שרת' });
+    }
+  });
+
   // ── HA התקנים ──
   // שמירת הגדרות HA (token + URL)
   socket.on('save_ha_settings', async ({ token, url }) => {
@@ -937,6 +959,18 @@ io.on('connection', (socket) => {
 // לא רק ביום הראשון) — ולכן מספיק לבדוק את היום עצמו + מחר, בלי טיפול מיוחד לחג דו-יומי.
 // 'חול המועד פסח/סוכות' אינם ברשימה בכוונה (אסור-מלאכה לא חל עליהם).
 const ASSUR_MELACHA_HOLIDAYS = new Set(['פסח', 'פסח (שביעי)', 'שבועות', 'ראש השנה', 'יום כיפור', 'סוכות', 'שמחת תורה']);
+// מיפוי יום-בחודש-העברי למספר 1-30 — אומת מול קובץ הלוח המלא (36,524 רשומות) בלי שגיאה אחת.
+// נדרש לזיהוי "ראש חודש" (calType: rosh_chodesh_aleph/rosh_chodesh_lamed).
+const HEB_DAY_MAP = {
+  "א'":1, "ב'":2, "ג'":3, "ד'":4, "ה'":5, "ו'":6, "ז'":7, "ח'":8, "ט'":9, "י'":10,
+  'י"א':11, 'י"ב':12, 'י"ג':13, 'י"ד':14, 'ט"ו':15, 'ט"ז':16, 'י"ז':17, 'י"ח':18, 'י"ט':19, "כ'":20,
+  'כ"א':21, 'כ"ב':22, 'כ"ג':23, 'כ"ד':24, 'כ"ה':25, 'כ"ו':26, 'כ"ז':27, 'כ"ח':28, 'כ"ט':29, "ל'":30
+};
+function getHebrewDayNumber(entry){
+  if(!entry || !entry['תאריך עברי']) return null;
+  const dayPart = entry['תאריך עברי'].split(' ')[0];
+  return HEB_DAY_MAP[dayPart] ?? null;
+}
 function isAssurMelachaEntry(entry) {
   if (!entry) return false;
   if (entry['יום'] === 'שבת') return true;
@@ -1049,6 +1083,14 @@ function computeTodayEvents(nowIL,zmanim,dow,todayKey){
       const dd=nowIL.getDate(),mm=nowIL.getMonth()+1,yyyy=nowIL.getFullYear();
       if(p.calType==='annual'){if(dd!==p.calDay||mm!==p.calMonth)continue;}
       else if(p.calType==='once'){if(dd!==p.calDay||mm!==p.calMonth||yyyy!==p.calYear)continue;}
+      else if(p.calType==='rosh_chodesh_aleph'){
+        const entry=_calendarIndex[`${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy}`];
+        if(getHebrewDayNumber(entry)!==1) continue;
+      }
+      else if(p.calType==='rosh_chodesh_lamed'){
+        const entry=_calendarIndex[`${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy}`];
+        if(getHebrewDayNumber(entry)!==30) continue;
+      }
     }
     const baseMin=getProgMinutes(p,zmanim);
     if(baseMin<0) continue;
@@ -1358,6 +1400,10 @@ function processScheduledModes() {
           if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
         } else if (sm.calType === 'once') {
           if (calDate !== sm.calLabel || yyyy !== sm.calYear) continue;
+        } else if (sm.calType === 'rosh_chodesh_aleph') {
+          if (getHebrewDayNumber(entry) !== 1) continue;
+        } else if (sm.calType === 'rosh_chodesh_lamed') {
+          if (getHebrewDayNumber(entry) !== 30) continue;
         }
       }
 
@@ -1504,4 +1550,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 3;
+const IDX_BOTTOM_MARK = 4;
