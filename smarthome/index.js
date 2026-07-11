@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 4;
+const IDX_TOP_MARK = 5;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1206,24 +1206,32 @@ async function schedulerTick(){
     if(event.segType==='child'&&event.requireAck) checkAckAndFireChild(event,todayKey);
     else fireEvent(event,todayKey);
   }
-  // אירועי סיום שחצו חצות
+  // אירועים שחצו חצות מאתמול — כולל **גם** מחזורים רגילים (ON/OFF של cycleOn), לא רק את
+  // הכיבוי-הסופי-לפי-משך (isEndEvent). התיקון הקודם כאן טיפל רק ב-isEndEvent, ולכן תוכנית-מחזור
+  // שהמשכה חוצה חצות (למשל 21:59+8.5שע) הייתה "קופאת" בדיוק בחצות ולעולם לא חוזרת לפעול —
+  // כל מחזור-ON שהיה אמור לירות אחרי חצות פשוט לא נבדק בכלל, כי הוא לא isEndEvent.
   if(nowSec<7200){
     const yIL=new Date(nowIL);yIL.setDate(yIL.getDate()-1);
     const yKey=yIL.toDateString(),yDow=yIL.getDay(),yZman=getZmanim(yIL);
     const yEvts=computeTodayEvents(yIL,yZman,yDow,yKey);
     for(const event of yEvts){
-      if(!event.isEndEvent||event.fireSec<=86400) continue;
+      if(event.fireSec<=86400) continue; // רק אירועים שבאמת חוצים לתוך היום החדש
       const adj=event.fireSec-86400;
       if(adj>nowSec||adj<nowSec-WINDOW_SEC) continue;
-      const fireKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_end_${yKey}`;
+      const fireKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_${event.isEndEvent?'end':'start'}_${yKey}`;
       if(_firedToday.has(fireKey)) continue;
-      _firedToday.add(fireKey);
-      if(event.startFireSec!==undefined){
+      if(event.isEndEvent&&event.startFireSec!==undefined){
         const startKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.startFireSec}_start_${yKey}`;
         if(!_actuallyFired.has(startKey)) continue;
       }
-      fireEvent(event,yKey);
-      if(event.runOnceCleanup) _firedRunOnceToday.delete(event.progId);
+      if(event.action==='OFF'){
+        const heldByOther=checkRelayOwnerBlock(event,nowSec);
+        if(heldByOther){_firedToday.add(fireKey);addServerLog({type:'info',msg:`[תזמון] "${event.name}" — כיבוי בוטל, ממסר ${event.relayId} בשליטת "${heldByOther.blockedBy}"`,user:'מערכת'});continue;}
+      }
+      _firedToday.add(fireKey);
+      if(event.isEndEvent){fireEvent(event,yKey);if(event.runOnceCleanup)_firedRunOnceToday.delete(event.progId);continue;}
+      if(event.segType==='child'&&event.requireAck) checkAckAndFireChild(event,yKey);
+      else fireEvent(event,yKey);
     }
   }
 }
@@ -1550,4 +1558,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 4;
+const IDX_BOTTOM_MARK = 5;
