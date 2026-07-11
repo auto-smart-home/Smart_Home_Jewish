@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-09-H (מוסיף: מנגנון דריסת-זמן לסימולציה/בדיקות - _DEBUG_NOW_OVERRIDE) -->
+<!-- BUILD_MARKER: v2026-07-09-I (תיקון: דריסת-זמן התעלמה משדה-תאריך ישן שכבר מולא לפני הגדרת הדריסה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -966,7 +966,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 12;
+const BUILD_TOP_MARK = 13;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -989,7 +989,7 @@ const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','�
 // לבדיקה: מה יראה ציר-הזמן/המערכת אם "עכשיו" היה רגע אחר (למשל כדי לדמות חציית-חצות,
 // או תזמון-מצב עתידי) — בלי לחכות בפועל לזמן האמיתי. השאירו null בשימוש רגיל!
 // לשימוש: הסירו את ההערה מהשורה הבאה וקבעו תאריך/שעה רצויים (שנה, חודש-1, יום, שעה, דקה):
-const _DEBUG_NOW_OVERRIDE = new Date(2026, 6, 10, 23, 5, 7).getTime(); // דוגמה: שבת 01:00
+const _DEBUG_NOW_OVERRIDE = new Date(2026, 6, 10, 23, 5, 6).getTime(); // דוגמה: שבת 01:00
 // const _DEBUG_NOW_OVERRIDE = null;
 function getNowMs(){ return _DEBUG_NOW_OVERRIDE ?? Date.now(); }
 // מיפוי יום-בחודש-העברי (המחרוזת שמופיעה בתחילת שדה "תאריך עברי") למספר 1-30 — אומת מול קובץ
@@ -2888,8 +2888,10 @@ function getTlDates(){
     const [y,m,d] = val.split('-').map(Number);
     return new Date(y, m-1, d, 0, 0, 0, 0);
   };
-  const from=fEl&&fEl.value?parseDateInput(fEl.value):today;
-  const to=tEl&&tEl.value?parseDateInput(tEl.value):new Date(today.getTime()+6*86400000);
+  // כשדריסת-זמן פעילה (_DEBUG_NOW_OVERRIDE), מתעלמים מערך-שדה קיים (שיכול "להיתקע" מביקור קודם,
+  // לפני שהדריסה הוגדרה) — הדריסה אמורה תמיד לקבוע את "היום", לא להיות תלויה במצב-שדה ישן.
+  const from=(fEl&&fEl.value&&_DEBUG_NOW_OVERRIDE===null)?parseDateInput(fEl.value):today;
+  const to=(tEl&&tEl.value&&_DEBUG_NOW_OVERRIDE===null)?parseDateInput(tEl.value):new Date(today.getTime()+6*86400000);
   const dates=[];
   for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1))dates.push(new Date(d));
   return dates;
@@ -4521,7 +4523,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 12;
+BUILD_BOTTOM_MARK = 13;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
