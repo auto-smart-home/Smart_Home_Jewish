@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 6;
+const IDX_TOP_MARK = 7;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -936,6 +936,16 @@ io.on('connection', (socket) => {
   socket.on('log_entry', (entry) => { addServerLog(entry); });
 
   // ── תזמוני מצב ──
+  // ── סימולציית-תזמון (בדיקה, לא נוגעת במצב אמיתי) ──
+  socket.on('simulate_schedule', ({ fromDateStr, toDateStr, simModeId } = {}) => {
+    try {
+      const report = simulateScheduleRange(fromDateStr, toDateStr, simModeId);
+      socket.emit('simulate_schedule_result', { ok: true, events: report });
+    } catch(e) {
+      socket.emit('simulate_schedule_result', { ok: false, error: e.message });
+    }
+  });
+
   socket.on('get_scheduled_modes', () => {
     socket.emit('scheduled_modes', scheduledModes);
   });
@@ -1150,6 +1160,102 @@ function checkRelayOwnerBlock(event,nowSec){
   if(owner.endSec===null) return false;
   if(owner.endSec>event.fireSec) return{blockedBy:owner.name};
   return false;
+}
+
+// גרסה מבודדת לסימולציה — אותה לוגיקה בדיוק כמו checkRelayOwnerBlock, אבל על מפת-בעלות מבודדת
+// (לא נוגעת ב-relayOwner האמיתי), כדי שהסימולציה לא תשפיע על המצב האמיתי בשום צורה.
+function checkRelayOwnerBlockSim(simOwner,event,nowSec){
+  const owner=simOwner[event.relayId];
+  if(!owner) return false;
+  if(owner.progId===event.progId) return false;
+  if(owner.endSec!==null&&owner.endSec<=nowSec){delete simOwner[event.relayId];return false;}
+  if(event.isPriority) return false;
+  if(owner.priority){if(owner.endSec===null)return false;return{blockedBy:owner.name};}
+  if(owner.endSec===null) return false;
+  if(owner.endSec>event.fireSec) return{blockedBy:owner.name};
+  return false;
+}
+
+// ═══ סימולציית-תזמון לצורך בדיקה ═══════════════════════════════════════════════
+// מריצה "יבש" (בלי לשלוח שום פקודה אמיתית, בלי לגעת במצב-האמת) את כל התוכניות הפעילות
+// על פני טווח-תאריכים נבחר — כולל מחזורים, תוכניות-בת, אירועים-חוצי-חצות, וחסימות-בעלות-ממסר —
+// ומחזירה רשימה כרונולוגית של "מה היה קורה ומתי". בדיוק הכלי שהיה חסר לנו כדי לבדוק חציית-חצות
+// ומחזורים בלי לחכות לזמן האמיתי.
+function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
+  const [fy,fm,fd] = fromDateStr.split('-').map(Number);
+  const [ty,tm,td] = toDateStr.split('-').map(Number);
+  const fromDate = new Date(fy, fm-1, fd, 0,0,0,0);
+  const toDateExclusive = new Date(ty, tm-1, td+1, 0,0,0,0); // עד סוף היום האחרון (לא כולל)
+  if (isNaN(fromDate.getTime())||isNaN(toDateExclusive.getTime())) throw new Error('תאריך לא תקין');
+  if (toDateExclusive <= fromDate) throw new Error('טווח לא תקין ("עד" לפני "מ")');
+  const rangeSec = (toDateExclusive.getTime() - fromDate.getTime())/1000;
+  if (rangeSec > 32*86400) throw new Error('טווח ארוך מדי (מקסימום 31 ימים)');
+  const rangeDays = Math.ceil(rangeSec/86400);
+
+  // מדמים activeModeId שונה (אופציונלי) בלי לגעת בערך האמיתי בזמן החישוב
+  const savedMode = schedulerActiveModeId;
+  if (simModeId !== undefined && simModeId !== null) schedulerActiveModeId = simModeId;
+
+  const allEvents = [];
+  try {
+    // סורקים גם יום אחד לפני הטווח, כדי לתפוס אירועים-חוצי-חצות שנכנסים לתוך הטווח
+    for (let d = -1; d <= rangeDays; d++) {
+      const scanDate = new Date(fromDate.getTime() + d*86400000);
+      const dow = scanDate.getDay();
+      const dateKey = scanDate.toDateString();
+      const zmanim = getZmanim(scanDate);
+      const events = computeTodayEvents(scanDate, zmanim, dow, dateKey);
+      events.forEach(ev => {
+        const secSinceStart = d*86400 + ev.fireSec;
+        if (secSinceStart < 0 || secSinceStart >= rangeSec) return;
+        const endSecSinceStart = ev.endSec !== null ? d*86400 + ev.endSec : null;
+        allEvents.push({ ...ev, secSinceStart, endSecSinceStart, sourceDayKey: dateKey, scanDate: new Date(scanDate) });
+      });
+    }
+  } finally {
+    schedulerActiveModeId = savedMode; // תמיד משחזרים, גם אם קרתה שגיאה
+  }
+  allEvents.sort((a,b) => a.secSinceStart - b.secSinceStart);
+
+  const simOwner = {};
+  const report = [];
+  const seenKeys = new Set();
+  const HEB_DOW = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+  // בונים את מחרוזת-התצוגה ישירות מהמספרים המוכרים כבר (יום, שעה, דקה, שנייה) — בלי לעבור דרך
+  // new Date(epoch).toLocaleString(...) עם timeZone, כי זה מניח בטעות שה-epoch כבר "לא-מתוקן" (כלומר
+  // בנוי לפי אזור-הזמן של מכונת-השרת עצמה, לא בהכרח ישראל) ומתקן אותו פעם נוספת — הזזה כפולה בדיוק
+  // כמו הבאג שכבר תפסנו בצד-הלקוח. scanDate (הבנוי מ-y,m-1,d מספריים) כבר "נכון" בעצמו לכל מטרה כאן.
+  const fmtTime = (dayDate, secWithinDay) => {
+    const h = Math.floor(secWithinDay/3600), mi = Math.floor((secWithinDay%3600)/60), s = Math.floor(secWithinDay%60);
+    const dow = HEB_DOW[dayDate.getDay()];
+    const dd = String(dayDate.getDate()).padStart(2,'0'), mm = String(dayDate.getMonth()+1).padStart(2,'0');
+    return `${dow}, ${dd}.${mm}, ${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+
+  for (const ev of allEvents) {
+    const key = `${ev.progId}_${ev.relayId}_${ev.segType}_${ev.cycleIdx??'x'}_${ev.fireSec}_${ev.isEndEvent?'end':'start'}_${ev.sourceDayKey}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const relayName = schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`;
+    const simEvent = { relayId: ev.relayId, progId: ev.progId, isPriority: !!ev.isPriority, fireSec: ev.secSinceStart, endSec: ev.endSecSinceStart };
+    let note = ev.isEndEvent ? 'סיום-לפי-משך' : ev.segType==='child' ? 'תוכנית-בת' : (ev.segType==='on'||ev.segType==='off') ? `מחזור #${ev.cycleIdx}` : '';
+    const _dayAdvance = Math.floor(ev.fireSec/86400);
+    const _dispDate = _dayAdvance>0 ? new Date(ev.scanDate.getTime()+_dayAdvance*86400000) : ev.scanDate;
+    const _secWithinDay = ev.fireSec - _dayAdvance*86400;
+    if (ev.action === 'OFF') {
+      const blocked = checkRelayOwnerBlockSim(simOwner, simEvent, ev.secSinceStart);
+      if (blocked) {
+        report.push({ time: fmtTime(_dispDate,_secWithinDay), prog: ev.name, relay: relayName, action: 'OFF', blocked: true, note: `בוטל — ממסר בשליטת "${blocked.blockedBy}"` });
+        continue;
+      }
+      if (simOwner[ev.relayId]) delete simOwner[ev.relayId];
+    }
+    report.push({ time: fmtTime(_dispDate,_secWithinDay), prog: ev.name, relay: relayName, action: ev.action, blocked: false, note });
+    if (ev.action === 'ON') {
+      simOwner[ev.relayId] = { progId: ev.progId, name: ev.name, priority: !!ev.isPriority, endSec: ev.endSecSinceStart };
+    }
+  }
+  return report;
 }
 
 function fireEvent(event,todayKey){
@@ -1568,4 +1674,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 6;
+const IDX_BOTTOM_MARK = 7;
