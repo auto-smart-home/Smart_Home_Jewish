@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-09-E (תיקון קריטי: TDZ נוסף - HEB_DAY_MAP הוכרז מאוחר מדי, קרס את כל הכניסה למערכת) -->
+<!-- BUILD_MARKER: v2026-07-09-H (מוסיף: מנגנון דריסת-זמן לסימולציה/בדיקות - _DEBUG_NOW_OVERRIDE) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -553,6 +553,7 @@
         <button class="icon-btn" onclick="toggleSelectMode()" id="select-mode-btn">☑ בחירה מרובה</button>
         <button class="icon-btn" onclick="exportJSON()">📤 ייצוא JSON</button>
         <label class="icon-btn" style="cursor:pointer">📥 ייבוא JSON<input id="import-file-input" type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
+        <button class="icon-btn" onclick="renumberSeqIds()" title="מתקן מספרי-תוכנית (#) כפולים שנוצרו משכפול ישן — לא משפיע על שום דבר מלבד המספור המוצג">🔧 תיקון מספור כפול</button>
       </div>
     </div>
     <div class="bulk-bar" id="bulk-bar">
@@ -965,7 +966,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 9;
+const BUILD_TOP_MARK = 12;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -984,6 +985,13 @@ let serverPendingRevert = null;
 // אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
 // זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
 const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
+// ═══ דריסת-זמן לצורך סימולציה/בדיקה ═══════════════════════════════════════════
+// לבדיקה: מה יראה ציר-הזמן/המערכת אם "עכשיו" היה רגע אחר (למשל כדי לדמות חציית-חצות,
+// או תזמון-מצב עתידי) — בלי לחכות בפועל לזמן האמיתי. השאירו null בשימוש רגיל!
+// לשימוש: הסירו את ההערה מהשורה הבאה וקבעו תאריך/שעה רצויים (שנה, חודש-1, יום, שעה, דקה):
+// const _DEBUG_NOW_OVERRIDE = new Date(2026, 6, 11, 1, 0, 0).getTime(); // דוגמה: שבת 01:00
+const _DEBUG_NOW_OVERRIDE = null;
+function getNowMs(){ return _DEBUG_NOW_OVERRIDE ?? Date.now(); }
 // מיפוי יום-בחודש-העברי (המחרוזת שמופיעה בתחילת שדה "תאריך עברי") למספר 1-30 — אומת מול קובץ
 // הלוח המלא (36,524 רשומות, 100 שנה) בלי שגיאה אחת. נדרש לזיהוי "ראש חודש" (יום א או ל בחודש).
 // מוכרז כאן, לפני ה-INIT, כי renderAll()←renderRelays()←relayCardHtml()←isProgEffective() יכולה
@@ -1657,7 +1665,7 @@ function toLocalBasisFromServerEpoch(trueEpochMs){
   return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
 }
 function nowInLocalBasis(){
-  const p = getIsraelParts(new Date());
+  const p = getIsraelParts(new Date(getNowMs()));
   return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
 }
 function computeModeSegments(fromDate, rangeDays){
@@ -2276,6 +2284,21 @@ function scrollToProg(seqId){
     setTimeout(()=>el.style.boxShadow='',2200);
   }
 }
+// תיקון seqId-ים כפולים שנוצרו ע"י שכפול-תוכניות בגרסה ישנה (לפני התיקון בשורה למעלה) — ממספר מחדש
+// ברצף (1,2,3...) לפי הסדר הנוכחי, בלי לגעת ב-id/relay/כל שדה אחר, ומוודא ש-nextProgId יהיה מעל כולם.
+function renumberSeqIds() {
+  const counts = {};
+  programs.forEach(p => { counts[p.seqId] = (counts[p.seqId]||0)+1; });
+  const dupSeqIds = Object.entries(counts).filter(([,v])=>v>1).map(([k])=>k);
+  if (!dupSeqIds.length) { toast('לא נמצאו מספרים כפולים — הכל תקין'); return; }
+  if (!confirm(`נמצאו ${dupSeqIds.length} מספרי-תוכנית כפולים (#${dupSeqIds.join(', #')}). למספר הכל מחדש ברצף? זה משנה רק את המספר המוצג (#), לא משפיע על שום הגדרה אחרת.`)) return;
+  const sorted = [...programs].sort((a,b)=>(a.seqId-b.seqId)||(a.id-b.id));
+  sorted.forEach((p,i)=>{ p.seqId = i+1; });
+  nextProgId = programs.length + 1;
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ מוספרו מחדש ${programs.length} תוכניות, בלי מספרים כפולים`);
+}
 function duplicateProg(id) {
   const orig = programs.find(p => p.id === id);
   if (!orig) return;
@@ -2284,7 +2307,10 @@ function duplicateProg(id) {
   // creation). לא nextProgId — זה מונה קטן (מתחיל מ-5) שעלול "להתנגש" עם ID גדול וקיים כבר במערכת
   // (למשל מתוכנית מיובאת), וליצור בטעות שתי רשומות עם אותו מזהה בדיוק — שאז נראות "כאותה תוכנית".
   newProg.id = Date.now();
-  newProg.seqId = programs.length ? Math.max(...programs.map(p => p.seqId || 0)) + 1 : 1;
+  // seqId: nextProgId++ — **אותו מונה בדיוק** כמו כל שאר נתיבי-יצירת-seqId (תוכנית-בת, תוכנית רגילה).
+  // לא Math.max(seqIds)+1 (כפי שהיה כאן קודם) — שתי שיטות-מספור שונות לאותו שדה יכולות "להתנגש"
+  // זו בזו בדיוק כמו שקרה קודם עם ה-id (ראו סעיף 24 בסיכום) — זו הסיבה שנוצרו seqId כפולים בפועל.
+  newProg.seqId = nextProgId++;
   newProg.name = orig.name + ' (עותק)';
   newProg.active = false;
   programs.push(newProg);
@@ -2853,7 +2879,7 @@ function getTlDates(){
   // "היום" מעוגן במפורש לזמן ישראל (לא לאזור-הזמן הגולמי שהדפדפן/מכשיר מוגדר אליו) — כדי שזה יהיה
   // נכון גם אם המכשיר מוגדר לאזור-זמן אחר (למשל UTC). כל שאר החישוב (גם מנוע מקטעי-המצב) בונה על
   // הערך הזה, כך שהכל נשאר עקבי כלפי עצמו וגם נכון כלפי השעון האמיתי בישראל.
-  const _todayParts = getIsraelParts(new Date());
+  const _todayParts = getIsraelParts(new Date(getNowMs()));
   const today=new Date(_todayParts.year, _todayParts.month-1, _todayParts.day, 0, 0, 0, 0);
   // קריטי: לא new Date(fEl.value)! מחרוזת "YYYY-MM-DD" (בלי שעה) תמיד מתפרשת כ-UTC ע"י JS, בכל
   // דפדפן, ללא יוצא מן הכלל — גם אם המחרוזת עצמה כבר נכונה. מפרקים אותה ידנית ובונים עם הקונסטרוקטור
@@ -2936,6 +2962,23 @@ function getTimeBlocksForDate(date, daySegments){
   const dateKey=ilDateKey(date);
   const dayManual=manualEvents.filter(e=>e.date===dateKey); // ← אירועים ידניים/IVR של היום הזה
 
+  // תוכניות-מאתמול שחוצות לתוך היום הזה (למשל 23:45 שישי + 7 שעות = 06:45 שבת) — בלי זה, יום שאין
+  // בו שום תוכנית-משלו נופל ל"ריק כל היום", ומצב-הרקע (getRelayStateAtTime, שכן יודע לחזור אחורה
+  // ולזהות שהממסר עדיין דלוק) נבדק רק פעם אחת בחצות — ומוצג "דולק" שגוי לכל היום, גם אחרי שכבר כבה.
+  const yesterday = new Date(date.getTime() - 86400000);
+  const carriedOverEnds = []; // { p, rId, endMin (מותאם ליום הנוכחי, 0-1440) }
+  programs.filter(p=>p.active && progAppliesOnDate(p,yesterday)).forEach(p=>{
+    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+    if(!modeIds.some(mid=>relevantModes.has(mid))) return;
+    p.relay.forEach(rId=>{
+      getRelayEventPairs(p,rId).forEach(seg=>{
+        if(seg.endMin!==null && seg.endMin>1440){
+          carriedOverEnds.push({p, rId, endMin: seg.endMin-1440});
+        }
+      });
+    });
+  });
+
   // גבולות ממעברי-מצב עצמם בתוך היום הזה — גם אם אין שום תוכנית בדיוק באותו רגע
   const modeTransitionMins=[];
   if(daySegments && daySegments.length){
@@ -2947,10 +2990,14 @@ function getTimeBlocksForDate(date, daySegments){
     });
   }
 
-  if(!dayProgs.length && !dayManual.length && !modeTransitionMins.length)return [{startMin:0,endMin:1440,hasEvents:false,empty:true}];
+  if(!dayProgs.length && !dayManual.length && !modeTransitionMins.length && !carriedOverEnds.length)return [{startMin:0,endMin:1440,hasEvents:false,empty:true}];
 
   // אסוף את כל נקודות האירוע — הדלקה וכיבוי בלבד (ללא padding)
   const mins=new Set([0,1440,...modeTransitionMins]);
+  carriedOverEnds.forEach(cp=>{
+    const em=Math.ceil(cp.endMin);
+    if(em>=0&&em<=1440) mins.add(em);
+  });
   dayProgs.forEach(p=>{
     p.relay.forEach((rId)=>{
       getRelayEventPairs(p,rId).forEach(seg=>{
@@ -2994,7 +3041,12 @@ function getTimeBlocksForDate(date, daySegments){
     // בלוק שנפתח רק בגלל מעבר-מצב (בלי תוכנית/אירוע ממש בטווח שלו) — עדיין נחשב "hasEvents", אחרת
     // הוא יתמזג לבלוק-ריק שכן ולא יקבל את תגית-המצב בתצוגה.
     const hasModeTransition = modeTransitionMins.includes(s);
-    raw.push({startMin:s,endMin:e,hasEvents:hasProg||hasManual||hasModeTransition});
+    // ← הוספה: בלוק שמכיל את רגע-הכיבוי של תוכנית-שחוצה-מאתמול נחשב "hasEvents" גם בלי תוכנית-משלו
+    const hasCarriedOver = carriedOverEnds.some(cp=>{
+      const em=Math.ceil(cp.endMin);
+      return em>=s && em<e;
+    });
+    raw.push({startMin:s,endMin:e,hasEvents:hasProg||hasManual||hasModeTransition||hasCarriedOver});
   }
 
   // מיזוג בלוקים ריקים רצופים לבלוק אחד
@@ -3005,6 +3057,7 @@ function getTimeBlocksForDate(date, daySegments){
       last.endMin=b.endMin;
     else merged.push({...b});
   });
+  merged.carriedOverEnds = carriedOverEnds;
   return merged;
 }
 // Cache of relay state events per relay per date — built once per renderTimeline call
@@ -3327,6 +3380,13 @@ function renderTimeline(){
                 endEvents.push({p, seg});
               }
             });
+          });
+          // תוכניות שחוצות-מאתמול (למשל 23:45+7שע=06:45 למחר) — הקצה-שלהן מוצג כאן, בבלוק הנכון,
+          // גם שהתוכנית עצמה "שייכת" רשמית לאתמול ולא ל-progAppliesOnDate(p,dayDate) של היום הזה.
+          (blocks.carriedOverEnds||[]).forEach(cp=>{
+            if(cp.rId!==r.id) return;
+            const em=Math.ceil(cp.endMin);
+            if(em>=b.startMin && em<b.endMin) endEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null}, _carriedOver:true});
           });
           // תוכניות runOnce שפעלו היום — הצג בצבע מיוחד
           const todayStr = dayDate.toDateString();
@@ -4461,7 +4521,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 9;
+BUILD_BOTTOM_MARK = 12;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
