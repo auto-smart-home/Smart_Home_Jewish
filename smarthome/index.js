@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 5;
+const IDX_TOP_MARK = 6;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1179,7 +1179,13 @@ async function schedulerTick(){
   const todayKey=nowIL.toDateString();
   const dow=nowIL.getDay();
   _firedToday.forEach(k=>{if(!k.endsWith(todayKey))_firedToday.delete(k);});
-  if(nowSec>=7200)_actuallyFired.forEach(k=>{if(!k.endsWith(todayKey))_actuallyFired.delete(k);});
+  // תיקון קריטי: לא למחוק _actuallyFired ברגע ש-02:00 עבר! תוכנית שה"התחלה" שלה הייתה אתמול, אבל
+  // ה"סיום-לפי-משך" שלה חוצה הרבה יותר מ-2 שעות לתוך היום הבא (למשל 22:59+8.5שע=07:29 למחרת) —
+  // הייתה "שוכחת" שהיא בכלל התחילה, ברגע שהשעון עבר 02:00, ולעולם לא מכבה את עצמה. שומרים גם את
+  // מפתחות-אתמול (לא רק היום), ומוחקים רק דברים ישנים משני ימים.
+  const _yIL_prune=new Date(nowIL);_yIL_prune.setDate(_yIL_prune.getDate()-1);
+  const _yesterdayKeyForPrune=_yIL_prune.toDateString();
+  _actuallyFired.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_actuallyFired.delete(k);});
   if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey)_firedRunOnceToday.delete(id);});
   const zmanim=getZmanim(nowIL);
   const events=computeTodayEvents(nowIL,zmanim,dow,todayKey);
@@ -1210,7 +1216,11 @@ async function schedulerTick(){
   // הכיבוי-הסופי-לפי-משך (isEndEvent). התיקון הקודם כאן טיפל רק ב-isEndEvent, ולכן תוכנית-מחזור
   // שהמשכה חוצה חצות (למשל 21:59+8.5שע) הייתה "קופאת" בדיוק בחצות ולעולם לא חוזרת לפעול —
   // כל מחזור-ON שהיה אמור לירות אחרי חצות פשוט לא נבדק בכלל, כי הוא לא isEndEvent.
-  if(nowSec<7200){
+  // תיקון קריטי נוסף: הבדיקה הזו רצה תמיד (לא רק אם nowSec<7200/02:00) — תוכנית שחוצה הרבה יותר
+  // מ-2 שעות לתוך היום הבא (למשל 22:59+8.5שע=07:29 למחרת) לא הייתה נבדקת בכלל, כי עד שמגיעים
+  // לזמן-הכיבוי-האמיתי שלה, הבדיקה כבר הפסיקה לרוץ (עברו 2 השעות). זו הייתה הסיבה האמיתית
+  // ש"מזגן הורים" (22:59 שישי + 8.5 שעות) מעולם לא כבה, והמשיך "לחסום" את התוכנית של אחה"צ שבת.
+  {
     const yIL=new Date(nowIL);yIL.setDate(yIL.getDate()-1);
     const yKey=yIL.toDateString(),yDow=yIL.getDay(),yZman=getZmanim(yIL);
     const yEvts=computeTodayEvents(yIL,yZman,yDow,yKey);
@@ -1558,4 +1568,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 5;
+const IDX_BOTTOM_MARK = 6;
