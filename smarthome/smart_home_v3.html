@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-D (תיקון: תוכנית-בת מקבלת עכשיו סימון-כיבוי אמיתי, גם ביום רגיל וגם חוצה-חצות, עקבי עם כל תוכנית אחרת) -->
+<!-- BUILD_MARKER: v2026-07-12-E (תיקון: שכפול-תוכנית עם תוכנית-בת שיכפל רק את ה-id של הבת, לא יצר בת-חדשה - עותק+מקור חלקו בפועל את אותה תוכנית-בת) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -967,7 +967,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 18;
+const BUILD_TOP_MARK = 19;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -2362,6 +2362,22 @@ function duplicateProg(id) {
   newProg.seqId = nextProgId++;
   newProg.name = orig.name + ' (עותק)';
   newProg.active = false;
+  // אם לתוכנית יש תוכנית-בת, חייבים לשכפל **גם אותה** בנפרד — אחרת newProg.childProgId עדיין מצביע
+  // על הבת **המקורית**, ואז שתי ההורים (המקור והעותק) בפועל חולקים את אותה תוכנית-בת ממש: עריכת
+  // הבת דרך כל אחד מההורים משנה את אותה רשומה משותפת, ונראה כאילו הם "תלויים אחד בשני".
+  if (orig.childProgId) {
+    const origChild = programs.find(c => c.id === orig.childProgId);
+    if (origChild) {
+      const newChild = JSON.parse(JSON.stringify(origChild));
+      newChild.id = Date.now() + 1; // +1 כדי לא להתנגש עם newProg.id שנוצר באותה מילישנייה
+      newChild.seqId = nextProgId++;
+      newChild.parentProgId = newProg.id;
+      newProg.childProgId = newChild.id;
+      programs.push(newChild);
+    } else {
+      newProg.childProgId = null; // ההורה המקורי כבר לא קיים — לא נשאיר הפניה תלויה
+    }
+  }
   programs.push(newProg);
   syncProgramsToServer();
   renderPrograms();
@@ -4593,7 +4609,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 18;
+BUILD_BOTTOM_MARK = 19;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
