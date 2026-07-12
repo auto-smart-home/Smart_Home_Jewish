@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-C (תיקון: עקביות תצוגה חוצה-חצות - תוכנית-בת כבר לא מקבלת צ'יפ-כיבוי (כמו ברינדור רגיל), ופורמט-הטקסט זהה עכשיו לצ'יפ הרגיל) -->
+<!-- BUILD_MARKER: v2026-07-12-D (תיקון: תוכנית-בת מקבלת עכשיו סימון-כיבוי אמיתי, גם ביום רגיל וגם חוצה-חצות, עקבי עם כל תוכנית אחרת) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -967,7 +967,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 17;
+const BUILD_TOP_MARK = 18;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -3018,9 +3018,9 @@ function getTimeBlocksForDate(date, daySegments){
   // ולזהות שהממסר עדיין דלוק) נבדק רק פעם אחת בחצות — ומוצג "דולק" שגוי לכל היום, גם אחרי שכבר כבה.
   const yesterday = new Date(date.getTime() - 86400000);
   const carriedOverEnds = []; // { p, rId, endMin (מותאם ליום הנוכחי, 0-1440) }
-  // מדלגים על תוכניות-בת (p.parentProgId) — הן מעולם לא מקבלות צ'יפ-סיום ברינדור הרגיל (רק צ'יפ-התחלה,
-  // הכיבוי-שלהן מתבטא רק ברקע) — כדי שהתנהגות זהה תישמר גם כשהמחזור חוצה חצות, לא רק ביום רגיל.
-  programs.filter(p=>p.active && !p.parentProgId && progAppliesOnDate(p,yesterday)).forEach(p=>{
+  // כולל גם תוכניות-בת (p.parentProgId) — הן עכשיו מקבלות סימון-כיבוי עקבי (ראו renderTimeline),
+  // אז אין סיבה להחריג אותן כאן.
+  programs.filter(p=>p.active && progAppliesOnDate(p,yesterday)).forEach(p=>{
     const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
     if(!modeIds.some(mid=>relevantModes.has(mid))) return;
     p.relay.forEach(rId=>{
@@ -3500,7 +3500,8 @@ function renderTimeline(){
           endEvents.forEach(({p,seg})=>{
             const endMin=seg.endMin;
             const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
-            if(isCycleSeg||seg.segType==='child') return; // מחזורים ובלוקי-בת מוצגים כ-fireEvent בלבד (כל קטע עומד בפני עצמו)
+            const isChildSeg = seg.segType==='child';
+            if(isCycleSeg) return; // מחזורים רגילים (on/off) כבר מוצגים כזוג-שלם דרך fireEvents — לא צריך גם צ'יפ-סיום
             // seg.action (אם קיים) הוא הפעולה הספציפית של *הקטע הזה* — מדויק יותר מ-p.action (הפעולה
             // הכללית של התוכנית), שלא נכון לקטעי-מחזור/קטעים-חוצי-חצות (שם "הפוך מ-seg.action" הוא
             // הדבר הנכון, לא "הפוך מ-p.action" שנשאר קבוע לאורך כל התוכנית). זו הייתה הסיבה לתווית
@@ -3514,11 +3515,13 @@ function renderTimeline(){
               html+=`<div class="tl-prog-block" style="opacity:0.85;border:1px dashed rgba(250,204,21,0.7);background:rgba(250,204,21,0.08)" onclick="openAddProgram(${p.id});showTab('programs',null)" title="כיבוי אוטומטי ב-${timeStr} בוטל — הממסר בשליטת '${suppressedBy.name}' (${suppressedBy.priority?'עדיפות':'מסתיים מאוחר יותר'})">
                 <span class="pb-num">⛔</span>בוטל — ${shortOwnerName}
               </div>`;
-            } else if (seg._carriedOver) {
-              // קטע-מחזור שחוצה-חצות — אותו פורמט בדיוק כמו צ'יפ-רגיל (fireEvents), לא "סיום למשך",
-              // כי זה בפועל אותו סוג-מעבר (מחזור ממשיך), רק שהתחיל אתמול. עקביות מלאה עם התצוגה הרגילה.
+            } else if (seg._carriedOver || isChildSeg) {
+              // תוכנית-בת (בכל מקרה) וגם קטע-מחזור שחוצה-חצות — אותו פורמט בדיוק כמו צ'יפ-רגיל
+              // (fireEvents), לא "סיום למשך": זה בפועל אותו סוג-מעבר (המשך-פעולה), רק בכיוון הפוך.
+              // עקביות מלאה עם התצוגה הרגילה — כל תוכנית עם מעבר-מצב מקבלת סימון, גם תוכנית-בת.
               const revClass = reverseAction==='הדלקה' ? 't-on' : 't-off';
-              html+=`<div class="tl-prog-block ${revClass}" onclick="openAddProgram(${p.id});showTab('programs',null)" title="${p.name} · ${reverseAction}: ${timeStr} · המשך ממחזור מאתמול">
+              const noteTxt = seg._carriedOver ? ' · המשך ממחזור מאתמול' : '';
+              html+=`<div class="tl-prog-block ${revClass}" onclick="openAddProgram(${p.parentProgId||p.id});showTab('programs',null)" title="${p.name} · ${reverseAction}: ${timeStr}${noteTxt}">
                 <span class="pb-num">#${p.seqId}</span>
                 <span style="font-size:10px;opacity:0.85">${timeStr}</span>
               </div>`;
@@ -4590,7 +4593,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 17;
+BUILD_BOTTOM_MARK = 18;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
