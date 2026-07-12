@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-A (תיקון: תווית שגויה על סיום-הפסקת-מחזור שחוצה חצות - שימוש ב-seg.action הספציפי במקום p.action הכללי) -->
+<!-- BUILD_MARKER: v2026-07-12-B (תיקון: צבע-התווית (אדום קבוע) גם הוא היה קשיח - עכשיו ירוק/אדום לפי הפעולה האמיתית) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -967,7 +967,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 15;
+const BUILD_TOP_MARK = 16;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -3513,7 +3513,10 @@ function renderTimeline(){
                 <span class="pb-num">⛔</span>בוטל — ${shortOwnerName}
               </div>`;
             } else {
-              html+=`<div class="tl-prog-block t-off" style="opacity:0.7;border:1px dashed rgba(239,68,68,0.5)" onclick="openAddProgram(${p.id});showTab('programs',null)" title="סיום למשך — ${reverseAction} אוטומטי ב-${timeStr}">
+              const isTurningOn = reverseAction==='הדלקה';
+              const revClass = isTurningOn ? 't-on' : 't-off';
+              const revBorder = isTurningOn ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.5)';
+              html+=`<div class="tl-prog-block ${revClass}" style="opacity:0.7;border:1px dashed ${revBorder}" onclick="openAddProgram(${p.id});showTab('programs',null)" title="סיום למשך — ${reverseAction} אוטומטי ב-${timeStr}">
                 <span class="pb-num">⏱</span>${reverseAction} אוטו' (${timeStr})
               </div>`;
             }
@@ -4577,7 +4580,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 15;
+BUILD_BOTTOM_MARK = 16;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
