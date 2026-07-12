@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-E (תיקון: שכפול-תוכנית עם תוכנית-בת שיכפל רק את ה-id של הבת, לא יצר בת-חדשה - עותק+מקור חלקו בפועל את אותה תוכנית-בת) -->
+<!-- BUILD_MARKER: v2026-07-12-F (מוסיף: כפתור 'תיקון תוכניות-בת משותפות' - מתקן נתונים ישנים משכפול-לפני-התיקון, לא רק מונע כפילות חדשה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -554,6 +554,7 @@
         <button class="icon-btn" onclick="exportJSON()">📤 ייצוא JSON</button>
         <label class="icon-btn" style="cursor:pointer">📥 ייבוא JSON<input id="import-file-input" type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
         <button class="icon-btn" onclick="renumberSeqIds()" title="מתקן מספרי-תוכנית (#) כפולים שנוצרו משכפול ישן — לא משפיע על שום דבר מלבד המספור המוצג">🔧 תיקון מספור כפול</button>
+        <button class="icon-btn" onclick="repairSharedChildren()" title="מתקן תוכניות-בת ש'משותפות' בטעות בין כמה הורים (נתונים ישנים משכפול-ישן) — יוצר בת עצמאית לכל הורה">🔧 תיקון תוכניות-בת משותפות</button>
         <button class="icon-btn" onclick="openSimModal()" title="מריץ בשרת, על כל התוכניות האמיתיות, מה היה קורה בטווח-תאריכים נבחר — כולל מחזורים/תוכניות-בת/חציית-חצות/חסימות — בלי לשלוח שום פקודה אמיתית">🧪 סימולציית תזמון</button>
       </div>
     </div>
@@ -967,7 +968,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 19;
+const BUILD_TOP_MARK = 20;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -2334,6 +2335,37 @@ function renderSimResults(events){
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+}
+// תיקון תוכניות-בת "משותפות" — נתונים ישנים שנוצרו לפני תיקון duplicateProg (ראו שם), שבהם כמה
+// תוכניות-הורה שונות מצביעות באמת על אותה תוכנית-בת ממש (אותו id). עריכת "מוגבל לזמן ההפסקה" וכו'
+// דרך הורה אחד הייתה משנה בפועל רשומה משותפת, ונראית כאילו שני ההורים "תלויים אחד בשני".
+function repairSharedChildren() {
+  const childUsage = {}; // childProgId -> [parentProg, ...]
+  programs.forEach(p => {
+    if (p.childProgId) {
+      (childUsage[p.childProgId] = childUsage[p.childProgId] || []).push(p);
+    }
+  });
+  const shared = Object.entries(childUsage).filter(([,parents]) => parents.length > 1);
+  if (!shared.length) { toast('לא נמצאו תוכניות-בת משותפות — הכל תקין'); return; }
+  const totalParents = shared.reduce((sum,[,parents])=>sum+parents.length-1, 0);
+  if (!confirm(`נמצאו ${shared.length} תוכניות-בת ששותפות ל-${totalParents} הורים נוספים. ליצור עותק עצמאי לכל הורה נוסף? זה משפיע רק על תוכניות-הבת (לא נוגע בהורים עצמם).`)) return;
+  shared.forEach(([childId, parents]) => {
+    const origChild = programs.find(c => c.id === Number(childId) || c.id === childId);
+    if (!origChild) return;
+    // ההורה הראשון ברשימה שומר את הבת המקורית; לכל השאר יוצרים עותק עצמאי חדש
+    parents.slice(1).forEach((parent, i) => {
+      const newChild = JSON.parse(JSON.stringify(origChild));
+      newChild.id = Date.now() + i + 1;
+      newChild.seqId = nextProgId++;
+      newChild.parentProgId = parent.id;
+      parent.childProgId = newChild.id;
+      programs.push(newChild);
+    });
+  });
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ תוקנו ${shared.length} תוכניות-בת משותפות`);
 }
 function renumberSeqIds() {
   const counts = {};
@@ -4609,7 +4641,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 19;
+BUILD_BOTTOM_MARK = 20;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
