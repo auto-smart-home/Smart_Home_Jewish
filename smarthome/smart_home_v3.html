@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-09-J (מוסיף: ממשק לסימולציית-תזמון בשרת - כפתור "🧪 סימולציית תזמון") -->
+<!-- BUILD_MARKER: v2026-07-12-A (תיקון: תווית שגויה על סיום-הפסקת-מחזור שחוצה חצות - שימוש ב-seg.action הספציפי במקום p.action הכללי) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -967,7 +967,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 14;
+const BUILD_TOP_MARK = 15;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -3024,7 +3024,7 @@ function getTimeBlocksForDate(date, daySegments){
     p.relay.forEach(rId=>{
       getRelayEventPairs(p,rId).forEach(seg=>{
         if(seg.endMin!==null && seg.endMin>1440){
-          carriedOverEnds.push({p, rId, endMin: seg.endMin-1440});
+          carriedOverEnds.push({p, rId, endMin: seg.endMin-1440, segAction: seg.action});
         }
       });
     });
@@ -3437,7 +3437,7 @@ function renderTimeline(){
           (blocks.carriedOverEnds||[]).forEach(cp=>{
             if(cp.rId!==r.id) return;
             const em=Math.ceil(cp.endMin);
-            if(em>=b.startMin && em<b.endMin) endEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null}, _carriedOver:true});
+            if(em>=b.startMin && em<b.endMin) endEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null, action:cp.segAction}, _carriedOver:true});
           });
           // תוכניות runOnce שפעלו היום — הצג בצבע מיוחד
           const todayStr = dayDate.toDateString();
@@ -3499,7 +3499,12 @@ function renderTimeline(){
             const endMin=seg.endMin;
             const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
             if(isCycleSeg||seg.segType==='child') return; // מחזורים ובלוקי-בת מוצגים כ-fireEvent בלבד (כל קטע עומד בפני עצמו)
-            const reverseAction=p.action==='ON'?'כיבוי':'הדלקה';
+            // seg.action (אם קיים) הוא הפעולה הספציפית של *הקטע הזה* — מדויק יותר מ-p.action (הפעולה
+            // הכללית של התוכנית), שלא נכון לקטעי-מחזור/קטעים-חוצי-חצות (שם "הפוך מ-seg.action" הוא
+            // הדבר הנכון, לא "הפוך מ-p.action" שנשאר קבוע לאורך כל התוכנית). זו הייתה הסיבה לתווית
+            // "כיבוי אוטו'" שגויה על סיום-הפסקת-מחזור שחוצה חצות (שאמורה להיות "הדלקה אוטו'").
+            const baseAction = seg.action || p.action;
+            const reverseAction=baseAction==='ON'?'כיבוי':'הדלקה';
             const timeStr=fmtMin(Math.floor(endMin));
             const suppressedBy = (reverseAction==='כיבוי') ? isEndEventSuppressed(p, seg, r.id, dayDate, blockEffMode) : null;
             if (suppressedBy) {
@@ -4572,7 +4577,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 14;
+BUILD_BOTTOM_MARK = 15;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
