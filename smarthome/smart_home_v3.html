@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-F (מוסיף: כפתור 'תיקון תוכניות-בת משותפות' - מתקן נתונים ישנים משכפול-לפני-התיקון, לא רק מונע כפילות חדשה) -->
+<!-- BUILD_MARKER: v2026-07-12-G (תיקון: טיימר-ידני/IVR שחוצה חצות נחתך בסוף היום בציר-הזמן - עכשיו מקבל המשך אמיתי ביום הבא) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -968,7 +968,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 20;
+const BUILD_TOP_MARK = 21;
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -3218,14 +3218,27 @@ function _ilDateParts(epochMs) {
   return { dateKey: `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`, min: p.hour * 60 + p.minute };
 }
 const _ivrEventRefs = {}; // id → הפניה ישירה לאובייקט ב-manualEvents (לעדכון endMin בעתיד)
+const _ivrEventRefs2 = {}; // id → הפניה לרשומת-ההמשך ביום-הבא, רק לאירועים שחוצים חצות
 function rebuildIvrManualEvents(events) {
   (events || []).forEach(t => {
     if (_ivrEventRefs[t.id]) {
-      // נראה בעבר — רק לעדכן endMin אם הסתיים/נסגר בינתיים (היה null, יש לו ערך אמיתי כעת)
+      // נראה בעבר — רק לעדכן אם הסתיים/נסגר בינתיים (dueAt היה null, יש לו ערך אמיתי כעת)
       if (t.dueAt !== null && t.dueAt !== undefined) {
         const start = _ilDateParts(t.startedAt || t.dueAt);
         const end = _ilDateParts(t.dueAt);
-        _ivrEventRefs[t.id].endMin = (end.dateKey === start.dateKey) ? end.min : 1439;
+        if (end.dateKey === start.dateKey) {
+          _ivrEventRefs[t.id].endMin = end.min;
+        } else {
+          // חוצה חצות — הרשומה של היום נשארת פתוחה עד סוף היום, ונוסף רישום-המשך למחר (אם עוד לא קיים)
+          _ivrEventRefs[t.id].endMin = 1440;
+          if (!_ivrEventRefs2[t.id]) {
+            const contEntry = { relayId: t.relayId, date: end.dateKey, startMin: 0, endMin: end.min, source: _ivrEventRefs[t.id].source };
+            manualEvents.push(contEntry);
+            _ivrEventRefs2[t.id] = contEntry;
+          } else {
+            _ivrEventRefs2[t.id].endMin = end.min;
+          }
+        }
       }
       return;
     }
@@ -3234,11 +3247,24 @@ function rebuildIvrManualEvents(events) {
     let endMin = null; // null = בלוק פתוח (פעולה קבועה שעדיין לא נסגרה)
     if (t.dueAt !== null && t.dueAt !== undefined) {
       const end = _ilDateParts(t.dueAt);
-      endMin = (end.dateKey === start.dateKey) ? end.min : 1439; // חצה חצות — לפשטות חותכים בסוף היום
+      if (end.dateKey === start.dateKey) {
+        endMin = end.min;
+      } else {
+        // חוצה חצות — רשומת-היום נשארת פתוחה עד 1440, ורשומה נוספת נוצרת ליום-ההמשך (0 עד שעת-הסיום)
+        endMin = 1440;
+      }
     }
     const entry = { relayId: t.relayId, date: start.dateKey, startMin: start.min, endMin, source };
     manualEvents.push(entry);
     _ivrEventRefs[t.id] = entry;
+    if (t.dueAt !== null && t.dueAt !== undefined) {
+      const end = _ilDateParts(t.dueAt);
+      if (end.dateKey !== start.dateKey) {
+        const contEntry = { relayId: t.relayId, date: end.dateKey, startMin: 0, endMin: end.min, source };
+        manualEvents.push(contEntry);
+        _ivrEventRefs2[t.id] = contEntry;
+      }
+    }
   });
   // ניקוי רגיל — אירועי IVR ישנים (יותר מיומיים) לא צריכים להישאר לנצח
   const cutoff = new Date();
@@ -4641,7 +4667,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 20;
+BUILD_BOTTOM_MARK = 21;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
