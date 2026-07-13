@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-K (תצוגה-מינימלית: מבנה יום-ראשי מסונכרן בין כל העמודות, כותרת-יום אחת עם סגנון שבת/חג מהתצוגה הרגילה, גובה-שורה משותף) -->
+<!-- BUILD_MARKER: v2026-07-12-L (תיקון: מיכל-התצוגה-המינימלית היה overflow-y:visible (בלי הקשר-גלילה פנימי) - position:sticky לא נדבק. תוקן ל-overflow:auto+max-height, כמו הרגיל) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -607,7 +607,8 @@
     <div class="tl-container" id="tl-normal-container">
       <table class="tl-table" id="tl-table"></table>
     </div>
-    <div id="tl-minimal-container" style="display:none;overflow-x:auto;overflow-y:visible;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
+    <!-- overflow:auto + max-height:68vh — בדיוק כמו .tl-container הרגיל — נדרש כדי ש-position:sticky על כותרות-הממסרים יעבוד (צריך הקשר-גלילה פנימי, לא רק overflow-x) -->
+    <div id="tl-minimal-container" style="display:none;overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
   </div>
 
   <!-- MODES TAB -->
@@ -970,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 25;
+const BUILD_TOP_MARK = 26;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4872,7 +4873,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 25;
+BUILD_BOTTOM_MARK = 26;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
