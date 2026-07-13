@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-L (תיקון: מיכל-התצוגה-המינימלית היה overflow-y:visible (בלי הקשר-גלילה פנימי) - position:sticky לא נדבק. תוקן ל-overflow:auto+max-height, כמו הרגיל) -->
+<!-- BUILD_MARKER: v2026-07-12-M (תצוגה-מינימלית: כותרת-יום כבר לא קפואה (נגללת רגיל) - רק כותרת-שמות-הממסרים קפואה, מיד אחרי פס-הזמנים, כמו שאר האפליקציה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -608,7 +608,7 @@
       <table class="tl-table" id="tl-table"></table>
     </div>
     <!-- overflow:auto + max-height:68vh — בדיוק כמו .tl-container הרגיל — נדרש כדי ש-position:sticky על כותרות-הממסרים יעבוד (צריך הקשר-גלילה פנימי, לא רק overflow-x) -->
-    <div id="tl-minimal-container" style="display:none;overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
+    <div id="tl-minimal-container" style="display:none;overflow-x:auto;overflow-y:visible;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
   </div>
 
   <!-- MODES TAB -->
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 26;
+const BUILD_TOP_MARK = 27;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1836,6 +1836,10 @@ function updateStickyOffsets(){
   const toolbarH = toolbarEl?.offsetHeight || 0;
   const bulkEl = document.getElementById('bulk-bar');
   if(bulkEl) bulkEl.style.top = (topbarH + zH + tabsH + toolbarH) + 'px';
+  // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — נדבקת מיד אחרי פס-הזמנים (זריחה/שקיעה),
+  // אותו עיקרון בדיוק כמו שאר האלמנטים הקפואים כאן.
+  const tlMinRelayHdr = document.getElementById('tl-min-relay-header');
+  if(tlMinRelayHdr) tlMinRelayHdr.style.top = (topbarH + zH) + 'px';
 }
 
 // ── HELPERS ───────────────────────────────────────────────
@@ -3534,8 +3538,9 @@ function renderTimelineMinimal(){
   const dayRowHeight = dayNaturalHeight.map(h => Math.max(TL_MIN_BLOCK_MIN_PX, Math.min(TL_MIN_DAY_VIEWPORT_PX, h)));
 
   let html = '<div>';
-  // שורת-כותרות-הממסרים — פעם אחת בלבד, דביקה, לא חוזרת לכל יום
-  html += '<div style="display:flex;position:sticky;top:0;z-index:3;background:var(--surface2)">';
+  // שורת-כותרות-הממסרים — פעם אחת בלבד, דביקה יחסית לדף (לא ליום ספציפי) — נדבקת מיד אחרי
+  // פס-הזמנים (זריחה/שקיעה), בדיוק כמו שאר האלמנטים הקפואים באפליקציה (ראו updateStickyOffsets).
+  html += '<div id="tl-min-relay-header" style="display:flex;position:sticky;top:80px;z-index:3;background:var(--surface2)">';
   relayPerDay.forEach(({relay}) => {
     html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);padding:6px;text-align:center;font-weight:700;font-size:12px;border-bottom:1px solid var(--border)">${relay.name}</div>`;
   });
@@ -3561,7 +3566,7 @@ function renderTimelineMinimal(){
     const hdrClass = (isShabbat||chag) ? 'tl-day-header-shabbat' : isSpecial ? 'tl-day-header-special' : 'tl-day-header-normal';
     const lblClass = (isShabbat||chag) ? 'tl-day-label-shabbat' : isSpecial ? 'tl-day-label-special' : 'tl-day-label-normal';
     const subClass = (isShabbat||chag) ? 'tl-day-sub-shabbat' : isSpecial ? 'tl-day-sub-special' : 'tl-day-sub-normal';
-    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap;position:sticky;top:38px;z-index:2">
+    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap">
       <span class="${lblClass}">${DAYS_FULL[di]}</span>
       <span class="${subClass}" style="font-weight:600">${latDate}</span>
       ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
@@ -3590,6 +3595,7 @@ function renderTimelineMinimal(){
   });
   html += '</div>';
   container.innerHTML = html;
+  setTimeout(updateStickyOffsets, 0);
 }
 function renderTimeline(){
   if (minimalViewMode) { renderTimelineMinimal(); return; }
@@ -4873,7 +4879,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 26;
+BUILD_BOTTOM_MARK = 27;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
