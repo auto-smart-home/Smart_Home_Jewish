@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-Q (תצוגה-מינימלית: חיזוק אטימות-כותרת-הממסרים - רקע-אטום מפורש, z-index גבוה, גבול+צל, כדי שלא ייראה תוכן-גולל מבעדה) -->
+<!-- BUILD_MARKER: v2026-07-12-R (תיקון-שורש: חפיפה-מכוונת-1px בין כל האלמנטים הקפואים-מוערמים (topbar/זמנים/טאבים/כותרת-ממסרים) - מונע פערי-עיגול שגרמו לבצבוץ-צבע, קיים מאז ומתמיד) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 31;
+const BUILD_TOP_MARK = 32;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1824,22 +1824,25 @@ function updateZmanimBarExtras(){
 
 // ── מיקומי sticky דינמיים — נמדדים בפועל (offsetHeight), לא קבועים, כי הגבהים משתנים לפי רוחב מסך ──
 function updateStickyOffsets(){
+  // הערה: כל "-1" כאן הוא חפיפה מכוונת של פיקסל אחד בין אלמנטים קפואים-מוערמים — מונע פער-עיגול
+  // תת-פיקסל שגורם לצבע מהתוכן-שגולל לבצבץ לרגע בגבול שבין שני אלמנטים קפואים (בלתי-מורגש לעין,
+  // אבל פותר "בהבהוב" שהיה קיים מאז ומתמיד ורק בלט עכשיו בגלל צבעי-הבלוקים הבוהקים בתצוגה החדשה).
   const topbarH = document.querySelector('.topbar')?.offsetHeight || 0;
   const zEl = document.querySelector('.zmanim-bar');
-  if(zEl) zEl.style.top = topbarH + 'px';
+  if(zEl) zEl.style.top = Math.max(0, topbarH - 1) + 'px';
   const zH = zEl?.offsetHeight || 0;
   const tabsEl = document.querySelector('.tabs');
-  if(tabsEl) tabsEl.style.top = (topbarH + zH) + 'px';
+  if(tabsEl) tabsEl.style.top = Math.max(0, topbarH + zH - 2) + 'px';
   const tabsH = tabsEl?.offsetHeight || 0;
   const toolbarEl = document.querySelector('.prog-toolbar');
-  if(toolbarEl) toolbarEl.style.top = (topbarH + zH + tabsH) + 'px';
+  if(toolbarEl) toolbarEl.style.top = Math.max(0, topbarH + zH + tabsH - 3) + 'px';
   const toolbarH = toolbarEl?.offsetHeight || 0;
   const bulkEl = document.getElementById('bulk-bar');
-  if(bulkEl) bulkEl.style.top = (topbarH + zH + tabsH + toolbarH) + 'px';
+  if(bulkEl) bulkEl.style.top = Math.max(0, topbarH + zH + tabsH + toolbarH - 4) + 'px';
   // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — במצב הזה סרגל-הטאבים הראשי משוחרר מהקפאה
   // (ראו toggleMinimalView), אז הכותרת הזו תופסת בדיוק את המקום שהוא היה תופס: מיד אחרי פס-הזמנים.
   const tlMinRelayHdr = document.getElementById('tl-min-relay-header');
-  if(tlMinRelayHdr) tlMinRelayHdr.style.top = (topbarH + zH) + 'px';
+  if(tlMinRelayHdr) tlMinRelayHdr.style.top = Math.max(0, topbarH + zH - 2) + 'px';
 }
 
 // ── HELPERS ───────────────────────────────────────────────
@@ -4888,7 +4891,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 31;
+BUILD_BOTTOM_MARK = 32;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
