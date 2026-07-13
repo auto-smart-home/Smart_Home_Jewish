@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-P (תיקון קריטי: overflow-x:auto+overflow-y:visible על אותו מיכל לא עובד (מגבלת-CSS) - פוצל לשני מיכלים (כותרת+תוכן) עם סנכרון-גלילה) -->
+<!-- BUILD_MARKER: v2026-07-12-Q (תצוגה-מינימלית: חיזוק אטימות-כותרת-הממסרים - רקע-אטום מפורש, z-index גבוה, גבול+צל, כדי שלא ייראה תוכן-גולל מבעדה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 30;
+const BUILD_TOP_MARK = 31;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3545,8 +3545,8 @@ function renderTimelineMinimal(){
   // שורת-כותרות-הממסרים — במיכל-גלילה-אופקית נפרד משלה (overflow-y:hidden, לא visible — נמנעים
   // מהמגבלה של overflow-x:auto+overflow-y:visible על אותו מיכל, שהדפדפן "מתקן" בשקט ל-auto+auto
   // ושובר את ה-sticky). דביקה יחסית לדף, מיד אחרי פס-הזמנים (ראו updateStickyOffsets).
-  html += '<div id="tl-min-header-wrap" style="overflow-x:auto;overflow-y:hidden;position:sticky;top:80px;z-index:3;background:var(--surface2)" onscroll="document.getElementById(\'tl-min-content-wrap\').scrollLeft=this.scrollLeft">';
-  html += '<div id="tl-min-relay-header" style="display:flex;width:max-content">';
+  html += '<div id="tl-min-header-wrap" style="overflow-x:auto;overflow-y:hidden;position:sticky;top:80px;z-index:89;background-color:var(--surface2);border-bottom:2px solid var(--border);box-shadow:0 2px 6px rgba(0,0,0,0.35)" onscroll="document.getElementById(\'tl-min-content-wrap\').scrollLeft=this.scrollLeft">';
+  html += '<div id="tl-min-relay-header" style="display:flex;width:max-content;background-color:var(--surface2)">';
   relayPerDay.forEach(({relay}) => {
     html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);padding:6px;text-align:center;font-weight:700;font-size:12px;border-bottom:1px solid var(--border)">${relay.name}</div>`;
   });
@@ -4888,7 +4888,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 30;
+BUILD_BOTTOM_MARK = 31;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
