@@ -1844,11 +1844,12 @@ function updateStickyOffsets(){
 const tlMinHeaderWrap = document.getElementById('tl-min-header-wrap');
 if (tlMinHeaderWrap && zEl) {
   const zRect = zEl.getBoundingClientRect();
-  const topbarRect = document.querySelector('.topbar')?.getBoundingClientRect();
-  const topbarBottom = topbarRect ? topbarRect.bottom : 0;
   
-  // מחשב את המיקום המדויק של תחתית סרגל הזמנים ומציב אותו על ה-Wrap, פחות 1px לחפיפה
-  tlMinHeaderWrap.style.top = Math.max(0, (zRect.top + zRect.height) - topbarBottom - 1) + 'px';
+  // אנחנו רוצים שהעטיפה תתחיל בדיוק איפה שסרגל הזמנים מסתיים (zRect.bottom).
+  // מכיוון ש-style.top נקבע יחסית לראש ה-viewport (בגלל ה-sticky),
+  // אנחנו פשוט מציבים את ה-bottom של סרגל הזמנים ישירות כ-top של ה-Wrap!
+  // מפחיתים 1px לחפיפה קלה למניעת הבהוב.
+  tlMinHeaderWrap.style.top = Math.max(0, zRect.bottom - 1) + 'px';
 }
 }
 
