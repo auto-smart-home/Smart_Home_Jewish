@@ -11,7 +11,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 7;
+const IDX_TOP_MARK = 8;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -603,7 +603,7 @@ console.log = (...a) => _origLog(`[${_ts()}]`, ...a);
 console.error = (...a) => _origError(`[${_ts()}] ❌`, ...a);
 console.warn = (...a) => _origWarn(`[${_ts()}] ⚠️`, ...a);
 
-function addServerLog(entry) {
+function addServerLog(entry, excludeSocket) {
   const now = new Date();
   const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
   const logEntry = { ...entry, ts: now.toISOString(),
@@ -612,7 +612,9 @@ function addServerLog(entry) {
   };
   serverLog.unshift(logEntry);
   pruneLog();
-  io.emit('log_broadcast', serverLog[0]);
+  // אם excludeSocket סופק (למשל: הרשומה הזו כבר קיימת מקומית אצל השולח, כי הוא הוסיף אותה בעצמו
+  // לפני ששלח לשרת) — משדרים לכולם *חוץ* מהשולח, כדי לא ל"החזיר לו הד" של הרשומה שכבר יש לו.
+  (excludeSocket ? excludeSocket.broadcast : io).emit('log_broadcast', serverLog[0]);
   // שיקוף ליומן ה-Add-on לאירועים חשובים
   if (['sent','warning','danger','info'].includes(entry.type)) {
     _origLog(`[${logEntry.time}] ${entry.type.toUpperCase()}: ${entry.msg}`);
@@ -933,7 +935,9 @@ io.on('connection', (socket) => {
     } catch(e) { socket.emit('yemot_whitelist_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
   });
 
-  socket.on('log_entry', (entry) => { addServerLog(entry); });
+  // הרשומה כבר קיימת מקומית אצל השולח (הוא הוסיף אותה בעצמו לפני השליחה) — לכן משדרים רק לכל השאר,
+  // לא בחזרה אליו. בלי זה, הדפדפן שביצע את הפעולה ראה את הרשומה שלו כפולה (מקומי + הד מהשרת).
+  socket.on('log_entry', (entry) => { addServerLog(entry, socket); });
 
   // ── תזמוני מצב ──
   // ── סימולציית-תזמון (בדיקה, לא נוגעת במצב אמיתי) ──
@@ -1674,4 +1678,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 7;
+const IDX_BOTTOM_MARK = 8;
