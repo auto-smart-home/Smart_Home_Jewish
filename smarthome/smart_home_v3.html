@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-H (מוסיף: 'תצוגה מינימלית' לציר-הזמן - V1 ראשוני, תכונה חדשה נפרדת לגמרי, לא נוגעת בתצוגה הרגילה) -->
+<!-- BUILD_MARKER: v2026-07-12-J (תצוגה-מינימלית: הוספת הפרדת-ימים (כותרת+פיצול-קטע-חוצה-חצות) ומקרה-קיצון (max-height+overflow:auto לכל יום)) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -970,7 +970,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 22;
+const BUILD_TOP_MARK = 24;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3472,15 +3472,25 @@ function renderTimelineMinimal(){
     const segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
     if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
     segs.sort((a,b) => a.startMs - b.startMs);
+    // בודק את המצב-בפועל של הממסר ברגע נתון (כולל לוקבאק/רקע) — אותה פונקציה שהתצוגה הרגילה כבר
+    // משתמשת בה. "פער" (אין תוכנית מפורשת) לא בהכרח כבוי בפועל — למשל אחרי כיבוי-לפי-משך של תוכנית
+    // עם action=OFF, הממסר חוזר לדלוק (המצב-הקודם), גם בלי תוכנית מפורשת שמכסה את זה.
+    const stateAt = ms => {
+      const p = getIsraelParts(new Date(ms));
+      const dayDateForMs = new Date(p.year, p.month-1, p.day, 0,0,0,0);
+      const minOfDay = p.hour*60+p.minute+p.second/60;
+      const effMode = modeAtTime(modeSegments, ms);
+      try { return !!getRelayStateAtTime(r.id, dayDateForMs, minOfDay, effMode); } catch(e) { return false; }
+    };
     const filled = [];
     let cursor = rangeStartMs;
     segs.forEach(s => {
       const st = Math.max(s.startMs, rangeStartMs), en = Math.min(s.endMs, rangeEndMs);
-      if (st > cursor) filled.push({ startMs: cursor, endMs: st, isOn: false, kind: 'gap', progId: null, label: '' });
+      if (st > cursor) filled.push({ startMs: cursor, endMs: st, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
       if (en > st) filled.push({ ...s, startMs: st, endMs: en });
       cursor = Math.max(cursor, en);
     });
-    if (cursor < rangeEndMs) filled.push({ startMs: cursor, endMs: rangeEndMs, isOn: false, kind: 'gap', progId: null, label: '' });
+    if (cursor < rangeEndMs) filled.push({ startMs: cursor, endMs: rangeEndMs, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
     activeRelays.push({ relay: r, segs: filled });
   });
 
@@ -3490,22 +3500,51 @@ function renderTimelineMinimal(){
 
   const pxPerMin = TL_MIN_PX_PER_HOUR/60;
   const clampPx = durMin => Math.min(TL_MIN_BLOCK_MAX_PX, Math.max(TL_MIN_BLOCK_MIN_PX, durMin*pxPerMin));
+  const TL_MIN_DAY_VIEWPORT_PX = 700; // "מסך אחד בערך" — יום שנכנס בגובה הזה לא יגלול; יום עמוס-יותר יקבל גלילה-פנימית-משלו בלבד
 
+  // מפצל קטע לפי גבולות-יום (חיתוך ויזואלי בלבד — אותו kind/isOn/progId/label בשני החלקים),
+  // וקובע לכל חלק לאיזה יום (אינדקס ב-dates) הוא שייך — כדי לקבץ ולעטוף כל יום בנפרד.
+  function splitByDays(segs){
+    const perDay = dates.map(() => []);
+    segs.forEach(s => {
+      let cur = s.startMs;
+      while (cur < s.endMs) {
+        const dIdx = Math.min(dates.length-1, Math.max(0, Math.floor((cur-rangeStartMs)/86400000)));
+        const dayBoundEnd = rangeStartMs + (dIdx+1)*86400000;
+        const pieceEnd = Math.min(s.endMs, dayBoundEnd);
+        perDay[dIdx].push({ ...s, startMs: cur, endMs: pieceEnd });
+        cur = pieceEnd;
+      }
+    });
+    return perDay;
+  }
+
+  const HEB_DOW_MIN = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
   let html = '<div style="display:flex;align-items:flex-start">';
   activeRelays.forEach(({relay,segs}) => {
+    const perDay = splitByDays(segs);
     html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border)">
       <div style="position:sticky;top:0;background:var(--surface2);padding:6px;text-align:center;font-weight:700;font-size:12px;border-bottom:1px solid var(--border);z-index:2">${relay.name}</div>
       <div>`;
-    segs.forEach(s => {
-      const durMin = (s.endMs - s.startMs)/60000;
-      const h = Math.round(clampPx(durMin));
-      const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
-      const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
-      const bg = s.kind === 'gap' ? '#2a3142' : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
-      const cursorStyle = clickable ? 'cursor:pointer' : '';
-      const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
-      const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
-      html += `<div style="height:${h}px;background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
+    dates.forEach((dayDate, dIdx) => {
+      const daySegs = perDay[dIdx];
+      if (!daySegs.length) return; // אין כלום ביום הזה בעמודה הזו — לא מציגים כותרת-יום ריקה
+      const dowLabel = HEB_DOW_MIN[dayDate.getDay()];
+      const dd = String(dayDate.getDate()).padStart(2,'0'), mm = String(dayDate.getMonth()+1).padStart(2,'0');
+      html += `<div style="background:var(--surface);padding:3px 6px;font-size:11px;font-weight:600;color:var(--text2);border-top:2px solid var(--border);border-bottom:1px solid var(--border);position:sticky;top:26px;z-index:1">${dowLabel} ${dd}.${mm}</div>`;
+      html += `<div style="max-height:${TL_MIN_DAY_VIEWPORT_PX}px;overflow-y:auto">`;
+      daySegs.forEach(s => {
+        const durMin = (s.endMs - s.startMs)/60000;
+        const h = Math.round(clampPx(durMin));
+        const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
+        const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
+        const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
+        const cursorStyle = clickable ? 'cursor:pointer' : '';
+        const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
+        const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
+        html += `<div style="height:${h}px;background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
+      });
+      html += '</div>';
     });
     html += '</div></div>';
   });
@@ -4794,7 +4833,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 22;
+BUILD_BOTTOM_MARK = 24;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
