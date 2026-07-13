@@ -1842,7 +1842,14 @@ function updateStickyOffsets(){
   // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — במצב הזה סרגל-הטאבים הראשי משוחרר מהקפאה
   // (ראו toggleMinimalView), אז הכותרת הזו תופסת בדיוק את המקום שהוא היה תופס: מיד אחרי פס-הזמנים.
   const tlMinRelayHdr = document.getElementById('tl-min-relay-header');
-  if(tlMinRelayHdr) tlMinRelayHdr.style.top = Math.max(0, topbarH + zH - 20) + 'px';
+if (tlMinRelayHdr && zEl) {
+  const zRect = zEl.getBoundingClientRect();
+  const topbarRect = document.querySelector('.topbar')?.getBoundingClientRect();
+  const topbarBottom = topbarRect ? topbarRect.bottom : 0;
+  
+  // מחשב את המיקום המדויק של תחתית סרגל הזמנים ומחסיר פיקסל אחד לחפיפה
+  tlMinRelayHdr.style.top = Math.max(0, (zRect.top + zRect.height) - topbarBottom - 1) + 'px';
+}
 }
 
 // ── HELPERS ───────────────────────────────────────────────
