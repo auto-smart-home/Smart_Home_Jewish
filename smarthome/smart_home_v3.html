@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-G (תיקון: טיימר-ידני/IVR שחוצה חצות נחתך בסוף היום בציר-הזמן - עכשיו מקבל המשך אמיתי ביום הבא) -->
+<!-- BUILD_MARKER: v2026-07-12-H (מוסיף: 'תצוגה מינימלית' לציר-הזמן - V1 ראשוני, תכונה חדשה נפרדת לגמרי, לא נוגעת בתצוגה הרגילה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -586,6 +586,7 @@
         <input type="date" id="tl-to-date" class="form-input" style="width:130px;padding:3px 6px;font-size: 12px" onchange="renderTimeline()">
       </div>
       <div style="display:flex;gap:6px;margin-right:auto">
+        <button class="icon-btn" id="tl-minimal-toggle-btn" onclick="toggleMinimalView()" title="תצוגה קומפקטית: רק בלוקים דולק/כבוי, בקנה-מידה אחיד, בלי גלילה מיותרת">📐 תצוגה מינימלית</button>
         <button class="icon-btn" onclick="setTlRange(7)">שבוע</button>
         <button class="icon-btn" onclick="setTlRange(14)">שבועיים</button>
         <button class="icon-btn" onclick="setTlRange(30)">חודש</button>
@@ -603,9 +604,10 @@
       <div class="leg"><div class="leg-dot" style="background:var(--surface2);border:1px solid var(--border);width:14px;height:14px;border-radius:3px"></div><span>ממסר כבוי</span></div>
       <div class="leg"><div class="leg-dot" style="background:rgba(239,68,68,0.35);border:1px dashed rgba(239,68,68,0.6);width:14px;height:14px;border-radius:3px"></div><span>כיבוי אוטומטי (למשך)</span></div>
     </div>
-    <div class="tl-container">
+    <div class="tl-container" id="tl-normal-container">
       <table class="tl-table" id="tl-table"></table>
     </div>
+    <div id="tl-minimal-container" style="display:none;overflow-x:auto;overflow-y:visible;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
   </div>
 
   <!-- MODES TAB -->
@@ -968,7 +970,13 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 21;
+const BUILD_TOP_MARK = 22;
+// ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
+// תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
+let minimalViewMode = false;
+const TL_MIN_PX_PER_HOUR = 40; // קבוע-אבסולוטי: כל שעה אמיתית = 40 פיקסל, בכל מקום ובכל זמן
+const TL_MIN_BLOCK_MIN_PX = 20; // גובה-מינימום לכל בלוק/קטע (כדי שטקסט-שעה יישאר קריא)
+const TL_MIN_BLOCK_MAX_PX = 220; // גובה-מקסימום לכל בלוק/קטע (בלוק ארוך לא "יברח")
 let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
 let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
 function updateBuildVersionIndicator(){
@@ -3386,7 +3394,126 @@ function shortRelayName(name){
   if(words.length <= 2) return name;
   return words.slice(0,2).join(' ') + '...';
 }
+function toggleMinimalView(){
+  minimalViewMode = !minimalViewMode;
+  const btn = document.getElementById('tl-minimal-toggle-btn');
+  if(btn) btn.style.background = minimalViewMode ? 'var(--accent)' : '';
+  const normalC = document.getElementById('tl-normal-container');
+  const minC = document.getElementById('tl-minimal-container');
+  if(normalC) normalC.style.display = minimalViewMode ? 'none' : '';
+  if(minC) minC.style.display = minimalViewMode ? '' : 'none';
+  renderTimeline();
+}
+function fmtEpochHM(ms){
+  const p = getIsraelParts(new Date(ms));
+  return `${String(p.hour).padStart(2,'0')}:${String(p.minute).padStart(2,'0')}`;
+}
+// ═══ תצוגה מינימלית — פונקציה נפרדת לגמרי, לא נוגעת בשום קוד/משתנה של התצוגה הרגילה ═══════
+// עקרונות (סוכמו עם המשתמש לפני היישום): קנה-מידה קבוע-אבסולוטי (40px/שעה, מינימום 20px, מקסימום
+// 220px) — חל גם על רווחים-ריקים, לא רק בלוקים אמיתיים. כל תוכנית/מחזור מקבל בלוק+קו-הפרדה משלו,
+// לעולם לא ממוזג עם תוכנית אחרת גם אם רציף. עמודות-ממסר בלי שום פעילות בכל הטווח המוצג — מוסתרות.
+function renderTimelineMinimal(){
+  const dates = getTlDates();
+  let modeSegments = [];
+  try { modeSegments = computeModeSegments(dates[0], dates.length); } catch(e) { modeSegments = []; }
+  const rangeStartMs = dates[0].getTime();
+  const rangeEndMs = dates[dates.length-1].getTime() + 86400000;
+
+  const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
+  relays.forEach(r => relaySegs[r.id] = []);
+
+  dates.forEach(dayDate => {
+    const dayStart = dayDate.getTime();
+    const dayEnd = dayStart + 86400000;
+    const relevantModes = new Set();
+    modeSegments.forEach(seg => { if (seg.startMs < dayEnd && seg.endMs > dayStart) relevantModes.add(seg.modeId); });
+    if (!relevantModes.size) relevantModes.add(activeModeId);
+
+    programs.filter(p => p.active && !p.parentProgId && progAppliesOnDate(p, dayDate)).forEach(p => {
+      const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+      if (!modeIds.some(mid => relevantModes.has(mid))) return;
+      p.relay.forEach(rId => {
+        if (!relaySegs[rId]) return;
+        getRelayEventPairs(p, rId).forEach(seg => {
+          if (seg.endMin === null || seg.endMin === undefined) return; // בלוק-פתוח-ללא-סוף — לא נתמך בגרסה זו עדיין
+          relaySegs[rId].push({
+            startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
+            isOn: seg.action === 'ON',
+            kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
+            progId: p.id, label: p.name
+          });
+        });
+      });
+      const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
+      if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
+        getRelayEventPairs(child, child.relay[0]).forEach(seg => {
+          if (seg.endMin === null || seg.endMin === undefined) return;
+          relaySegs[child.relay[0]].push({
+            startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
+            isOn: seg.action === 'ON',
+            kind: seg.action === 'ON' ? 'on' : 'duration-end',
+            progId: child.id, label: child.name
+          });
+        });
+      }
+    });
+    const dateKey = ilDateKey(dayDate);
+    manualEvents.filter(e => e.date === dateKey).forEach(e => {
+      if (!relaySegs[e.relayId] || e.endMin === null || e.endMin === undefined) return;
+      relaySegs[e.relayId].push({
+        startMs: dayStart + e.startMin*60000, endMs: dayStart + e.endMin*60000,
+        isOn: true, kind: 'on', progId: null, label: e.source || 'ידני'
+      });
+    });
+  });
+
+  const activeRelays = [];
+  relays.forEach(r => {
+    const segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
+    if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
+    segs.sort((a,b) => a.startMs - b.startMs);
+    const filled = [];
+    let cursor = rangeStartMs;
+    segs.forEach(s => {
+      const st = Math.max(s.startMs, rangeStartMs), en = Math.min(s.endMs, rangeEndMs);
+      if (st > cursor) filled.push({ startMs: cursor, endMs: st, isOn: false, kind: 'gap', progId: null, label: '' });
+      if (en > st) filled.push({ ...s, startMs: st, endMs: en });
+      cursor = Math.max(cursor, en);
+    });
+    if (cursor < rangeEndMs) filled.push({ startMs: cursor, endMs: rangeEndMs, isOn: false, kind: 'gap', progId: null, label: '' });
+    activeRelays.push({ relay: r, segs: filled });
+  });
+
+  const container = document.getElementById('tl-minimal-container');
+  if (!container) return;
+  if (!activeRelays.length) { container.innerHTML = '<div style="padding:24px;color:var(--muted);text-align:center">אין שום פעילות בטווח המוצג</div>'; return; }
+
+  const pxPerMin = TL_MIN_PX_PER_HOUR/60;
+  const clampPx = durMin => Math.min(TL_MIN_BLOCK_MAX_PX, Math.max(TL_MIN_BLOCK_MIN_PX, durMin*pxPerMin));
+
+  let html = '<div style="display:flex;align-items:flex-start">';
+  activeRelays.forEach(({relay,segs}) => {
+    html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border)">
+      <div style="position:sticky;top:0;background:var(--surface2);padding:6px;text-align:center;font-weight:700;font-size:12px;border-bottom:1px solid var(--border);z-index:2">${relay.name}</div>
+      <div>`;
+    segs.forEach(s => {
+      const durMin = (s.endMs - s.startMs)/60000;
+      const h = Math.round(clampPx(durMin));
+      const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
+      const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
+      const bg = s.kind === 'gap' ? '#2a3142' : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
+      const cursorStyle = clickable ? 'cursor:pointer' : '';
+      const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
+      const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
+      html += `<div style="height:${h}px;background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
+    });
+    html += '</div></div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
 function renderTimeline(){
+  if (minimalViewMode) { renderTimelineMinimal(); return; }
   _relayEventsCache = {}; // reset per-render cache
   _runOnceDateCache = {}; // reset per-render cache
   initTlDates();
@@ -4667,7 +4794,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 21;
+BUILD_BOTTOM_MARK = 22;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
