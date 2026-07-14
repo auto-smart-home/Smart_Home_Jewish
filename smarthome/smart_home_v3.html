@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-S (תיקון: הגדלת חפיפת-הפיקסלים בין פס-הזמנים לכותרת-שמות-הממסרים ל-6px, כי -2 לא הספיק - ערך זה לא היה מאומת קודם כי .tabs לא sticky במצב מינימלי) -->
+<!-- BUILD_MARKER: v2026-07-12-T (תיקון-שורש אמיתי: עודכן top על tl-min-relay-header (בלי sticky בכלל) במקום tl-min-header-wrap (עם sticky) - בזכות פתרון המשתמש עם getBoundingClientRect) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 33;
+const BUILD_TOP_MARK = 34;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1839,18 +1839,15 @@ function updateStickyOffsets(){
   const toolbarH = toolbarEl?.offsetHeight || 0;
   const bulkEl = document.getElementById('bulk-bar');
   if(bulkEl) bulkEl.style.top = Math.max(0, topbarH + zH + tabsH + toolbarH - 4) + 'px';
-  // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — במצב הזה סרגל-הטאבים הראשי משוחרר מהקפאה
-  // (ראו toggleMinimalView), אז הכותרת הזו תופסת בדיוק את המקום שהוא היה תופס: מיד אחרי פס-הזמנים.
-const tlMinHeaderWrap = document.getElementById('tl-min-header-wrap');
-if (tlMinHeaderWrap && zEl) {
-  const zRect = zEl.getBoundingClientRect();
-  
-  // אנחנו רוצים שהעטיפה תתחיל בדיוק איפה שסרגל הזמנים מסתיים (zRect.bottom).
-  // מכיוון ש-style.top נקבע יחסית לראש ה-viewport (בגלל ה-sticky),
-  // אנחנו פשוט מציבים את ה-bottom של סרגל הזמנים ישירות כ-top של ה-Wrap!
-  // מפחיתים 1px לחפיפה קלה למניעת הבהוב.
-  tlMinHeaderWrap.style.top = Math.max(0, zRect.bottom - 1) + 'px';
-}
+  // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — הבאג האמיתי היה: עדכנו top על tl-min-relay-header
+  // (האלמנט הפנימי, בלי position:sticky בכלל!) במקום על tl-min-header-wrap (החיצוני, שבו יש sticky
+  // בפועל) — לכן שום ערך לא עבד. גם עוברים לחישוב מדויק לפי getBoundingClientRect().bottom של פס-
+  // הזמנים (המיקום האמיתי-בפועל) במקום סכימת-גבהים נפרדת שהצטברה עם טעויות-עיגול תת-פיקסל.
+  const tlMinHeaderWrap = document.getElementById('tl-min-header-wrap');
+  if(tlMinHeaderWrap && zEl){
+    const zRect = zEl.getBoundingClientRect();
+    tlMinHeaderWrap.style.top = Math.max(0, zRect.bottom - 1) + 'px';
+  }
 }
 
 // ── HELPERS ───────────────────────────────────────────────
@@ -4899,7 +4896,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 33;
+BUILD_BOTTOM_MARK = 34;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
