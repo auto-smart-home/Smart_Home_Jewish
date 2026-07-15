@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-U (תיקון: הפעלת-הורה מבחוץ (לא דרך עריכה+שמירה) לא הפעילה בחזרה תוכנית-בת מושבתת - נוסף הכיוון ההפוך למה שכבר קיים לכיבוי) -->
+<!-- BUILD_MARKER: v2026-07-12-V (תצוגה-מינימלית: תיקון-קריטי - השטחת קטעים חופפים (2 תוכניות-בת על אותו ממסר) לפני מילוי-פערים, וגם direction:ltr לטווח-השעות בכל בלוק) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 35;
+const BUILD_TOP_MARK = 36;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3491,11 +3491,33 @@ function renderTimelineMinimal(){
     });
   });
 
+  // משטח קטעים חופפים לתת-קטעים לא-חופפים — קריטי כששתי תוכניות שונות (למשל שתי תוכניות-בת
+  // ממחזורים שונים) חולקות את אותו ממסר וזמניהן חופפים בזמן. בלי זה, מילוי-הפערים בהמשך הנחה
+  // בטעות שקטעים תמיד רצופים-לא-חופפים, וזה בלבל לגמרי את הזמנים המוצגים.
+  function flattenOverlaps(segs){
+    if (segs.length<=1) return segs;
+    const points = new Set();
+    segs.forEach(s => { points.add(s.startMs); points.add(s.endMs); });
+    const sorted = [...points].sort((a,b)=>a-b);
+    const result = [];
+    for (let i=0;i<sorted.length-1;i++){
+      const segStart = sorted[i], segEnd = sorted[i+1];
+      if (segEnd<=segStart) continue;
+      const mid = (segStart+segEnd)/2;
+      const covering = segs.filter(s => s.startMs<=mid && s.endMs>=segEnd);
+      if (!covering.length) continue;
+      const chosen = covering.find(s => s.isOn) || covering[0];
+      result.push({ ...chosen, startMs: segStart, endMs: segEnd });
+    }
+    return result;
+  }
+
   const activeRelays = [];
   relays.forEach(r => {
-    const segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
+    let segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
     if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
     segs.sort((a,b) => a.startMs - b.startMs);
+    segs = flattenOverlaps(segs);
     // בודק את המצב-בפועל של הממסר ברגע נתון (כולל לוקבאק/רקע) — אותה פונקציה שהתצוגה הרגילה כבר
     // משתמשת בה. "פער" (אין תוכנית מפורשת) לא בהכרח כבוי בפועל — למשל אחרי כיבוי-לפי-משך של תוכנית
     // עם action=OFF, הממסר חוזר לדלוק (המצב-הקודם), גם בלי תוכנית מפורשת שמכסה את זה.
@@ -3611,7 +3633,7 @@ function renderTimelineMinimal(){
         const cursorStyle = clickable ? 'cursor:pointer' : '';
         const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
         const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
-        html += `<div style="height:${h}px;background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
+        html += `<div style="height:${h}px;background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
       });
       html += '</div>';
     });
@@ -4903,7 +4925,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 35;
+BUILD_BOTTOM_MARK = 36;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
