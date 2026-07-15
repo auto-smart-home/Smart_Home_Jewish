@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-T (תיקון-שורש אמיתי: עודכן top על tl-min-relay-header (בלי sticky בכלל) במקום tl-min-header-wrap (עם sticky) - בזכות פתרון המשתמש עם getBoundingClientRect) -->
+<!-- BUILD_MARKER: v2026-07-12-U (תיקון: הפעלת-הורה מבחוץ (לא דרך עריכה+שמירה) לא הפעילה בחזרה תוכנית-בת מושבתת - נוסף הכיוון ההפוך למה שכבר קיים לכיבוי) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 34;
+const BUILD_TOP_MARK = 35;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -2449,6 +2449,13 @@ function toggleProgActive(id){
     if(!p.active && p.childProgId){
       const child=programs.find(x=>x.id===p.childProgId);
       if(child && child.active) child.active=false;
+    }
+    // ההפוך: הפעלת הורה מבחוץ (לא דרך עריכה+שמירה) חייבת להפעיל בחזרה גם את הבת — אחרת היא נשארת
+    // מושבתת מכיבוי קודם, ההורה "רץ" אבל הבת לא מופיעה בציר-הזמן עד שנכנסים לעריכה ושומרים (בדיוק
+    // התקלה שדווחה: "מפעילים מבחוץ, ציר-הזמן מציג רק את ההורה, עד שנכנסים לעריכה+שמירה").
+    if(p.active && p.childProgId){
+      const child=programs.find(x=>x.id===p.childProgId);
+      if(child && !child.active) child.active=true;
     }
     addLog('info', `תוכנית "${p.name}" — ${p.active ? 'הופעלה ✅' : 'הושבתה ⏸'}`);
     renderPrograms();renderRelays();saveLS();
@@ -4896,7 +4903,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 34;
+BUILD_BOTTOM_MARK = 35;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
