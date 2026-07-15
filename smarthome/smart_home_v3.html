@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-V (תצוגה-מינימלית: תיקון-קריטי - השטחת קטעים חופפים (2 תוכניות-בת על אותו ממסר) לפני מילוי-פערים, וגם direction:ltr לטווח-השעות בכל בלוק) -->
+<!-- BUILD_MARKER: v2026-07-12-W (תיקון-קריטי: תוכניות-בת עם childConfine:false (endMin=null) היו מדולגות לגמרי בתצוגה-המינימלית - נכללות עכשיו, עם ווידוא-מצב מול getRelayStateAtTime) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 36;
+const BUILD_TOP_MARK = 37;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3459,24 +3459,27 @@ function renderTimelineMinimal(){
       p.relay.forEach(rId => {
         if (!relaySegs[rId]) return;
         getRelayEventPairs(p, rId).forEach(seg => {
-          if (seg.endMin === null || seg.endMin === undefined) return; // בלוק-פתוח-ללא-סוף — לא נתמך בגרסה זו עדיין
+          // בלוק-פתוח-ללא-סוף (למשל childConfine:false) — לא מדלגים! מכסים עד סוף-הטווח כברירת-מחדל,
+          // ומסמנים openEnded כדי שהשטחת-החפיפות תעדיף קטע-תחום-ומדויק על פניו כשיש כזה, אבל עדיין
+          // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
+          const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[rId].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
-            progId: p.id, label: p.name
+            progId: p.id, label: p.name, openEnded: isOpenEnded
           });
         });
       });
       const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
       if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
         getRelayEventPairs(child, child.relay[0]).forEach(seg => {
-          if (seg.endMin === null || seg.endMin === undefined) return;
+          const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[child.relay[0]].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : 'duration-end',
-            progId: child.id, label: child.name
+            progId: child.id, label: child.name, openEnded: isOpenEnded
           });
         });
       }
@@ -3506,7 +3509,11 @@ function renderTimelineMinimal(){
       const mid = (segStart+segEnd)/2;
       const covering = segs.filter(s => s.startMs<=mid && s.endMs>=segEnd);
       if (!covering.length) continue;
-      const chosen = covering.find(s => s.isOn) || covering[0];
+      // מעדיפים קטע תחום-ומדויק (לא openEnded) על פני קטע-פתוח-בניחוש — אם יש כמה תחומים-מדויקים,
+      // מעדיפים דולק. רק אם כל מה שמכסה כאן הוא openEnded, משתמשים באחד מהם (הכי טוב שיש).
+      const bounded = covering.filter(s => !s.openEnded);
+      const pool = bounded.length ? bounded : covering;
+      const chosen = pool.find(s => s.isOn) || pool[0];
       result.push({ ...chosen, startMs: segStart, endMs: segEnd });
     }
     return result;
@@ -3533,7 +3540,9 @@ function renderTimelineMinimal(){
     segs.forEach(s => {
       const st = Math.max(s.startMs, rangeStartMs), en = Math.min(s.endMs, rangeEndMs);
       if (st > cursor) filled.push({ startMs: cursor, endMs: st, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
-      if (en > st) filled.push({ ...s, startMs: st, endMs: en });
+      // לקטע openEnded (ניחוש-בלבד, מ-childConfine:false וכדומה) מוודאים את isOn מול המצב-האמיתי —
+      // קטע תחום-ומדויק (isEndEvent/off-action רגילים) נשאר מהימן כפי שהוא, בלי לבדוק מחדש.
+      if (en > st) filled.push({ ...s, startMs: st, endMs: en, isOn: s.openEnded ? stateAt((st+en)/2) : s.isOn });
       cursor = Math.max(cursor, en);
     });
     if (cursor < rangeEndMs) filled.push({ startMs: cursor, endMs: rangeEndMs, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
@@ -4925,7 +4934,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 36;
+BUILD_BOTTOM_MARK = 37;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
