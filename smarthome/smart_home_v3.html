@@ -1608,9 +1608,16 @@ function findNextCandlesAndHavdalah(fromDate){
     if(!entry) continue;
     const tmrw=new Date(d); tmrw.setDate(tmrw.getDate()+1);
     const tEntry=getCalEntry(tmrw);
-    if(!nextCandles && entry['שקיעה'] && isAssurMelachaEntryClient(tEntry)){
-      if(i>0 || !timeAlreadyPassed(entry['שקיעה'], fromDate)){
-        nextCandles={date:d, time:entry['שקיעה'], label:labelForCalEntry(tEntry)};
+    // הדלקת נרות: אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום, לא זמן-השקיעה עצמו
+    const candlesTimeStr = entry['שקיעה'] ? (() => {
+      const m = timeStrToMinutesLocal(entry['שקיעה']);
+      if (m === null) return null;
+      const cm = (m - 22 + 1440) % 1440;
+      return `${String(Math.floor(cm/60)).padStart(2,'0')}:${String(cm%60).padStart(2,'0')}`;
+    })() : null;
+    if(!nextCandles && candlesTimeStr && isAssurMelachaEntryClient(tEntry)){
+      if(i>0 || !timeAlreadyPassed(candlesTimeStr, fromDate)){
+        nextCandles={date:d, time:candlesTimeStr, label:labelForCalEntry(tEntry)};
       }
     }
     if(!nextHavdalah && entry['מוצאי שבת'] && isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry)){
@@ -1643,7 +1650,9 @@ function getZmanMinutesForDateSM(zmanVal, dayDate){
     const tEntry = getCalEntry(tmrw);
     if(zmanVal==='candles'){
       if(!isAssurMelachaEntryClient(tEntry)) return null;
-      return timeStrToMinutesLocal(entry['שקיעה']);
+      // אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום, לא זמן-השקיעה עצמו
+      const sunsetMin = timeStrToMinutesLocal(entry['שקיעה']);
+      return sunsetMin !== null ? sunsetMin - 22 : null;
     } else {
       if(!(isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry))) return null;
       return timeStrToMinutesLocal(entry['מוצאי שבת']);
