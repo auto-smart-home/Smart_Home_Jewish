@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AE (תיקון: יחס נגזר מהעמודה-העמוסה-ביותר לפי הקטע-הקצר-שלה (מונע חפיפה), ותווית '24:00' במקום '00:00' מבלבל לקטע שנמשך עד סוף היום) -->
+<!-- BUILD_MARKER: v2026-07-12-AF (תיקון-קריטי: הוסרה הגבלת-מקסימום מגובה-בלוק - עם מיקום-מוחלט, מקסימום יוצר פער-ריק לפני הבלוק-הבא (שממוקם לפי-זמן-אמיתי, לא לפי-מה-שכבר-צויר)) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 45;
+const BUILD_TOP_MARK = 46;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3678,7 +3678,7 @@ function renderTimelineMinimal(){
         const startMinOfDay = (s.startMs - dayStartMs)/60000;
         const durMin = (s.endMs - s.startMs)/60000;
         const top = Math.round(startMinOfDay*GLOBAL_RATIO);
-        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(Math.min(TL_MIN_BLOCK_MAX_PX, durMin*GLOBAL_RATIO)));
+        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(durMin*GLOBAL_RATIO));
         const startStr = fmtEpochHM(s.startMs);
         let endStr = fmtEpochHM(s.endMs);
         if (endStr === '00:00' && s.endMs > s.startMs) endStr = '24:00'; // סוף-היום, לא התחלתו — מונע "00:00–00:00" מבלבל לקטע שנמשך עד חצות
@@ -4979,7 +4979,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 45;
+BUILD_BOTTOM_MARK = 46;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
