@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-Z (תיקון: תצוגה-מינימלית לא סרקה יום-לפני-הטווח - יום ראשון הציג רק מהרגע שתוכנית מתחילה-מחדש, לא את ההמשך מאתמול (תוכנית שבועית/יומית)) -->
+<!-- BUILD_MARKER: v2026-07-12-AA (תיקון-קריטי: מתיחה חזרה להיות אחידה על הכל כולל פערים - ההחרגה הקודמת של פערים שברה סדר-גודל (פער-19-שעות קטן מבלוק-4-שעות)) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 40;
+const BUILD_TOP_MARK = 41;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3651,20 +3651,16 @@ function renderTimelineMinimal(){
       // מתיחה פרופורציונלית: אם לעמודה הזו (ביום הזה) יש פחות תוכן מהעמודה-העמוסה-ביותר (שקבעה
       // את rowH), נשאר מקום ריק בתחתית. ממתחים את כל הבלוקים באותה עמודה באותו יחס אחיד — לא רק
       // הקצרים — כדי לשמר את היחסים המדויקים בין בלוק-קצר לבלוק-ארוך (בלוק-20-דק' תמיד גדול מבלוק-
-      // 8-דק' באותו יחס), רק שכולם קצת יותר גדולים ומנצלים את השטח הפנוי, במקום להשאיר אותו ריק.
-      // חישוב-היחס מתבסס רק על בלוקים אמיתיים (לא פערים) — פערים "בולעים" יותר מדי מהתקציב (גם הם
-      // מוגבלים-למקסימום), מה שהיה משאיר מעט מדי יחס בפועל לבלוקים הקטנים. עכשיו רוב תקציב-המתיחה
-      // הולך לבלוקים המשמעותיים, כדי שהפרש 8-דק' מול 20-דק' יהיה ניכר גם כשיש הרבה מקום פנוי.
-      const realBlocksH = daySegs.filter(s=>s.kind!=='gap').reduce((sum,s) => sum + clampPxNoFloor((s.endMs-s.startMs)/60000), 0);
-      const gapsH = daySegs.filter(s=>s.kind==='gap').reduce((sum,s) => sum + clampPxNoFloor((s.endMs-s.startMs)/60000), 0);
-      const colNaturalH = realBlocksH + gapsH;
-      const availableForReal = Math.max(realBlocksH, rowH - gapsH);
-      const stretchRatio = realBlocksH > 0 ? Math.max(1, availableForReal / realBlocksH) : 1;
+      // מתיחה אחידה על **הכל** (כולל פערים) — קריטי לשמירת סדר-גודל נכון: משך ארוך תמיד גדול ממשך
+      // קצר, גם בין פער לבלוק-אמיתי. (ניסיון קודם להחריג פערים מהמתיחה נתן יותר "ניכר" בין בלוקים
+      // קטנים, אבל שבר את זה: פער-19-שעות נשאר קפוא על 220px בלי מתיחה, בעוד בלוק-4-שעות שכן נמתח
+      // יכול לעבור אותו — סדר-גודל הפוך ומבלבל. זה חמור יותר מהבדלה-פחות-דרמטית בין בלוקים-קטנים.)
+      const colNaturalH = daySegs.reduce((sum,s) => sum + clampPxNoFloor((s.endMs-s.startMs)/60000), 0);
+      const stretchRatio = colNaturalH > 0 ? Math.max(1, rowH / colNaturalH) : 1;
       html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);height:${rowH}px;overflow-y:auto">`;
       daySegs.forEach(s => {
         const durMin = (s.endMs - s.startMs)/60000;
-        const effRatio = s.kind==='gap' ? 1 : stretchRatio;
-        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(clampPxNoFloor(durMin) * effRatio));
+        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(clampPxNoFloor(durMin) * stretchRatio));
         const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
         const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
         const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
@@ -4963,7 +4959,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 40;
+BUILD_BOTTOM_MARK = 41;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
