@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AD (תיקון-שורש: מיקום-מוחלט (position:absolute) לפי זמן-אמיתי-ביום במקום ערימה - מבטיח יישור-שעות מדויק ואין שטח-ריק, כי כל עמודה תמיד בגובה 1440×יחס בדיוק) -->
+<!-- BUILD_MARKER: v2026-07-12-AE (תיקון: יחס נגזר מהעמודה-העמוסה-ביותר לפי הקטע-הקצר-שלה (מונע חפיפה), ותווית '24:00' במקום '00:00' מבלבל לקטע שנמשך עד סוף היום) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 44;
+const BUILD_TOP_MARK = 45;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3610,7 +3610,19 @@ function renderTimelineMinimal(){
   // הגורם החשוב באמת: מיקום **מוחלט** של כל בלוק לפי זמן-ביום (לא ערימה של גבהים-בזה-אחר-זה) —
   // זה היחיד שמבטיח שאותה שעה נופלת באותו פיקסל בדיוק בכל עמודה, ושאין "ריק" (המיכל תמיד בגובה
   // 1440×יחס בדיוק, וכל בלוק ממוקם לפי המקום-האמיתי-בזמן שלו, לא לפי "מה שכבר נערם לפניו").
-  const GLOBAL_RATIO = Math.min(TL_MIN_PX_PER_HOUR/60, TL_MIN_DAY_VIEWPORT_PX/1440);
+  // מוצאים את העמודה-הכי-עמוסה (הכי הרבה קטעים, על פני כל הטווח) — וממנה, לפי הקטע-הקצר-ביותר
+  // *שלה עצמה*, נגזר יחס-פיקסלים-לדקה שמבטיח שגם הקטע הקצר הזה יקבל לפחות את גובה-המינימום —
+  // כלומר שהעמודה הזו לא תחפוף בתוך עצמה. היחס הזה חל על *כל* העמודות (מיקום-מוחלט לפי-זמן —
+  // לא ערימה — מבטיח שאותה שעה תמיד באותו פיקסל, בלי "ריק", ובלי חפיפה בעמודה-הכי-קשה).
+  let busiestSegs = null, busiestCount = -1;
+  activeRelays.forEach(({segs}) => { if (segs.length > busiestCount) { busiestCount = segs.length; busiestSegs = segs; } });
+  let shortestDurMin = Infinity;
+  if (busiestSegs) busiestSegs.forEach(s => {
+    const dur = (s.endMs-s.startMs)/60000;
+    if (dur > 0 && dur < shortestDurMin) shortestDurMin = dur;
+  });
+  const neededRatio = (shortestDurMin > 0 && shortestDurMin < Infinity) ? TL_MIN_BLOCK_MIN_PX/shortestDurMin : 0;
+  const GLOBAL_RATIO = Math.max(TL_MIN_PX_PER_HOUR/60, neededRatio);
   const GLOBAL_ROW_HEIGHT = Math.round(1440*GLOBAL_RATIO);
 
   let html = '<div>';
@@ -3667,7 +3679,9 @@ function renderTimelineMinimal(){
         const durMin = (s.endMs - s.startMs)/60000;
         const top = Math.round(startMinOfDay*GLOBAL_RATIO);
         const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(Math.min(TL_MIN_BLOCK_MAX_PX, durMin*GLOBAL_RATIO)));
-        const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
+        const startStr = fmtEpochHM(s.startMs);
+        let endStr = fmtEpochHM(s.endMs);
+        if (endStr === '00:00' && s.endMs > s.startMs) endStr = '24:00'; // סוף-היום, לא התחלתו — מונע "00:00–00:00" מבלבל לקטע שנמשך עד חצות
         const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
         const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
         const cursorStyle = clickable ? 'cursor:pointer' : '';
@@ -4965,7 +4979,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 44;
+BUILD_BOTTOM_MARK = 45;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
