@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AF (תיקון-קריטי: הוסרה הגבלת-מקסימום מגובה-בלוק - עם מיקום-מוחלט, מקסימום יוצר פער-ריק לפני הבלוק-הבא (שממוקם לפי-זמן-אמיתי, לא לפי-מה-שכבר-צויר)) -->
+<!-- BUILD_MARKER: v2026-07-12-AG (תיקון: מתעלמים מקטעים-חריגים-זעירים (מתחת 7 דק', שאריות-מחזור) בחישוב-היחס - גובה-יום ירד מ-7200 ל-3600px, חפיפה-קלה רק לחריגים הנדירים) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 46;
+const BUILD_TOP_MARK = 47;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3616,11 +3616,17 @@ function renderTimelineMinimal(){
   // לא ערימה — מבטיח שאותה שעה תמיד באותו פיקסל, בלי "ריק", ובלי חפיפה בעמודה-הכי-קשה).
   let busiestSegs = null, busiestCount = -1;
   activeRelays.forEach(({segs}) => { if (segs.length > busiestCount) { busiestCount = segs.length; busiestSegs = segs; } });
-  let shortestDurMin = Infinity;
+  // מתעלמים מקטעים-זעירים-חריגים (מתחת ל-7 דקות — לרוב שאריות-מחזור בודדות, לא הדפוס האמיתי) בחישוב
+  // הקטע-הקצר-לצורך-היחס — אחרת חריג נדיר-אחד-בודד מנפח את גובה-היום לאבסורד עבור כולם. אם *כל*
+  // הקטעים חריגים-זעירים (מקרה-קיצון נדיר), חוזרים לקטע-הכי-קצר-בפועל כרשת-ביטחון.
+  const IGNORE_UNDER_MIN = 7;
+  let shortestDurMin = Infinity, shortestIgnoringOutliers = Infinity;
   if (busiestSegs) busiestSegs.forEach(s => {
     const dur = (s.endMs-s.startMs)/60000;
     if (dur > 0 && dur < shortestDurMin) shortestDurMin = dur;
+    if (dur >= IGNORE_UNDER_MIN && dur < shortestIgnoringOutliers) shortestIgnoringOutliers = dur;
   });
+  if (shortestIgnoringOutliers < Infinity) shortestDurMin = shortestIgnoringOutliers;
   const neededRatio = (shortestDurMin > 0 && shortestDurMin < Infinity) ? TL_MIN_BLOCK_MIN_PX/shortestDurMin : 0;
   const GLOBAL_RATIO = Math.max(TL_MIN_PX_PER_HOUR/60, neededRatio);
   const GLOBAL_ROW_HEIGHT = Math.round(1440*GLOBAL_RATIO);
@@ -4979,7 +4985,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 46;
+BUILD_BOTTOM_MARK = 47;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
