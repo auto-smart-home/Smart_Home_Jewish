@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-Y (תיקון: המתיחה לא הבדילה בין 8 ל-20 דקות (עיגול-למינימום קרה לפני המתיחה) - עכשיו מותח את הגובה הגולמי, ופערים לא 'בולעים' מתקציב-המתיחה של בלוקים אמיתיים) -->
+<!-- BUILD_MARKER: v2026-07-12-Z (תיקון: תצוגה-מינימלית לא סרקה יום-לפני-הטווח - יום ראשון הציג רק מהרגע שתוכנית מתחילה-מחדש, לא את ההמשך מאתמול (תוכנית שבועית/יומית)) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 39;
+const BUILD_TOP_MARK = 40;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3446,7 +3446,11 @@ function renderTimelineMinimal(){
   const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
   relays.forEach(r => relaySegs[r.id] = []);
 
-  dates.forEach(dayDate => {
+  // סורקים גם יום אחד *לפני* תחילת-הטווח המוצג — כדי לתפוס תוכניות (למשל מחזוריות-כל-השבוע) שההשפעה
+  // שלהן ממשיכה לתוך היום הראשון המוצג. בלי זה, היום הראשון מציג רק מהרגע שבו תוכנית-שלו-עצמה
+  // מתחילה מחדש, ומפספס את ה"זנב" שממשיך מאתמול (בדיוק הבעיה שנפתרה בתצוגה הרגילה עם carriedOverEnds).
+  const dayBeforeRange = new Date(rangeStartMs - 86400000);
+  [dayBeforeRange, ...dates].forEach(dayDate => {
     const dayStart = dayDate.getTime();
     const dayEnd = dayStart + 86400000;
     const relevantModes = new Set();
@@ -4950,7 +4954,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 39;
+BUILD_BOTTOM_MARK = 40;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
