@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AB (תיקון-קריטי: קטע-פתוח (childConfine:false) שהניחוש שלו התברר שגוי (מול getRelayStateAtTime) הפך בטעות לבלוק-מיוחס-ולחיץ במקום פער-אנונימי) -->
+<!-- BUILD_MARKER: v2026-07-12-AC (תצוגה-מינימלית: שכתוב-קנה-מידה - יחס-פיקסלים-לדקה נגזר לכל יום מהעמודה-העמוסה-ביותר, וחל אחיד על כל העמודות (אותה שעה=אותו גובה בכל מקום)) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 42;
+const BUILD_TOP_MARK = 43;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3605,17 +3605,50 @@ function renderTimelineMinimal(){
   }
   const relayPerDay = activeRelays.map(({relay,segs}) => ({ relay, perDay: splitByDays(segs) }));
 
-  // גובה טבעי (בלי תקרה) של יום נתון בעמודה נתונה — כדי לקבוע גובה-שורה אחיד לכל העמודות באותו יום
-  // (המקסימלי מביניהן, בכפוף לתקרה) — כך שקו-מפריד-היום נופל באותו מקום בדיוק בכל העמודות.
-  const dayNaturalHeight = dates.map((_, dIdx) => {
-    let maxH = 0;
+  // לכל יום: מוצאים את העמודה-העמוסה-ביותר (הכי הרבה תוכן, בגודל-ברירת-המחדל), וממנה גוזרים
+  // יחס-פיקסלים-לדקה **אחד** שחל על *כל* העמודות באותו יום — כך שאותה שעה תמיד נופלת באותו גובה-
+  // פיקסלים בדיוק בכל העמודות, וקל להשוות בין ממסרים במבט-אחד. אין יותר "מתיחה אישית לכל עמודה" —
+  // עמודה פחות-עמוסה פשוט תראה יותר "כבוי", לא "ריק" (כל דקה בכל היום מיוצגת נאמנה, באותו יחס).
+  const DEFAULT_RATIO = TL_MIN_PX_PER_HOUR/60;
+  function naturalHeightAtRatio(segs, ratio){
+    return segs.reduce((sum,s) => sum + Math.min(TL_MIN_BLOCK_MAX_PX, Math.max(TL_MIN_BLOCK_MIN_PX, (s.endMs-s.startMs)/60000*ratio)), 0);
+  }
+  const dayRatio = [], dayRowHeight = [];
+  dates.forEach((_, dIdx) => {
+    let busiestSegs = null, busiestNaturalAtDefault = -1;
     relayPerDay.forEach(({perDay}) => {
-      const h = perDay[dIdx].reduce((sum,s) => sum + clampPx((s.endMs-s.startMs)/60000), 0);
-      if (h > maxH) maxH = h;
+      const segs = perDay[dIdx];
+      if (!segs.length) return;
+      const h = naturalHeightAtRatio(segs, DEFAULT_RATIO);
+      if (h > busiestNaturalAtDefault) { busiestNaturalAtDefault = h; busiestSegs = segs; }
     });
-    return maxH;
+    if (!busiestSegs) { dayRatio.push(DEFAULT_RATIO); dayRowHeight.push(TL_MIN_BLOCK_MIN_PX); return; }
+    if (busiestNaturalAtDefault <= TL_MIN_DAY_VIEWPORT_PX) {
+      // כבר נכנס בנוחות בגודל-ברירת-המחדל — אין שום צורך לדחוס יותר
+      dayRatio.push(DEFAULT_RATIO);
+      dayRowHeight.push(busiestNaturalAtDefault);
+      return;
+    }
+    // בדיקה חשובה: גם בדחיסה-מלאה (יחס=0, כל קטע במינימום הטהור) יש תקרת-מינימום-מוחלטת (מספר-
+    // הקטעים × TL_MIN_BLOCK_MIN_PX) שאי-אפשר לרדת מתחתיה, לא משנה איזה יחס נבחר. אם התקרה-המוחלטת-
+    // הזו כבר עוברת את גובה-היעד — חיפוש-בינארי לא יעזור בכלל (וידחוף בטעות את היחס לכמעט-אפס, מה
+    // שהורס את הפרופורציה לעמודות-דלילות-יותר) — פשוט משתמשים בברירת-המחדל, והיום יגלול.
+    const floorOnlyHeight = naturalHeightAtRatio(busiestSegs, 0);
+    if (floorOnlyHeight >= TL_MIN_DAY_VIEWPORT_PX) {
+      dayRatio.push(DEFAULT_RATIO);
+      dayRowHeight.push(Math.max(busiestNaturalAtDefault, floorOnlyHeight));
+      return;
+    }
+    // דוחסים: חיפוש-בינארי ליחס-הכי-גדול-שעדיין-נכנס ב-TL_MIN_DAY_VIEWPORT_PX (לא יותר מברירת-המחדל)
+    let lo = 0, hi = DEFAULT_RATIO;
+    for (let iter=0; iter<30; iter++){
+      const mid = (lo+hi)/2;
+      const h = naturalHeightAtRatio(busiestSegs, mid);
+      if (h > TL_MIN_DAY_VIEWPORT_PX) hi = mid; else lo = mid;
+    }
+    dayRatio.push(lo);
+    dayRowHeight.push(naturalHeightAtRatio(busiestSegs, lo));
   });
-  const dayRowHeight = dayNaturalHeight.map(h => Math.max(TL_MIN_BLOCK_MIN_PX, Math.min(TL_MIN_DAY_VIEWPORT_PX, h)));
 
   let html = '<div>';
   // שורת-כותרות-הממסרים — במיכל-גלילה-אופקית נפרד משלה (overflow-y:hidden, לא visible — נמנעים
@@ -3669,12 +3702,14 @@ function renderTimelineMinimal(){
       // קצר, גם בין פער לבלוק-אמיתי. (ניסיון קודם להחריג פערים מהמתיחה נתן יותר "ניכר" בין בלוקים
       // קטנים, אבל שבר את זה: פער-19-שעות נשאר קפוא על 220px בלי מתיחה, בעוד בלוק-4-שעות שכן נמתח
       // יכול לעבור אותו — סדר-גודל הפוך ומבלבל. זה חמור יותר מהבדלה-פחות-דרמטית בין בלוקים-קטנים.)
-      const colNaturalH = daySegs.reduce((sum,s) => sum + clampPxNoFloor((s.endMs-s.startMs)/60000), 0);
-      const stretchRatio = colNaturalH > 0 ? Math.max(1, rowH / colNaturalH) : 1;
+      // כל בלוק בכל עמודה משתמש ביחס-הפיקסלים-לדקה **המשותף לכל היום** (dayRatio[dIdx]) — לא יחס
+      // אישי-לעמודה. זה מה שמבטיח שאותה שעה נופלת באותו גובה-פיקסלים בדיוק בכל העמודות, ושעמודה
+      // פחות-עמוסה פשוט מציגה יותר "כבוי" (משמעותי) ולא "ריק" — כל דקה בכל היום מיוצגת נאמנה.
+      const ratio = dayRatio[dIdx];
       html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);height:${rowH}px;overflow-y:auto">`;
       daySegs.forEach(s => {
         const durMin = (s.endMs - s.startMs)/60000;
-        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(clampPxNoFloor(durMin) * stretchRatio));
+        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(Math.min(TL_MIN_BLOCK_MAX_PX, durMin*ratio)));
         const startStr = fmtEpochHM(s.startMs), endStr = fmtEpochHM(s.endMs);
         const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
         const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
@@ -4973,7 +5008,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 42;
+BUILD_BOTTOM_MARK = 43;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
