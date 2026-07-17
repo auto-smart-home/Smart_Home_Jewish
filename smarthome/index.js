@@ -1,1685 +1,5102 @@
-const express = require('express');
-const bcrypt = require('bcrypt');
-const mqtt = require('mqtt');
-const http = require('http');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
-const { Server } = require('socket.io');
-const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
+<!DOCTYPE html>
+<!-- BUILD_MARKER: v2026-07-13-C (השלמת-התיקון-הדחוף: אותה בדיקה-מדויקת-לפי-זמן הוחלה גם על תוכניות-מאתמול-חוצות-חצות (carriedOverEnds) - חשוב לשבת עם תזמוני-מצב) -->
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>בית חכם — KC868</title>
+<script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <style>
+  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap');
 
-// סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
-// ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
-// שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 8;
-
-// ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
-
-// ── DATA DIR — /share/smarthome-data במצב add-on, ./data במצב ידני ──
-const DATA_DIR = fs.existsSync('/share') 
-  ? '/share/smarthome-data' 
-  : path.join(__dirname, 'data');
-const CONFIG_FILE_LOCAL = path.join(DATA_DIR, 'config.json');
-
-try { 
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); 
-} catch(e) { console.error('⚠️ לא ניתן ליצור תיקיית data:', e.message); }
-
-console.log(`💾 תיקיית data: ${DATA_DIR}`);
-// config בסיסי — קרא מ-env או מ-config_base.json
-let config = {};
-try {
-  if (process.env.CONFIG_JSON) {
-    config = JSON.parse(process.env.CONFIG_JSON);
-    console.log('📂 config בסיסי נטען מ-CONFIG_JSON env');
-  } else if (fs.existsSync(path.join(__dirname, 'config_base.json'))) {
-    config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config_base.json'), 'utf-8'));
-    console.log('📂 config בסיסי נטען מ-config_base.json');
+  :root {
+    --bg: #080c14;
+    --surface: #0f1520;
+    --surface2: #161d2e;
+    --surface3: #1c2540;
+    --border: rgba(100,140,255,0.10);
+    --border2: rgba(100,140,255,0.20);
+    --accent: #4f8ef7;
+    --accent2: #34d399;
+    --accent3: #a78bfa;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --text: #dde3f0;
+    --text2: #a8b4cc;
+    --muted: #8a9ab8;
+    --on-color: #34d399;
+    --off-color: #2a3245;
   }
-  // אם CONTROLLERS חסר — נסה לטעון מ-/data/options.json (HA Add-on)
-  if (!config.CONTROLLERS && fs.existsSync('/data/options.json')) {
-    const opts = JSON.parse(fs.readFileSync('/data/options.json', 'utf-8'));
-    if (opts.controllers) {
-      config.CONTROLLERS = opts.controllers;
-      config.MQTT_URL = config.MQTT_URL || opts.mqtt_url;
-      config.MQTT_USER = config.MQTT_USER || opts.mqtt_user;
-      config.MQTT_PASS = config.MQTT_PASS || opts.mqtt_pass;
-      console.log(`📂 CONTROLLERS נטענו ישירות מ-/data/options.json (${opts.controllers.length} בקרים)`);
-    }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Heebo', sans-serif; min-height: 100vh; direction: rtl; }
+
+  /* TOPBAR */
+  .topbar {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 6px 18px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
   }
-} catch(e) {
-  console.error('❌ שגיאה בטעינת config בסיסי:', e.message);
-}
-
-// ── שמירה/טעינה מקומית (במקום GitHub) ──────────────────
-let _saveTimeout = null;
-
-function loadConfigLocal() {
-  try {
-    if (!fs.existsSync(CONFIG_FILE_LOCAL)) {
-      console.log('⚠️ אין קובץ config מקומי — מתחיל ריק');
-      return;
-    }
-    const raw = fs.readFileSync(CONFIG_FILE_LOCAL, 'utf-8');
-    const cfg = JSON.parse(raw);
-    if (cfg.programs)  { schedulerPrograms = cfg.programs; console.log(`📂 נטענו ${schedulerPrograms.length} תוכניות`); }
-    if (cfg.activeModeId !== undefined) schedulerActiveModeId = cfg.activeModeId;
-    if (cfg.scheduledModes) { scheduledModes = cfg.scheduledModes; console.log(`🕐 נטענו ${scheduledModes.length} תזמוני מצב`); }
-    if (cfg.serverConfig) serverConfig = cfg.serverConfig;
-    if (cfg.yemotPermissions) { yemotPermissions = cfg.yemotPermissions; console.log(`📞 נטענו הרשאות IVR ל-${Object.keys(yemotPermissions).length} מזהים`); }
-    if (cfg.ivrPendingTimers) { ivrPendingTimers = cfg.ivrPendingTimers; console.log(`⏱️ נטענו ${ivrPendingTimers.length} טיימרים ממתינים`); }
-    if (cfg.ivrTodayEvents) { ivrTodayEvents = cfg.ivrTodayEvents; }
-    if (cfg.haDevices) { 
-      haDevices = cfg.haDevices; 
-      // תיקון מאוחר — relayId יוקצה ב-rebuildHaRelayNames אחרי שה-CONTROLLERS נטענו
-      console.log(`🏠 נטענו ${haDevices.length} התקני HA`); 
-    }
-    if (cfg.haToken) { haToken = cfg.haToken; }
-    if (cfg.haUrl) { haUrl = cfg.haUrl; }
-    if (cfg.yemotPhoneMap) { yemotPhoneMap = cfg.yemotPhoneMap; }
-    if (cfg.users) {
-      runtimeUsers = cfg.users;
-      let needsSave = false;
-      runtimeUsers.forEach(u => {
-        if (u.password && !u.password.startsWith('$2b$') && !u.password.startsWith('$2a$')) {
-          u.password = bcrypt.hashSync(u.password, 10);
-          console.log(`🔐 סיסמת "${u.name}" הוצפנה בטעינה`);
-          needsSave = true;
-        }
-      });
-      if (needsSave) saveConfigLocal();
-    }
-    console.log('✅ config נטען מקומית');
-  } catch(e) {
-    console.log(`❌ שגיאה בטעינת config: ${e.message}`);
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .topbar-title { font-size: 18px; font-weight: 800; }
+  .topbar-title span { color: var(--accent); }
+  .mode-pill {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: 20px; padding: 4px 6px 4px 10px; font-size: 13px; cursor: default;
   }
-}
-
-function saveConfigLocal() {
-  clearTimeout(_saveTimeout);
-  _saveTimeout = setTimeout(() => {
-    try {
-      const cfg = {
-        programs: schedulerPrograms,
-        activeModeId: schedulerActiveModeId,
-        scheduledModes,
-        serverConfig,
-        users: runtimeUsers,
-        yemotPermissions,
-        yemotPhoneMap,
-        ivrPendingTimers,
-        ivrTodayEvents,
-        haDevices,
-        haToken,
-        haUrl,
-        savedAt: new Date().toISOString(),
-      };
-      fs.writeFileSync(CONFIG_FILE_LOCAL, JSON.stringify(cfg, null, 2), 'utf-8');
-      console.log('💾 config נשמר מקומית');
-    } catch(e) {
-      console.error('❌ שגיאה בשמירת config:', e.message);
-    }
-  }, 2000);
-}
-
-// ── HOME ASSISTANT INTEGRATION ───────────────────────────
-// התקני HA — רשימה שהמשתמש בחר להוסיף מ-/api/states
-let haDevices = []; // [{ entity_id, friendly_name, domain, relayId }]
-let haToken = ''; // Long-Lived Access Token של HA
-let haUrl = 'http://homeassistant.local:8123'; // כתובת HA המקומית
-
-// שליחת פקודה ל-HA (POST /api/services/switch/turn_on וכו')
-async function haCallService(domain, service, entityId) {
-  if (!haToken) throw new Error('לא הוגדר HA Token');
-  const url = `${haUrl}/api/services/${domain}/${service}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${haToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ entity_id: entityId }),
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`HA API שגיאה ${res.status}: ${txt}`);
+  .mode-pill .ml { color: var(--accent3); font-weight: 700; }
+  .mode-pill-btn {
+    background: var(--accent3); color: #fff; border: none;
+    border-radius: 12px; padding: 2px 8px; font-size: 12px;
+    cursor: pointer; font-family: 'Heebo', sans-serif;
   }
-  return res.json();
-}
-
-// קריאת מצב התקן מ-HA
-async function haGetState(entityId) {
-  if (!haToken) throw new Error('לא הוגדר HA Token');
-  const res = await fetch(`${haUrl}/api/states/${entityId}`, {
-    headers: { 'Authorization': `Bearer ${haToken}` }
-  });
-  if (!res.ok) throw new Error(`HA API שגיאה ${res.status}`);
-  return res.json();
-}
-
-// רשימת כל ה-entities הניתנות לשליטה (switch.*, light.*, input_boolean.*, fan.*)
-async function haFetchAllStates() {
-  if (!haToken) throw new Error('לא הוגדר HA Token — הגדר בכרטיסיית התקנים');
-  const res = await fetch(`${haUrl}/api/states`, {
-    headers: { 'Authorization': `Bearer ${haToken}` }
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`HA API שגיאה ${res.status}: ${txt}`);
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 4px 12px; font-size: 13px; color: var(--muted); transition: all 0.3s;
   }
-  const all = await res.json();
-  // סינון לישויות ניתנות לשליטה — לא כלים מובנים/מערכת
-  const SKIP_PREFIXES = ['sun.','weather.','zone.','tts.','update.','todo.','person.','persistent_notification.'];
-  const SKIP_SUFFIXES = ['_update','_version','_rssi','_lqi','_battery','_linkquality',
-    '_temperature','_humidity','_power_outage_memory','_uptime','_ssid','_wifi_connect_count',
-    '_restart_reason','_bridge_permit_join'];
-  return all.filter(e => {
-    const id = e.entity_id;
-    if (SKIP_PREFIXES.some(p => id.startsWith(p))) return false;
-    if (SKIP_SUFFIXES.some(s => id.endsWith(s))) return false;
-    // רק domainים ניתנים לשליטה
-    const domain = id.split('.')[0];
-    return ['switch','light','input_boolean','fan','cover','lock','climate'].includes(domain);
-  }).map(e => ({
-    entity_id: e.entity_id,
-    friendly_name: e.attributes?.friendly_name || e.entity_id,
-    state: e.state,
-    domain: e.entity_id.split('.')[0],
-  }));
-}
+  .status-pill.connected { color: var(--accent2); border-color: rgba(52,211,153,0.25); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+  .status-pill.connected .status-dot { background: var(--accent2); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
-// ── ימות המשיח — API ─────────────────────────────────────
-const YEMOT_API_TOKEN = process.env.YEMOT_API_TOKEN || '';
-const YEMOT_BASE_URL = 'https://www.call2all.co.il/ym/api';
-
-async function yemotDownloadFile(filePath) {
-  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
-  const params = new URLSearchParams({ token: YEMOT_API_TOKEN, path: filePath });
-  const res = await fetch(`${YEMOT_BASE_URL}/DownloadFile?${params}`);
-  const text = await res.text();
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{')) {
-    let data = {};
-    try { data = JSON.parse(trimmed); } catch (e) {}
-    throw new Error(data.message || 'שגיאה בקריאת הקובץ מימות המשיח');
+  /* ZMANIM */
+  .zmanim-bar {
+    background-color: var(--surface);
+    background-image: linear-gradient(90deg, rgba(79,142,247,0.08), rgba(52,211,153,0.08));
+    border-bottom: 1px solid var(--border); padding: 2px 18px; margin-bottom:0;
+    display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted);
   }
-  return text;
-}
+  .zmanim-item { display: flex; align-items: center; gap: 5px; }
+  .zmanim-bar { position: sticky; z-index: 95; }
+  .z-label { color: var(--accent); font-weight: 600; }
 
-async function yemotUploadFile(filePath, content, filename) {
-  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
-  const params = new URLSearchParams({ token: YEMOT_API_TOKEN, path: filePath });
-  const form = new FormData();
-  form.append('file', new Blob([content], { type: 'text/plain' }), filename);
-  const res = await fetch(`${YEMOT_BASE_URL}/UploadFile?${params}`, { method: 'POST', body: form });
-  const data = await res.json();
-  if (data.responseStatus !== 'OK') throw new Error(data.message || 'שגיאה בשמירת הקובץ לימות המשיח');
-  return data;
-}
+  /* MAIN */
+  .main { padding: 6px 14px; max-width: 1500px; margin: 0 auto; }
 
-async function yemotGetTemplates() {
-  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
-  const params = new URLSearchParams({ token: YEMOT_API_TOKEN });
-  const res = await fetch(`${YEMOT_BASE_URL}/GetTemplates?${params}`);
-  const data = await res.json();
-  if (data.responseStatus !== 'OK') throw new Error(data.message || 'שגיאה בקבלת תבניות');
-  return data.templates || [];
-}
-
-async function yemotGetWhitelistTemplateId() {
-  const templates = await yemotGetTemplates();
-  const whitelistTemplates = templates.filter(t => t.incomingPolicy === 'WHITELIST');
-  if (!whitelistTemplates.length) throw new Error('לא נמצאה תבנית WHITELIST');
-  const def = whitelistTemplates.find(t => t.customerDefault);
-  return (def || whitelistTemplates[0]).templateId;
-}
-
-async function yemotGetTemplateEntries(templateId) {
-  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
-  const params = new URLSearchParams({ token: YEMOT_API_TOKEN, templateId });
-  const res = await fetch(`${YEMOT_BASE_URL}/GetTemplateEntries?${params}`);
-  const data = await res.json();
-  if (data.responseStatus !== 'OK') throw new Error(data.message || 'שגיאה');
-  return data.entries || [];
-}
-
-async function yemotAddPhoneToWhitelist(templateId, phone) {
-  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
-  const params = new URLSearchParams({ token: YEMOT_API_TOKEN, templateId, data: phone });
-  const res = await fetch(`${YEMOT_BASE_URL}/UploadPhoneList?${params}`);
-  const data = await res.json();
-  if (data.responseStatus !== 'OK') throw new Error(data.message || `שגיאה בהוספת ${phone}`);
-  return data;
-}
-
-function normalizePhoneDigits(p) { return (p || '').replace(/\D/g, ''); }
-
-// ── EXPRESS + SOCKET.IO ──────────────────────────────────
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
-
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(express.static(__dirname));
-
-// ── MQTT — מקומי (core-mosquitto של HA) ─────────────────
-// ה-URL מגיע מ-config_base.json או מ-env: mqtt://192.168.1.24:1883 (לא "tramway.railway...")
-const MQTT_URL = config.MQTT_URL || process.env.MQTT_URL || 'mqtt://core-mosquitto:1883';
-const MQTT_USER = config.MQTT_USER || process.env.MQTT_USER || '';
-const MQTT_PASS = config.MQTT_PASS || process.env.MQTT_PASS || '';
-
-// ── CONTROLLERS ──────────────────────────────────────────
-// תמיכה בשני פורמטים: relayCount (camelCase) ו-relay_count (snake_case מ-HA options)
-const CONTROLLERS = (config.CONTROLLERS || []).map(c => ({
-  ...c,
-  relayCount: c.relayCount || c.relay_count || 0,
-}));
-
-// ── IVR STATE ────────────────────────────────────────────
-let yemotPhoneMap = config.YEMOT_PHONE_MAP || {};
-let yemotPermissions = {};
-let ivrPendingTimers = [];
-let ivrTodayEvents = [];
-
-function getOrderedRelayIds() {
-  return Object.keys(schedulerRelayNames).map(Number).sort((a, b) => a - b);
-}
-
-function buildIvrUsersList() {
-  return Object.entries(yemotPhoneMap).map(([phone, id]) => {
-    const perm = yemotPermissions[id] || {};
-    return {
-      id, phone,
-      name: perm.name || `מתקשר ${id}`,
-      isAdmin: !!perm.isAdmin,
-      allowedRelays: perm.allowedRelays || [],
-      allowedActions: perm.allowedActions || ['ON','OFF'],
-      maxDurationMinOn: perm.maxDurationMinOn ?? 0,
-      maxDurationMinOff: perm.maxDurationMinOff ?? 0,
-    };
-  });
-}
-
-const relayState = {};
-const relayOwner = {};
-const _pendingConfirm = {};
-const _ackWaiters = {};
-
-function waitForRelayAck(relayId, timeoutMs) {
-  return new Promise((resolve) => {
-    if (!_ackWaiters[relayId]) _ackWaiters[relayId] = [];
-    const entry = { resolve, done: false };
-    _ackWaiters[relayId].push(entry);
-    setTimeout(() => { if (!entry.done) { entry.done = true; resolve(false); } }, timeoutMs);
-  });
-}
-function notifyRelayAck(relayId) {
-  const waiters = _ackWaiters[relayId];
-  if (!waiters?.length) return;
-  _ackWaiters[relayId] = [];
-  waiters.forEach(w => { if (!w.done) { w.done = true; w.resolve(true); } });
-}
-
-// בנה schedulerRelayNames + relayState מ-CONTROLLERS + haDevices
-const schedulerRelayNames = {};
-let _relayOffset = 0;
-CONTROLLERS.forEach(ctrl => {
-  ctrl._offset = _relayOffset;
-  for (let i = 1; i <= ctrl.relayCount; i++) {
-    const globalId = i + _relayOffset;
-    relayState[globalId] = 'OFF';
-    schedulerRelayNames[globalId] = ctrl.relayNames?.[i] || `ממסר ${globalId}`;
+  /* TABS */
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 2px 16px 0; margin-bottom: 6px; width: fit-content; flex-wrap: wrap;
+    position: sticky; z-index: 90;
   }
-  _relayOffset += ctrl.relayCount;
-});
-
-// מזהה ממסר HA (entity_id) → globalId: נוסף כשהמשתמש מוסיף התקן מ-HA
-// haDevices[].relayId → globalId (מסדרה אחרי offset הבקרים)
-function rebuildHaRelayNames() {
-  const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
-  let changed = false;
-  const usedHaIds = new Set();
-
-  // סבב ראשון — אסוף IDs תקינים וסמן קונפליקטים
-  haDevices.forEach(dev => {
-    if (!dev.relayId || isNaN(dev.relayId)) {
-      dev.relayId = null; changed = true;
-    } else if (dev.relayId <= tasmotaMax) {
-      console.log(`⚠️ התקן ${dev.entity_id} relayId=${dev.relayId} מתנגש עם בקר (tasmotaMax=${tasmotaMax}) — מוקצה מחדש`);
-      dev.relayId = null; changed = true;
-    } else {
-      usedHaIds.add(dev.relayId);
-    }
-  });
-
-  // סבב שני — הקצה לכל מי שחסר
-  haDevices.forEach(dev => {
-    if (!dev.relayId) {
-      let nextId = tasmotaMax + 1;
-      while (usedHaIds.has(nextId)) nextId++;
-      dev.relayId = nextId;
-      usedHaIds.add(nextId);
-      console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
-    }
-    schedulerRelayNames[dev.relayId] = dev.friendly_name || dev.entity_id;
-    if (!relayState[dev.relayId]) relayState[dev.relayId] = 'OFF';
-  });
-
-  if (changed) {
-    saveConfigLocal();
-    console.log(`🏠 התקני HA לאחר תיקון: ${haDevices.map(d => `${d.friendly_name}→${d.relayId}`).join(', ')}`);
+  .tab {
+    padding: 7px 15px; border-radius: 7px; font-size: 15px; cursor: pointer;
+    color: var(--text2); border: none; background: transparent;
+    font-family: 'Heebo', sans-serif; transition: all 0.2s; font-weight: 600;
   }
-}
+  .tab.active { background: var(--surface3); color: var(--text); }
+  .tab:hover:not(.active) { color: var(--text); }
 
-function getControllerForRelay(globalRelayId) {
-  let offset = 0;
-  for (const ctrl of CONTROLLERS) {
-    if (globalRelayId > offset && globalRelayId <= offset + ctrl.relayCount) {
-      return { type: 'tasmota', ctrl, localId: globalRelayId - offset };
-    }
-    offset += ctrl.relayCount;
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* RELAY GRID */
+  .relay-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
   }
-  // בדוק אם זה התקן HA
-  const haDev = haDevices.find(d => d.relayId === globalRelayId);
-  if (haDev) return { type: 'ha', dev: haDev };
-  return { type: 'tasmota', ctrl: CONTROLLERS[0], localId: globalRelayId };
-}
-
-// ── IVR URL — כעת מצביע לדומיין המקומי (Cloudflare Tunnel) ─
-const YEMOT_API_LINK_URL = process.env.YEMOT_API_LINK_URL || 'https://smarthome.example.com/yemot';
-
-function buildYemotAutoFiles() {
-  const relayIds = getOrderedRelayIds();
-  const relayKeys = relayIds.join('.');
-  const tts000 = 'שלום, להלן רשימת המתגים הקיימים. '
-    + relayIds.map(id => `ל${schedulerRelayNames[id]} הקש ${id}`).join('. ') + '.';
-  const tts001 = 'לבחירת הדלקה הקש 1. לבחירת כיבוי הקש 2.';
-  const tts002 = 'כעת הקישו את מספר הדקות לפעולה, או הקישו 0 לפעולה קבועה בלי הגבלת זמן.';
-  const extIni = [
-    'type=api',
-    `api_link=${YEMOT_API_LINK_URL}`,
-    'api_hangup_send=No',
-    `api_000=Relay,,2,1,7,No,yes,yes,,${relayKeys},3,`,
-    'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
-    'api_002=Duration,,3,1,7,No,yes,no,,,3,',
-    'api_end_goto=/',
-    '',
-  ].join('\n');
-  return { tts000, tts001, tts002, extIni };
-}
-
-// ── SCHEDULER STATE ──────────────────────────────────────
-let schedulerPrograms = [];
-let schedulerActiveModeId = 0;
-let scheduledModes = []; // תזמוני החלפת מצב
-let _previousModeId = null; // המצב לפני מעבר עם duration (לחזרה אוטומטית)
-let _activeScheduledModeTimer = null; // טיימר חזרה פעיל
-let _pendingRevertInfo = null; // מידע חשוף ללקוח: { revertToMode, revertAtEpochMs } | null
-const _firedToday = new Set();
-const _actuallyFired = new Set();
-const _firedRunOnceToday = new Map();
-const _pendingPublish = {};
-
-const _calendarIndex = {};
-for (const entry of HOLIDAY_CALENDAR) {
-  _calendarIndex[entry['תאריך לועזי']] = entry;
-}
-
-let mqttClient = null;
-let mqttConnected = false;
-const controllerOnline = {};
-CONTROLLERS.forEach(ctrl => { controllerOnline[ctrl.id] = false; });
-
-function connectMQTT() {
-  if (!CONTROLLERS.length) {
-    console.log('⚠️ אין CONTROLLERS מוגדרים — MQTT לא מתחבר');
-    return;
+  .ctrl-separator {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, rgba(79,142,247,0.15), rgba(52,211,153,0.10));
+    border: 1px solid rgba(79,142,247,0.25);
+    border-radius: 8px;
+    padding: 8px 16px;
+    margin: 8px 0 4px;
+    display: flex;
+    align-items: center;
   }
-  console.log(`מתחבר ל-MQTT: ${MQTT_URL}...`);
-  const mqttOpts = { reconnectPeriod: 5000 };
-  if (MQTT_USER) { mqttOpts.username = MQTT_USER; mqttOpts.password = MQTT_PASS; }
-  mqttClient = mqtt.connect(MQTT_URL, mqttOpts);
-
-  mqttClient.on('connect', () => {
-    mqttConnected = true;
-    console.log('✅ מחובר ל-MQTT');
-    CONTROLLERS.forEach(ctrl => {
-      for (let i = 1; i <= ctrl.relayCount; i++) {
-        mqttClient.subscribe(`stat/${ctrl.topic}/POWER${i}`);
-      }
-      mqttClient.subscribe(`stat/${ctrl.topic}/RESULT`);
-      mqttClient.subscribe(`stat/${ctrl.topic}/STATUS11`);
-      mqttClient.subscribe(`tele/${ctrl.topic}/STATE`);
-      mqttClient.subscribe(`tele/${ctrl.topic}/LWT`);
-      mqttClient.publish(`cmnd/${ctrl.topic}/STATUS`, '11');
-    });
-    io.emit('mqtt_status', { connected: true });
-  });
-
-  mqttClient.on('message', (topic, message) => {
-    const payload = message.toString();
-    const ctrl = CONTROLLERS.find(c => topic.includes(c.topic));
-    const ctrlName = ctrl ? ctrl.name : 'בקר';
-
-    const matchPower = topic.match(/stat\/.+\/POWER(\d+)$/);
-    if (matchPower && ctrl) {
-      const localId = parseInt(matchPower[1]);
-      const globalId = localId + (ctrl._offset || 0);
-      relayState[globalId] = payload.toUpperCase();
-      io.emit('relay_state', { id: globalId, state: payload.toUpperCase() });
-      notifyRelayAck(globalId);
-      if (_pendingConfirm[globalId]) { clearTimeout(_pendingConfirm[globalId]); delete _pendingConfirm[globalId]; }
-      const relayName = schedulerRelayNames[globalId] || `ממסר ${globalId}`;
-      const originLabel = _lastCommandOrigin[globalId];
-      addServerLog({ type: 'success', msg: `✔ בקר אישר: ${relayName} → ${payload.toUpperCase()}${originLabel ? ` [${originLabel}]` : ''}`, user: ctrlName });
-    }
-
-    if (topic.endsWith('/LWT')) {
-      const isOnline = payload === 'Online';
-      if (ctrl) controllerOnline[ctrl.id] = isOnline;
-      io.emit('controller_status', { online: isOnline, controller: ctrlName, controllerId: ctrl?.id });
-      addServerLog({ type: isOnline ? 'success' : 'danger', msg: `${isOnline ? '🟢' : '🔴'} ${ctrlName} ${isOnline ? 'התחבר' : 'התנתק'}`, user: 'בקר' });
-    }
-
-    if (topic.endsWith('/RESULT')) {
-      try {
-        const d = JSON.parse(payload);
-        if (ctrl) {
-          for (let i = 1; i <= ctrl.relayCount; i++) {
-            if (d[`POWER${i}`] !== undefined) {
-              const globalId = i + (ctrl._offset || 0);
-              relayState[globalId] = d[`POWER${i}`].toUpperCase();
-              io.emit('relay_state', { id: globalId, state: relayState[globalId] });
-            }
-          }
-        }
-      } catch(e) {}
-    }
-
-    if (topic.endsWith('/STATUS11')) {
-      try {
-        const d = JSON.parse(payload);
-        const sts = d.StatusSTS || d;
-        if (ctrl) {
-          for (let i = 1; i <= ctrl.relayCount; i++) {
-            if (sts[`POWER${i}`] !== undefined) {
-              const globalId = i + (ctrl._offset || 0);
-              relayState[globalId] = sts[`POWER${i}`].toUpperCase();
-              io.emit('relay_state', { id: globalId, state: relayState[globalId] });
-            }
-          }
-        }
-      } catch(e) {}
-    }
-
-    if (topic.endsWith('/STATE')) {
-      try {
-        const d = JSON.parse(payload);
-        if (ctrl) {
-          for (let i = 1; i <= ctrl.relayCount; i++) {
-            if (d[`POWER${i}`] !== undefined) {
-              const globalId = i + (ctrl._offset || 0);
-              relayState[globalId] = d[`POWER${i}`].toUpperCase();
-              io.emit('relay_state', { id: globalId, state: relayState[globalId] });
-            }
-          }
-        }
-      } catch(e) {}
-    }
-  });
-
-  mqttClient.on('error', (e) => { mqttConnected = false; io.emit('mqtt_status', { connected: false }); });
-  mqttClient.on('close', () => { mqttConnected = false; io.emit('mqtt_status', { connected: false }); });
-}
-
-const _lastCommandOrigin = {};
-
-async function publishRelay(relayId, state, originLabel = null) {
-  const { type, ctrl, localId, dev } = getControllerForRelay(relayId);
-  const relayName = schedulerRelayNames[relayId] || `ממסר ${relayId}`;
-  _lastCommandOrigin[relayId] = originLabel;
-
-  if (type === 'ha') {
-    // שליחה דרך HA REST API
-    if (!dev) throw new Error(`לא נמצא התקן HA ל-relay ${relayId}`);
-    const service = state === 'ON' ? 'turn_on' : 'turn_off';
-    await haCallService(dev.domain || 'switch', service, dev.entity_id);
-    relayState[relayId] = state;
-    addServerLog({ type: 'sent', msg: `📤 שרת שלח HA: ${relayName} → ${state}${originLabel ? ` [${originLabel}]` : ''}`, user: (originLabel && originLabel.startsWith('IVR')) ? originLabel : 'שרת' });
-    io.emit('relay_state', { id: relayId, state });
-    // HA לא שולח MQTT — נאמת מיד (ה-API הסינכרוני עצמו הוא האישור)
-    notifyRelayAck(relayId);
-    return;
+  .ctrl-sep-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.3px;
   }
-
-  // Tasmota MQTT
-  return new Promise((resolve, reject) => {
-    if (!mqttConnected) {
-      addServerLog({ type: 'danger', msg: `❌ לא ניתן לשלוח לממסר ${relayId} — MQTT מנותק`, user: 'שרת' });
-      reject(new Error('לא מחובר')); return;
-    }
-    const topic = `cmnd/${ctrl.topic}/POWER${localId}`;
-    mqttClient.publish(topic, state, { qos: 1 }, (err) => {
-      if (err) { reject(err); return; }
-      relayState[relayId] = state;
-      addServerLog({ type: 'sent', msg: `📤 שרת שלח: ${relayName} → ${state}${originLabel ? ` [${originLabel}]` : ''}`, user: (originLabel && originLabel.startsWith('IVR')) ? originLabel : 'שרת' });
-      // שידור מיידי לכל הדפדפנים המחוברים — כך שהמחוון בממשק מתעדכן תמיד לפי הפקודה שנשלחה,
-      // בלי תלות באישור-פיזי מהבקר (שיכול לקחת זמן, או לא להגיע כלל אם הבקר מנותק/איטי). בלי זה,
-      // רק דפדפן שביצע לחיצה-ידנית-מקומית "ראה" את השינוי (עדכון-אופטימי מקומי בצד הלקוח בלבד) —
-      // כל מקור אחר (IVR, תוכנית מתוזמנת, דפדפן אחר) לא היה משודר לאף אחד.
-      io.emit('relay_state', { id: relayId, state });
-      const confirmTimer = setTimeout(() => {
-        addServerLog({ type: 'warning', msg: `⚠️ לא התקבל אישור מהבקר: ${relayName} (${state})`, user: 'בקר' });
-      }, 5000);
-      _pendingConfirm[relayId] = confirmTimer;
-      resolve();
-    });
-  });
-}
-
-// ── USERS ────────────────────────────────────────────────
-const USERS = config.USERS || [];
-const EMERGENCY_PASSWORD = config.EMERGENCY_PASSWORD || null;
-function publicProfile(u) { const { password, ...pub } = u; return pub; }
-let runtimeUsers = USERS.map(u => ({ ...u }));
-let serverConfig = null;
-
-// ── SERVER LOG ───────────────────────────────────────────
-const serverLog = [];
-const MAX_LOG_DAYS = 30;
-function pruneLog() {
-  const cutoff = Date.now() - MAX_LOG_DAYS * 24 * 60 * 60 * 1000;
-  while (serverLog.length && new Date(serverLog[serverLog.length-1].ts).getTime() < cutoff) serverLog.pop();
-}
-// ── LOGGER ───────────────────────────────────────────────
-const _origLog = console.log;
-const _origError = console.error;
-const _origWarn = console.warn;
-function _ts() {
-  return new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-console.log = (...a) => _origLog(`[${_ts()}]`, ...a);
-console.error = (...a) => _origError(`[${_ts()}] ❌`, ...a);
-console.warn = (...a) => _origWarn(`[${_ts()}] ⚠️`, ...a);
-
-function addServerLog(entry, excludeSocket) {
-  const now = new Date();
-  const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const logEntry = { ...entry, ts: now.toISOString(),
-    time: nowIL.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    date: nowIL.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: '2-digit' }),
-  };
-  serverLog.unshift(logEntry);
-  pruneLog();
-  // אם excludeSocket סופק (למשל: הרשומה הזו כבר קיימת מקומית אצל השולח, כי הוא הוסיף אותה בעצמו
-  // לפני ששלח לשרת) — משדרים לכולם *חוץ* מהשולח, כדי לא ל"החזיר לו הד" של הרשומה שכבר יש לו.
-  (excludeSocket ? excludeSocket.broadcast : io).emit('log_broadcast', serverLog[0]);
-  // שיקוף ליומן ה-Add-on לאירועים חשובים
-  if (['sent','warning','danger','info'].includes(entry.type)) {
-    _origLog(`[${logEntry.time}] ${entry.type.toUpperCase()}: ${entry.msg}`);
+  .relay-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 13px; padding: 15px 16px;
+    transition: border-color 0.2s, box-shadow 0.2s; position: relative; overflow: hidden;
   }
+  .relay-card::before {
+    content: ''; position: absolute; top: 0; right: 0;
+    width: 3px; height: 100%; background: var(--off-color);
+    border-radius: 0 13px 13px 0; transition: background 0.3s;
+  }
+  .relay-card.relay-on::before { background: var(--on-color); }
+  .relay-card.relay-on { border-color: rgba(52,211,153,0.2); box-shadow: 0 0 16px rgba(52,211,153,0.05); }
+  .relay-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .relay-num { font-size: 13px; color: var(--text2); font-weight: 600; letter-spacing: 1px; }
+  .relay-name-input {
+    background: transparent; border: none; border-bottom: 1px solid transparent;
+    color: var(--text); font-size: 16px; font-weight: 700;
+    font-family: 'Heebo', sans-serif; width: 100%; margin-bottom: 11px;
+    cursor: pointer; transition: border-color 0.2s; direction: rtl;
+  }
+  .relay-name-input:focus { outline: none; border-bottom-color: var(--accent); cursor: text; }
+  .relay-controls { display: flex; align-items: center; gap: 10px; }
+  .toggle-switch { position: relative; width: 48px; height: 26px; cursor: pointer; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 13px; transition: all 0.3s;
+  }
+  .toggle-switch input:checked + .toggle-track { background: rgba(52,211,153,0.15); border-color: var(--on-color); }
+  .toggle-thumb {
+    position: absolute; width: 18px; height: 18px; background: var(--muted);
+    border-radius: 50%; top: 3px; right: 4px; transition: all 0.3s;
+  }
+  .toggle-switch input:checked ~ .toggle-thumb { background: var(--on-color); right: calc(100% - 22px); }
+  .relay-state-label { font-size: 15px; font-weight: 600; color: var(--text2); min-width: 28px; transition: color 0.3s; }
+  .relay-card.relay-on .relay-state-label { color: var(--on-color); }
+  .btn-timer {
+    margin-right: auto; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text2); font-size: 13px; padding: 3px 8px; border-radius: 6px;
+    cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .btn-timer:hover { color: var(--accent); border-color: rgba(79,142,247,0.3); }
+  .relay-footer {
+    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .last-action { font-size: 12px; color: var(--muted); }
+  .prog-count {
+    font-size: 13px; color: var(--text2); background: var(--surface2);
+    padding: 2px 7px; border-radius: 8px; cursor: pointer; transition: color 0.2s;
+  }
+  .prog-count:hover { color: var(--accent); }
+
+  /* QUICK ACTIONS */
+  .quick-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .quick-btn {
+    display: flex; align-items: center; gap: 6px; padding: 7px 13px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text2); font-size: 14px;
+    cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .quick-btn:hover { background: var(--surface2); border-color: var(--border2); color: var(--text); }
+  .quick-btn.danger:hover { border-color: rgba(239,68,68,0.35); color: var(--danger); }
+
+  /* PROGRAMS */
+  .prog-toolbar {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
+    position: sticky; z-index: 85; background: var(--bg); padding: 8px 0;
+  }
+  .add-btn-top {
+    padding: 6px 14px; border-radius: 7px; border: 1px solid var(--accent);
+    background: rgba(79,142,247,0.12); color: var(--accent); font-weight: 700;
+    font-size: 13px; cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .add-btn-top:hover { background: rgba(79,142,247,0.22); }
+  .section-title { font-size: 15px; font-weight: 700; color: var(--text2); letter-spacing: 0.3px; }
+  .toolbar-group { display: flex; gap: 6px; }
+  .icon-btn {
+    display: flex; align-items: center; gap: 4px; padding: 6px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 7px; color: var(--text2); font-size: 14px;
+    cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .icon-btn:hover { border-color: var(--border2); color: var(--text); }
+
+  .conflict-banner {
+    background: rgba(245,158,11,0.07); border: 1px solid rgba(245,158,11,0.22);
+    border-radius: 9px; padding: 10px 14px; margin-bottom: 12px;
+    font-size: 13px; color: var(--warn); display: none;
+  }
+  .conflict-banner.show { display: block; }
+  .cf-title { font-weight: 700; margin-bottom: 5px; }
+  .cf-item { margin-top: 3px; padding-right: 8px; color: var(--text2); font-size: 13px; line-height: 1.5; }
+
+  .prog-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+  .prog-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px 13px;
+    display: flex; align-items: center; gap: 10px;
+    transition: opacity 0.2s, border-color 0.2s;
+  }
+  .prog-card:hover { border-color: var(--border2); }
+  .prog-card.inactive { opacity: 0.4; }
+  .prog-card.dim { opacity: 0.5; }
+  .prog-card.priority { border-right: 3px solid var(--danger); }
+  .prog-num {
+    font-size: 13px; font-weight: 700; color: var(--text2);
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; min-width: 30px;
+    text-align: center; flex-shrink: 0;
+  }
+  .prog-active-toggle {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--on-color);
+    flex-shrink: 0; cursor: pointer; border: none; transition: background 0.2s;
+  }
+  .prog-card.inactive .prog-active-toggle { background: var(--muted); }
+  .prog-info { flex: 1; min-width: 0; }
+  .prog-name-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+  .prog-name { font-size: 16px; font-weight: 600; color: var(--text); }
+  .prog-mode-badge {
+    font-size: 12px; padding: 1px 7px; border-radius: 8px;
+    background: rgba(167,139,250,0.1); color: var(--accent3);
+    border: 1px solid rgba(167,139,250,0.25); flex-shrink: 0;
+  }
+  .prog-detail { font-size: 13px; color: var(--text2); display: flex; gap: 5px; flex-wrap: wrap; }
+  .prog-chip {
+    background: var(--surface2); border: 1px solid var(--border2);
+    padding: 2px 7px; border-radius: 4px; font-size: 13px; color: var(--text2);
+  }
+  .prog-chip.shabbat { color: #a78bfa; border-color: rgba(167,139,250,0.28); }
+  .prog-chip.once { color: var(--danger); border-color: rgba(239,68,68,0.28); }
+  .prog-chip.on-c { color: var(--accent2); border-color: rgba(52,211,153,0.25); }
+  .prog-chip.off-c { color: var(--muted); }
+  .prog-chip.conflict-c { color: var(--warn); border-color: rgba(245,158,11,0.28); cursor: pointer; }
+  .prog-chip.conflict-c:hover { background: rgba(245,158,11,0.1); }
+
+  .prog-card.selected { border-color: rgba(79,142,247,0.5); background: rgba(79,142,247,0.05); }
+  .prog-select-chk { width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
+  .bulk-bar {
+    display: none; align-items: center; gap: 8px; flex-wrap: wrap;
+    background-color: var(--surface);
+    background-image: linear-gradient(rgba(79,142,247,0.10), rgba(79,142,247,0.10));
+    border: 1px solid rgba(79,142,247,0.25);
+    border-radius: 9px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
+    position: sticky; z-index: 80;
+  }
+  .bulk-bar.show { display: flex; }
+  .bulk-count { font-weight: 700; color: var(--accent); }
+  .bulk-bar .icon-btn { font-size: 13px; padding: 5px 10px; }
+  .bulk-bar select.form-select { width: auto; font-size: 13px; padding: 5px 8px; }
+  .prog-actions { display: flex; gap: 4px; }
+
+  .prog-btn {
+    padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border2);
+    background: var(--surface2); color: var(--text2); font-size: 13px;
+    cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .prog-btn:hover { color: var(--text); border-color: var(--border2); background: var(--surface3); }
+  .prog-btn.edit:hover { color: var(--accent); border-color: rgba(79,142,247,0.4); }
+  .prog-btn.del:hover { color: var(--danger); border-color: rgba(239,68,68,0.4); }
+
+  .add-btn {
+    width: 100%; padding: 10px; background: transparent;
+    border: 1px dashed rgba(100,140,255,0.14); border-radius: 8px;
+    color: var(--muted); font-size: 14px; cursor: pointer;
+    font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* MODES */
+  .modes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 10px; }
+  .mode-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 11px; padding: 14px 15px; cursor: default; transition: all 0.2s;
+  }
+  .mode-card.active-mode {
+    border-color: rgba(167,139,250,0.4); background: rgba(167,139,250,0.05);
+    box-shadow: 0 0 14px rgba(167,139,250,0.07);
+  }
+  .mode-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+  .mode-name-input {
+    background: transparent; border: none; border-bottom: 1px solid transparent;
+    color: var(--text); font-size: 15px; font-weight: 700;
+    font-family: 'Heebo', sans-serif; width: 100%; direction: rtl; cursor: pointer; transition: border-color 0.2s;
+  }
+  .mode-name-input:focus { outline: none; border-bottom-color: var(--accent3); cursor: text; }
+  .mode-active-badge {
+    font-size: 11px; padding: 2px 7px; border-radius: 8px;
+    background: rgba(167,139,250,0.15); color: var(--accent3);
+    border: 1px solid rgba(167,139,250,0.25); flex-shrink: 0;
+  }
+  .mode-prog-count { font-size: 14px; color: var(--text2); margin-bottom: 8px; }
+  .mode-activate-btn {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px; font-size: 13px;
+    color: var(--muted); cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
+  }
+  .mode-card.active-mode .mode-activate-btn { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.3); color: var(--accent3); }
+  .mode-activate-btn:hover { color: var(--text); }
+  .mode-add-card {
+    background: transparent; border: 1px dashed rgba(100,140,255,0.14);
+    border-radius: 11px; padding: 14px 15px; cursor: pointer; transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 90px; color: var(--muted); font-size: 14px;
+  }
+  .mode-add-card:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* TIMELINE */
+  .tl-container {
+    border: 1px solid var(--border); border-radius: 11px;
+    background: var(--surface); overflow: auto; max-height: 68vh;
+  }
+  .tl-table { border-collapse: collapse; min-width: 100%; }
+  .tl-table thead th {
+    position: sticky; top: 0; z-index: 10; background: var(--surface2);
+    border-bottom: 2px solid rgba(180,200,230,0.35); padding: 9px 10px;
+    font-size: 14px; font-weight: 700; color: var(--text);
+    text-align: center; white-space: nowrap; min-width: 80px;
+  }
+  .tl-table thead th:first-child {
+    position: sticky; left: 0; z-index: 20; background: var(--surface2);
+    border-left: 1px solid rgba(180,200,230,0.25); min-width: 105px;
+    text-align: right; padding-right: 10px; font-size: 13px; color: var(--text2);
+  }
+  .tl-table td { border-bottom: 1px solid rgba(180,200,230,0.25); border-right: 1px solid rgba(180,200,230,0.25); vertical-align: top; min-width: 80px; padding: 3px; }
+  .tl-table td:first-child {
+    position: sticky; right: 0; background: var(--surface2);
+    border-left: 1px solid var(--border); padding: 5px 9px;
+    font-size: 13px; color: var(--text2); white-space: nowrap; z-index: 5; direction: rtl; font-weight: 500;
+  }
+  .tl-table tr:last-child td { border-bottom: none; }
+  .tl-day-row td { padding: 0 !important; }
+  .tl-day-header-normal  { background: #f5f0e8; border-top: 3px solid #c8b89a; border-bottom: 2px solid #c8b89a; }
+  .tl-day-header-shabbat { background: #f9741a; border-top: 3px solid #c2500a; border-bottom: 2px solid #c2500a; }
+  .tl-day-header-special { background: #92400e; border-top: 3px solid #d97706; border-bottom: 2px solid #d97706; }
+  .tl-day-label-normal  { font-size: 15px; font-weight: 700; color: #3b2200; }
+  .tl-day-label-shabbat { font-size: 15px; font-weight: 700; color: #ffffff; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+  .tl-day-label-special { font-size: 15px; font-weight: 700; color: #fef3c7; }
+  .tl-day-sub-normal    { font-size: 13px; color: #5c4a30; margin-top: 1px; }
+  .tl-day-sub-shabbat   { font-size: 13px; color: #fff7ed; margin-top: 1px; }
+  .tl-day-sub-special   { font-size: 13px; color: #fde68a; margin-top: 1px; }
+  .tl-day-badge { display:inline-block; font-size: 12px; padding:1px 7px; border-radius:8px; margin-top:2px; font-weight:600; }
+  .tl-day-badge.holiday { background:rgba(245,158,11,0.15); color:var(--warn); border:1px solid rgba(245,158,11,0.3); }
+  .tl-day-badge.shabbat { background:rgba(0,0,0,0.25); color:#ffffff; border:1px solid rgba(255,255,255,0.4); font-weight:700; }
+  .tl-day-badge.fast { background:rgba(239,68,68,0.12); color:var(--danger); border:1px solid rgba(239,68,68,0.25); }
+  .tl-time-label { font-size: 13px; color: var(--text2); min-height: 32px; display: flex; flex-direction: column; justify-content: center; font-weight: 500; }
+  .tl-time-sub { font-size: 12px; color: var(--muted); }
+  .tl-cell-inner { min-height: 26px; padding: 1px; display: flex; flex-direction: column; gap: 1px; }
+  .tl-empty-cell { min-height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; opacity: 0.5; }
+  .tl-prog-block {
+    border-radius: 4px; padding: 2px 6px; font-size: 12px; font-weight: 600;
+    color: rgba(10,20,10,0.90); cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center; gap: 4px;
+    max-width: 100%; box-sizing: border-box; /* לא ידחוף את רוחב העמודה, לא משנה כמה הטקסט בפנים ארוך */
+  }
+  .tl-prog-block:hover { opacity: 0.82; transform: scale(1.02); }
+  .tl-prog-block.t-on { background: rgba(34,197,94,0.90); border: 1px solid rgba(34,197,94,0.5); }
+  .tl-prog-block.t-off { background: rgba(239,68,68,0.80); border: 1px solid rgba(239,68,68,0.5); }
+  .tl-prog-block.t-manual {
+    background: rgba(251,191,36,0.25);
+    border: 1px solid rgba(251,191,36,0.6);
+    color: #fbbf24;
+  }
+  .tl-prog-block.t-zman { background: rgba(167,139,250,0.82); }
+  .tl-prog-block.t-once { background: rgba(245,158,11,0.82); }
+  .tl-prog-block.t-fired { background: rgba(100,116,139,0.5); border: 1px dashed rgba(148,163,184,0.5); opacity: 0.75; }
+  .pb-num { background: rgba(0,0,0,0.15); border-radius: 3px; padding: 0 4px; font-size: 12px; flex-shrink: 0; }
+  .tl-legend { display: flex; gap: 10px; padding: 3px 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text2); flex-wrap: wrap; }
+  .leg { display: flex; align-items: center; gap: 4px; }
+  .leg-dot { width: 9px; height: 9px; border-radius: 2px; }
+
+  /* LOG */
+  .log-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .log-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px; font-size: 14px;
+    font-family: 'Heebo', monospace; max-height: 440px; overflow-y: auto; color: var(--text2);
+    transition: max-height 0.3s ease;
+  }
+  .log-box.expanded { max-height: 80vh; }
+  .log-entry { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: baseline; }
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry .ts { color: var(--accent); font-size: 13px; white-space: nowrap; min-width: 62px; }
+  .log-entry .log-date { color: var(--text2); font-size: 12px; white-space: nowrap; }
+  .log-entry .action { color: var(--text2); flex: 1; }
+  .log-entry.sent .action { color: var(--on-color); }
+  .log-entry.recv .action { color: var(--warn); }
+  .log-entry.danger .action { color: var(--danger); }
+  .log-entry.success .action { color: var(--accent2); }
+
+  /* USERS */
+  .user-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: rgba(79,142,247,0.12); border: 1px solid rgba(79,142,247,0.25); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+  .user-name { font-size: 15px; font-weight: 500; flex: 1; }
+  .perm-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .perm-chip { font-size: 11px; padding: 2px 6px; border-radius: 4px; cursor: pointer; border: 1px solid transparent; transition: all 0.15s; }
+  .perm-chip.granted { background: rgba(52,211,153,0.08); color: var(--on-color); border-color: rgba(52,211,153,0.2); }
+  .perm-chip.denied { background: var(--surface2); color: var(--muted); border-color: var(--border); }
+
+  /* MODAL */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: flex-start; justify-content: center; padding: 6px 10px 10px; overflow-y: auto; }
+  .modal-overlay.open { display: flex; }
+
+  /* Modal חוסם להתראת קונפליקטי עדיפות בייבוא — נפרד מה-modal הרגיל של הוספת/עריכת תוכנית */
+  .conflict-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:300; align-items:center; justify-content:center; padding:16px; }
+  .conflict-modal-overlay.open { display:flex; }
+  .conflict-modal { background:#1c1c22; border:1px solid #d33; border-radius:10px; max-width:560px; width:100%; max-height:80vh; overflow-y:auto; padding:20px; box-shadow:0 10px 40px rgba(0,0,0,0.5); }
+  .conflict-modal h3 { color:#ff5757; margin:0 0 12px; font-size:18px; }
+  .conflict-modal .cf-row { background:rgba(255,87,87,0.08); border:1px solid rgba(255,87,87,0.3); border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5; }
+  .conflict-modal .cf-row b { color:#ff8b8b; }
+  .conflict-modal .cf-ok-btn { display:block; width:100%; margin-top:14px; padding:11px; background:#d33; color:#fff; border:none; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; }
+  .conflict-modal .cf-ok-btn:hover { background:#e44; }
+  .ms-row { display:flex; align-items:center; gap:8px; padding:7px 4px; font-size:14px; color:#ddd; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; }
+  .ms-row input[type=checkbox] { width:16px; height:16px; cursor:pointer; flex-shrink:0; }
+  .modal { background: var(--surface); border: 1px solid var(--border2); border-radius: 16px; padding: 22px; width: 640px; max-width: 98vw; direction: rtl; margin: auto; flex-shrink: 0; position: relative; }
+  .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 16px; }
+  .form-row { margin-bottom: 12px; }
+  .form-label { font-size: 13px; color: var(--muted); margin-bottom: 4px; display: block; font-weight: 500; }
+  .form-input, .form-select { width: 100%; padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-size: 14px; font-family: 'Heebo', sans-serif; direction: rtl; transition: border-color 0.2s; }
+  .form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
+  .form-row-inline { display: flex; gap: 8px; }
+  .form-row-inline .form-row { flex: 1; margin-bottom: 0; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 18px; justify-content: flex-end; }
+  .btn-primary { padding: 8px 17px; background: var(--accent); border: none; border-radius: 7px; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Heebo', sans-serif; transition: opacity 0.2s; }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-cancel { padding: 8px 17px; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; color: var(--muted); font-size: 14px; cursor: pointer; font-family: 'Heebo', sans-serif; }
+  .time-anchor-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .offset-input { width: 62px; }
+  .zman-select { flex: 1; }
+
+  .form-mode-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+  .mode-chip { padding: 3px 10px; border-radius: 20px; font-size: 13px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s; }
+  .mode-chip.sel { background: rgba(167,139,250,0.13); color: var(--accent3); border-color: rgba(167,139,250,0.32); }
+
+  /* TOAST */
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--surface2); border: 1px solid var(--border2); border-radius: 8px; padding: 8px 16px; font-size: 14px; color: var(--text); z-index: 300; transition: transform 0.3s; pointer-events: none; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- LOGIN OVERLAY -->
+<div id="login-overlay" style="position:fixed;inset:0;background:rgba(8,12,20,0.97);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px">
+  <div style="font-size: 30px;font-weight:800;color:var(--accent)">🏠 בית חכם</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;width:300px;display:flex;flex-direction:column;gap:14px">
+    <div style="font-size: 18px;font-weight:600;text-align:center;margin-bottom:4px">כניסה למערכת</div>
+    <select id="login-user-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size: 16px;font-family:inherit">
+      <option value="">בחר משתמש...</option>
+    </select>
+    <input id="login-password" type="password" placeholder="סיסמה" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size: 16px;font-family:inherit;direction:ltr" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:12px;font-size: 17px;font-weight:700;cursor:pointer;font-family:inherit">כניסה</button>
+    <div id="login-error" style="color:#f87171;font-size: 15px;text-align:center;display:none">סיסמה שגויה, נסה שוב</div>
+  </div>
+</div>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-title">בית <span>חכם</span></div>
+    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:#facc15;opacity:0.85;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
+    <div class="mode-pill">
+      <span style="font-size: 12px;color:var(--muted)">מצב:</span>
+      <span class="ml" id="active-mode-label">רגיל</span>
+      <select id="mode-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size: 14px;font-family:inherit;cursor:pointer"></select>
+      <button class="mode-pill-btn" onclick="confirmModeChange()">אישור</button>
+      <button class="mode-pill-btn" onclick="openScheduledModesModal()" style="background:var(--surface2)">🕐 ניהול מצבים</button>
+    </div>
+  </div>
+  <div class="status-pill" id="status-pill">
+    <div class="status-dot"></div>
+    <span id="status-text">מתחבר...</span>
+  </div>
+  <div class="status-pill" id="controller-pill-main" title="בית — KC868-A6">
+    <div class="status-dot" id="controller-dot-main" style="background:#6b7280"></div>
+    <span id="controller-text-main">בית...</span>
+  </div>
+  <div class="status-pill" id="controller-pill-second" title="קומה שנייה — KC868-A8">
+    <div class="status-dot" id="controller-dot-second" style="background:#6b7280"></div>
+    <span id="controller-text-second">קומה ב׳...</span>
+  </div>
+  <div id="user-pill" style="display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px;cursor:pointer" onclick="doLogout()">
+    <span id="user-pill-name" style="font-size: 15px;font-weight:600"></span>
+    <span style="font-size: 13px;color:var(--muted)">יציאה</span>
+  </div>
+</div>
+
+<!-- ZMANIM BAR -->
+<div class="zmanim-bar">
+  <div class="zmanim-item"><span class="z-label">תאריך:</span> <span id="z-date">טוען...</span></div>
+  <div class="zmanim-item"><span class="z-label">עלות השחר:</span> <span id="z-alot">—</span></div>
+  <div class="zmanim-item"><span class="z-label">זריחה:</span> <span id="z-sunrise">—</span></div>
+  <div class="zmanim-item"><span class="z-label">שקיעה:</span> <span id="z-sunset">—</span></div>
+  <div class="zmanim-item"><span class="z-label">הדלקת נרות הקרובה:</span> <span id="z-candles">—</span></div>
+  <div class="zmanim-item"><span class="z-label">הבדלה הקרובה:</span> <span id="z-havdalah">—</span></div>
+</div>
+<div class="main">
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('relays',this)">ממסרים והתקנים</button>
+    <button class="tab" onclick="showTab('programs',this)">תוכניות</button>
+    <button class="tab" onclick="showTab('timeline',this)">ציר זמן</button>
+    <button class="tab" onclick="showTab('modes',this)">מצבים</button>
+    <button class="tab" onclick="showTab('users',this)">הרשאות</button>
+    <button class="tab" onclick="showTab('ivr',this)">📞 IVR</button>
+    <button class="tab" onclick="showTab('ha_devices',this)">⚙️ הגדרות התקנים</button>
+    <button class="tab" onclick="showTab('log',this)">יומן</button>
+  </div>
+
+  <!-- RELAYS TAB -->
+  <div id="tab-relays" class="panel active">
+    <div class="quick-row">
+      <button class="quick-btn" onclick="allOn()">☀️ הכל דלוק</button>
+      <button class="quick-btn danger" onclick="allOff()">🌙 הכל כבוי</button>
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button class="quick-btn" onclick="shabbatMode()">✡️ מצב שבת</button>
+        <button onclick="editQuickAction('shabbat')" title="עריכת מצב שבת" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:14px;color:var(--muted)">✏️</button>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <button class="quick-btn" onclick="morningMode()">🌅 בוקר טוב</button>
+        <button onclick="editQuickAction('morning')" title="עריכת בוקר טוב" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:14px;color:var(--muted)">✏️</button>
+      </div>
+    </div>
+    <div class="relay-grid" id="relay-grid"></div>
+  </div>
+
+  <!-- PROGRAMS TAB -->
+  <div id="tab-programs" class="panel">
+    <div class="conflict-banner" id="conflict-banner">
+      <div class="cf-title">⚠ התנגשויות זוהו</div>
+      <div id="conflict-list"></div>
+    </div>
+    <div class="prog-toolbar">
+      <div class="section-title">תוכניות פעילות</div>
+      <div class="toolbar-group">
+        <button class="add-btn-top" onclick="openAddProgram(null)">+ הוסף תוכנית</button>
+        <button class="icon-btn" onclick="toggleSelectMode()" id="select-mode-btn">☑ בחירה מרובה</button>
+        <button class="icon-btn" onclick="exportJSON()">📤 ייצוא JSON</button>
+        <label class="icon-btn" style="cursor:pointer">📥 ייבוא JSON<input id="import-file-input" type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
+        <button class="icon-btn" onclick="renumberSeqIds()" title="מתקן מספרי-תוכנית (#) כפולים שנוצרו משכפול ישן — לא משפיע על שום דבר מלבד המספור המוצג">🔧 תיקון מספור כפול</button>
+        <button class="icon-btn" onclick="repairSharedChildren()" title="מתקן תוכניות-בת ש'משותפות' בטעות בין כמה הורים (נתונים ישנים משכפול-ישן) — יוצר בת עצמאית לכל הורה">🔧 תיקון תוכניות-בת משותפות</button>
+        <button class="icon-btn" onclick="openSimModal()" title="מריץ בשרת, על כל התוכניות האמיתיות, מה היה קורה בטווח-תאריכים נבחר — כולל מחזורים/תוכניות-בת/חציית-חצות/חסימות — בלי לשלוח שום פקודה אמיתית">🧪 סימולציית תזמון</button>
+      </div>
+    </div>
+    <div class="bulk-bar" id="bulk-bar">
+      <span class="bulk-count" id="bulk-count">0 נבחרו</span>
+      <button class="icon-btn" onclick="selectAllPrograms()">בחר הכל</button>
+      <button class="icon-btn" onclick="clearProgSelection()">נקה בחירה</button>
+      <button class="icon-btn" onclick="bulkSetActive(true)">✅ הפעל נבחרים</button>
+      <button class="icon-btn" onclick="bulkSetActive(false)">⏸ השבת נבחרים</button>
+      <button class="icon-btn" onclick="bulkDelete()" style="color:var(--danger)">🗑 מחק נבחרים</button>
+      <span style="display:flex;align-items:center;gap:5px">
+        <select class="form-select" id="bulk-mode-select"></select>
+        <button class="icon-btn" onclick="bulkAddMode()">+ הוסף מצב לנבחרים</button>
+      </span>
+    </div>
+    <div class="prog-list" id="prog-list"></div>
+  </div>
+
+  <!-- TIMELINE TAB -->
+  <div id="tab-timeline" class="panel">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:5px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:5px 14px">
+      <span style="font-size: 13px;color:var(--text2);font-weight:600">טווח תצוגה:</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size: 12px;color:var(--muted)">מתאריך</label>
+        <input type="date" id="tl-from-date" class="form-input" style="width:130px;padding:3px 6px;font-size: 12px" onchange="renderTimeline()">
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size: 12px;color:var(--muted)">עד תאריך</label>
+        <input type="date" id="tl-to-date" class="form-input" style="width:130px;padding:3px 6px;font-size: 12px" onchange="renderTimeline()">
+      </div>
+      <div style="display:flex;gap:6px;margin-right:auto">
+        <button class="icon-btn" id="tl-minimal-toggle-btn" onclick="toggleMinimalView()" title="תצוגה קומפקטית: רק בלוקים דולק/כבוי, בקנה-מידה אחיד, בלי גלילה מיותרת">📐 תצוגה מינימלית</button>
+        <button class="icon-btn" onclick="setTlRange(7)">שבוע</button>
+        <button class="icon-btn" onclick="setTlRange(14)">שבועיים</button>
+        <button class="icon-btn" onclick="setTlRange(30)">חודש</button>
+        <button class="icon-btn" onclick="setTlRange(90)">3 חודשים</button>
+      </div>
+    </div>
+    <div style="margin-bottom:3px;font-size: 12px;color:var(--muted)">ממסרים כעמודות · גלול ימינה לכל הממסרים · גלול למטה לכל הימים · לחץ על בלוק לעריכה</div>
+    <div class="tl-legend" style="margin-bottom:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">
+      <span style="font-size: 13px;font-weight:700;color:var(--text2);margin-left:8px">מקרא:</span>
+      <div class="leg"><div class="leg-dot" style="background:rgba(52,211,153,0.85);width:14px;height:14px;border-radius:3px"></div><span>הדלקה (ON)</span></div>
+      <div class="leg"><div class="leg-dot" style="background:rgba(239,68,68,0.75);width:14px;height:14px;border-radius:3px"></div><span>כיבוי (OFF)</span></div>
+      <div class="leg"><div class="leg-dot" style="background:rgba(167,139,250,0.8);width:14px;height:14px;border-radius:3px"></div><span>הלכתי</span></div>
+      <div class="leg"><div class="leg-dot" style="background:rgba(245,158,11,0.8);width:14px;height:14px;border-radius:3px"></div><span>חד פעמי</span></div>
+      <div class="leg"><div class="leg-dot" style="background:rgba(52,211,153,0.13);border:1px solid rgba(52,211,153,0.3);width:14px;height:14px;border-radius:3px"></div><span>ממסר דולק</span></div>
+      <div class="leg"><div class="leg-dot" style="background:var(--surface2);border:1px solid var(--border);width:14px;height:14px;border-radius:3px"></div><span>ממסר כבוי</span></div>
+      <div class="leg"><div class="leg-dot" style="background:rgba(239,68,68,0.35);border:1px dashed rgba(239,68,68,0.6);width:14px;height:14px;border-radius:3px"></div><span>כיבוי אוטומטי (למשך)</span></div>
+    </div>
+    <div class="tl-container" id="tl-normal-container">
+      <table class="tl-table" id="tl-table"></table>
+    </div>
+    <!-- overflow:auto + max-height:68vh — בדיוק כמו .tl-container הרגיל — נדרש כדי ש-position:sticky על כותרות-הממסרים יעבוד (צריך הקשר-גלילה פנימי, לא רק overflow-x) -->
+    <div id="tl-minimal-container" style="display:none;border:1px solid var(--border);border-radius:8px;background:var(--surface)"></div>
+  </div>
+
+  <!-- MODES TAB -->
+  <div id="tab-modes" class="panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-title">מצבי הפעלה — בחר מצב אחד להפעלה</div>
+      <button class="icon-btn" onclick="addMode()">+ מצב חדש</button>
+    </div>
+    <div class="modes-grid" id="modes-grid"></div>
+  </div>
+
+  <!-- USERS TAB -->
+  <div id="tab-users" class="panel">
+    <div class="section-title" style="margin-bottom:12px">משתמשים והרשאות</div>
+    <div id="user-list"></div>
+    <button class="add-btn" onclick="toast('בקרוב — הוספת משתמש')">+ הוסף משתמש</button>
+  </div>
+
+  <!-- IVR TAB -->
+  <div id="tab-ivr" class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px">
+      <div class="section-title">📞 ניהול מענה טלפוני (ימות המשיח)</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="form-input" id="ivr-search-input" placeholder="🔍 חיפוש לפי שם או טלפון..." style="width:220px" oninput="renderIvrUsers()">
+        <button class="add-btn" style="margin:0;white-space:nowrap" onclick="editIvrUser(-1)">+ הוסף מתקשר</button>
+      </div>
+    </div>
+    <div style="font-size: 13px;color:var(--muted);margin-bottom:16px">שליטה בממסרים דרך שלוחת ימות המשיח — לכל מתקשר מספר ID פרטי (לא נחשף ב-Git) ולכל ID הרשאות ציבוריות נפרדות.</div>
+
+    <!-- TOOLBAR -->
+    <div class="prog-toolbar">
+      <div class="section-title">מתקשרים מורשים</div>
+      <div class="toolbar-group">
+        <button class="icon-btn" onclick="syncYemotWhitelist()">🔄 סנכרן רשימת תפוצה בימות</button>
+      </div>
+    </div>
+    <div style="font-size: 12px;color:var(--muted);margin:-4px 0 12px">בודק שכל המתקשרים המוגדרים כאן מורשים בכלל להיכנס לקו בימות (שכבה נפרדת מההרשאות שלנו) — ומוסיף אוטומטית את מי שחסר.</div>
+
+    <div id="ivr-user-list"></div>
+
+    <!-- TEST ENDPOINT CARD -->
+    <div class="user-card" style="margin-top:16px">
+      <div class="user-name">🧪 בדיקת endpoint /yemot</div>
+      <div style="font-size: 13px;color:var(--muted);margin-bottom:12px">שולח קריאה אמיתית ל-<code>/yemot</code> — בדיוק כמו שיחת טלפון לכל דבר. הממסר שנבחר באמת יופעל/יכבה (וייתועד ביומן וב-Timeline), אז אפשר לבדוק הרשאות והודעות בלי לחייג בפועל.</div>
+      <div class="form-row-inline">
+        <div class="form-row">
+          <label class="form-label">מתקשר לבדיקה (ID)</label>
+          <select class="form-input" id="yt-caller-select"></select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">ממסר</label>
+          <select class="form-input" id="yt-relay-select"></select>
+        </div>
+      </div>
+      <div class="form-row-inline">
+        <div class="form-row">
+          <label class="form-label">פעולה</label>
+          <select class="form-input" id="yt-action-select">
+            <option value="1">הדלקה</option>
+            <option value="2">כיבוי</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">משך זמן (דקות, 0 = קבוע)</label>
+          <input class="form-input" type="number" min="0" id="yt-duration-input" value="0">
+        </div>
+      </div>
+      <button class="icon-btn" onclick="runYemotTest()" style="margin-top:10px;background:var(--accent);color:#fff">📞 שלח בדיקה</button>
+      <div id="yt-result" style="margin-top:10px;font-size:14px;white-space:pre-wrap;line-height:1.6"></div>
+    </div>
+
+    <!-- TTS / INI CARD -->
+    <div class="user-card" style="margin-top:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div class="user-name">🔊 עריכת הודעות קוליות (TTS) ו-ext.ini בשלוחה</div>
+      </div>
+      <div style="font-size: 13px;color:var(--muted);margin-bottom:12px">עריכה ישירה של קבצי הטקסט/TTS בשלוחת ימות המשיח דרך ה-API הרשמי (DownloadFile/UploadFile) — בלי להיכנס לאתר ימות. אפשר גם לעדכן אוטומטית את כל קבצי תפריט "ממסר ← פעולה ← משך זמן" לפי שמות הממסרים והרשאות המתקשרים שמוגדרים כרגע במערכת.</div>
+      <div class="form-row-inline">
+        <div class="form-row">
+          <label class="form-label">מספר שלוחה</label>
+          <input class="form-input" id="ivr-ext-input" placeholder="למשל: 1">
+        </div>
+        <div class="form-row">
+          <label class="form-label">שם קובץ (TTS / ext.ini)</label>
+          <input class="form-input" id="ivr-tts-file-input" placeholder="למשל: 000.tts / ext.ini">
+        </div>
+      </div>
+      <textarea id="ivr-tts-content" class="form-input" rows="4" placeholder="תוכן הקובץ יוצג כאן לאחר טעינה..." style="width:100%;margin-top:8px;resize:vertical;font-family:inherit"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="icon-btn" onclick="loadYemotFile()">📥 טען מהשלוחה</button>
+        <button class="icon-btn" onclick="saveYemotFile()">💾 שמור לשלוחה</button>
+        <button class="icon-btn" onclick="previewYemotAutoUpdate()">👁️ תצוגה מקדימה (תפריט ממסר/פעולה/זמן)</button>
+        <button class="icon-btn" onclick="runYemotAutoUpdate()" style="background:var(--accent);color:#fff">🔄 עדכן אוטומטית (000/001/002.tts + ext.ini)</button>
+      </div>
+    </div>
+
+    <!-- CALL LOG CARD -->
+    <div class="user-card" style="margin-top:16px">
+      <div class="user-name" style="margin-bottom:6px">📋 יומן שיחות IVR</div>
+      <div style="font-size: 13px;color:var(--muted)">כל ניסיון שיחה — גם נכשל/לא מורשה — יתועד כאן. מוצגים רק ID ושם, ללא מספר הטלפון עצמו. ייעשה שימוש ב-addServerLog הקיים עם תיוג מקור "ימות".</div>
+      <div id="ivr-call-log" style="margin-top:8px;font-size: 13px;color:var(--text2)">— יוצג לאחר חיבור לשרת —</div>
+    </div>
+  </div>
+
+  <!-- HA DEVICES TAB -->
+  <div id="tab-ha_devices" class="panel">
+    <div class="section-title" style="margin-bottom:14px">🏠 התקני Home Assistant</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      הוסף התקנים מ-Home Assistant לרשימת הממסרים — כך תוכל לתזמן אותם בדיוק כמו בקרי Tasmota.
+      כל התקן שתוסיף יקבל מזהה ממסר ייחודי ויהיה זמין בבחירת ממסר בתוכניות.
+    </div>
+
+    <!-- הגדרות HA -->
+    <div class="user-card" style="margin-bottom:16px">
+      <div class="user-name" style="margin-bottom:10px">⚙️ הגדרות חיבור</div>
+      <div class="form-row-inline">
+        <div class="form-row" style="flex:2">
+          <label class="form-label">כתובת Home Assistant</label>
+          <input class="form-input" id="ha-url-input" placeholder="http://homeassistant.local:8123" value="http://homeassistant.local:8123">
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:10px">
+        <label class="form-label">Long-Lived Access Token</label>
+        <input class="form-input" id="ha-token-input" type="password" placeholder="הזן טוקן HA (Settings → Security → Long-Lived Access Tokens)">
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">הטוקן נשמר מקומית בשרת ואינו נחשף ב-Git. ב-HA: Settings → שם פרופיל (מטה) → Long-Lived Access Tokens → Create Token</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="icon-btn" onclick="saveHaSettings()" style="background:var(--accent);color:#fff">💾 שמור הגדרות</button>
+        <button class="icon-btn" onclick="fetchHaDevices()">🔄 רענן רשימת התקנים מ-HA</button>
+        <span id="ha-fetch-status" style="font-size:13px;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <!-- רשימת התקנים זמינים -->
+    <div id="ha-available-section" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div class="section-title">התקנים זמינים ב-HA</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="form-input" id="ha-search" placeholder="🔍 חיפוש..." style="width:200px" oninput="renderHaAvailable()">
+          <button class="icon-btn" onclick="selectAllHaDevices()">בחר הכל</button>
+          <button class="icon-btn" onclick="clearHaSelection()">נקה בחירה</button>
+          <button class="icon-btn" onclick="saveHaDevices()" style="background:var(--accent2);color:#fff">✅ הוסף נבחרים</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        סמן התקנים להוספה לרשימת הממסרים. התקנים שכבר נוספו מסומנים.
+      </div>
+      <div id="ha-available-list" style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;padding-left:4px"></div>
+    </div>
+
+    <!-- התקנים שנוספו -->
+    <div style="margin-top:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="section-title">התקנים פעילים</div>
+        <button class="icon-btn" onclick="refreshHaStates()">🔄 עדכן מצבים</button>
+      </div>
+      <div id="ha-active-list">
+        <div style="font-size:13px;color:var(--muted)">לא נוספו עדיין התקנים — לחץ "רענן" להצגת ההתקנים הזמינים ב-HA</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOG TAB -->
+  <div id="tab-log" class="panel">
+    <div class="log-toolbar">
+      <div class="section-title">יומן אירועים (שמור בין ריענונים)</div>
+      <div class="toolbar-group">
+        <button class="icon-btn" onclick="clearLog()">🗑 נקה</button>
+        <button class="icon-btn" onclick="copyLogToClipboard()">📋 העתק ללוח</button>
+        <button class="icon-btn" onclick="exportLog()">📤 ייצוא</button>
+        <button class="icon-btn" onclick="toggleLogExpand()" id="log-expand-btn">↕ הצג הכל</button>
+      </div>
+    </div>
+    <div class="log-box" id="log-box"></div>
+  </div>
+</div>
+
+<!-- ADD/EDIT PROGRAM MODAL -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">הוסף תוכנית חדשה</div>
+    <div class="form-row">
+      <label class="form-label">שם התוכנית</label>
+      <input class="form-input" id="prog-name-input" placeholder="למשל: דוד שבת">
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row">
+        <label class="form-label">ממסר (Ctrl לריבוי)</label>
+        <select class="form-select" id="prog-relay-select" multiple style="min-height:72px"></select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">פעולה</label>
+        <select class="form-select" id="prog-action-select" onchange="updateProgForm()">
+          <option value="ON">הדלקה</option>
+          <option value="OFF">כיבוי</option>
+        </select>
+      </div>
+    </div>
+    <!-- Duration row -->
+    <div class="form-row" id="duration-row">
+      <label class="form-label">למשך (אופציונלי — בסיום יבצע פעולה הפוכה)</label>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer">
+          <input type="checkbox" id="prog-duration-on" onchange="updateProgForm()"> הפעל "למשך"
+        </label>
+        <div id="duration-inputs" style="display:none;align-items:center;gap:6px">
+          <input class="form-input" type="number" id="prog-duration-h" value="0" min="0" max="23" style="width:60px" oninput="updateProgForm()"> שע'
+          <input class="form-input" type="number" id="prog-duration-m" value="30" min="0" max="59" style="width:60px" oninput="updateProgForm()"> דק'
+          <span id="duration-preview" style="font-size: 13px;color:var(--accent3)"></span>
+        </div>
+      </div>
+      <!-- מחזורי הפסקה -->
+      <div id="cycle-section" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface2)">
+        <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer;margin-bottom:8px">
+          <input type="checkbox" id="prog-cycle-on" onchange="updateProgForm()"> מחזורי הפסקה (לדוגמה: מזגן)
+        </label>
+        <div id="cycle-inputs" style="display:none;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--text2)">פעולה למשך</span>
+            <input class="form-input" type="number" id="prog-cycle-on-min" value="20" min="1" max="180" style="width:60px" oninput="updateProgForm()"> דק'
+            <span style="font-size:12px;color:var(--text2)">→ הפסקה למשך</span>
+            <input class="form-input" type="number" id="prog-cycle-off-min" value="10" min="1" max="180" style="width:60px" oninput="updateProgForm()"> דק'
+            <span style="font-size:12px;color:var(--text2)">— חזרה על המחזור</span>
+          </div>
+          <div id="cycle-preview" style="font-size: 12px;color:var(--accent3)"></div>
+
+          <!-- תוכנית-בת -->
+          <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer;margin-bottom:8px">
+              <input type="checkbox" id="prog-child-on" onchange="updateProgForm()"> הגדר תוכנית-בת לזמן ההפסקות
+            </label>
+            <div id="child-inputs" style="display:none;flex-direction:column;gap:8px">
+              <div class="form-row-inline">
+                <div class="form-row">
+                  <label class="form-label">ממסר (תוכנית-בת)</label>
+                  <select class="form-select" id="child-relay-select"></select>
+                </div>
+                <div class="form-row">
+                  <label class="form-label">פעולה</label>
+                  <select class="form-select" id="child-action-select">
+                    <option value="ON">הדלקה</option>
+                    <option value="OFF">כיבוי</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <span style="font-size:12px;color:var(--text2)">תזמון:</span>
+                <select class="form-select" id="child-timing" style="width:140px" onchange="updateProgForm()">
+                  <option value="before">לפני ההפסקה</option>
+                  <option value="after">אחרי תחילת ההפסקה</option>
+                </select>
+                <input class="form-input" type="number" id="child-offset-min" value="2" min="0" max="60" style="width:60px"> דק'
+              </div>
+              <label id="child-ack-row" style="display:none;align-items:center;gap:6px;font-size: 13px;cursor:pointer">
+                <input type="checkbox" id="child-require-ack"> לדרוש אישור מהבקר שהפעולה המקורית בוצעה לפני הפעלת הבת
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-size: 13px;cursor:pointer">
+                <input type="checkbox" id="child-confine" checked> להגביל את תוכנית-הבת לזמן ההפסקה בלבד (תחזור לכיוון ההפוך בסיום, עם buffer ~30 שנ')
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">סוג תזמון</label>
+      <select class="form-select" id="prog-type-select" onchange="updateProgForm()">
+        <option value="time">שעה קבועה</option>
+        <option value="zman">זמן הלכתי</option>
+      </select>
+    </div>
+    <div id="time-section" class="form-row">
+      <label class="form-label">שעה</label>
+      <input class="form-input" type="time" id="prog-time-input" value="07:00">
+    </div>
+    <div id="zman-section" class="form-row" style="display:none">
+      <label class="form-label">עוגן הלכתי + היסט</label>
+      <div class="time-anchor-row">
+        <select class="form-select zman-select" id="prog-zman-select">
+          <option value="sunset">שקיעה</option>
+          <option value="sunrise">זריחה</option>
+          <option value="candles">הדלקת נרות</option>
+          <option value="havdalah">צאת שבת</option>
+          <option value="chatzot">חצות</option>
+          <option value="alot_hashachar">עלות השחר</option>
+        </select>
+        <select class="form-select" id="prog-offset-dir" style="width:68px">
+          <option value="+">+</option>
+          <option value="-">−</option>
+        </select>
+        <input class="form-input offset-input" type="number" id="prog-offset-val" value="0" min="0" max="180">
+        <span style="font-size: 13px;color:var(--muted)">דקות</span>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">ימים <span style="font-weight:400;color:var(--muted);font-size:12px">(תנאי מגביל)</span></label>
+      <div id="days-picker" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px"></div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">תאריך מהיומן העברי (אופציונלי)</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        <select class="form-select" id="prog-cal-type" style="width:150px" onchange="updateCalSection()">
+          <option value="none">ללא תאריך מיוחד</option>
+          <option value="annual">תאריך שנתי (כל שנה)</option>
+          <option value="once">תאריך חד פעמי (עם שנה)</option>
+          <option value="rosh_chodesh_aleph">ראש חודש א' (יום א בחודש)</option>
+          <option value="rosh_chodesh_lamed">ראש חודש ל' (יום ל, רק בחודשים מלאים)</option>
+        </select>
+        <input class="form-input" id="prog-cal-search" placeholder="חפש תאריך / חג..." style="flex:1;min-width:140px;display:none" oninput="searchCalendar(this.value)">
+      </div>
+      <div id="cal-results" style="display:none;margin-top:6px;max-height:200px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:7px;position:relative;z-index:500"></div>
+      <div id="cal-selected" style="display:none;margin-top:6px;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);border-radius:7px;padding:7px 10px;font-size: 14px;display:flex;align-items:center;justify-content:space-between">
+        <span id="cal-selected-text"></span>
+        <button onclick="clearCalSelection()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size: 16px">×</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">מצב פעולה</label>
+      <div class="form-mode-chips" id="prog-mode-select"></div>
+    </div>
+    <div class="form-row" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer">
+        <input type="checkbox" id="prog-runonce"> חד פעמי (יבוטל אחרי הפעלה)
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer">
+        <input type="checkbox" id="prog-priority"> עדיפות בהתנגשות
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer">
+        <input type="checkbox" id="prog-active" checked> פעיל
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="form-label">מרווח בין ערוצים (שניות)</label>
+      <input class="form-input" type="number" id="prog-delay" value="0" min="0" max="60">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">ביטול</button>
+      <button class="btn-primary" onclick="saveProgram()">שמור תוכנית</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="calendar_data.js"></script>
+<script>
+// ── CONFIG ──────────────────────────────────────────────
+const BROKER_HOST = 'broker.emqx.io';
+const BROKER_PORT = 8084;
+const MQTT_USER = 'cheem';
+const MQTT_PASS = 'jhho123A';
+const TASMOTA_TOPIC = 'tasmota_D3D204'; // Topic של הבקר
+const LAT = 31.778;
+const LNG = 35.235;
+
+const DAYS_HE   = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
+const DAYS_FULL = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+const ZMAN_LABELS = {sunset:'שקיעה',sunrise:'זריחה',candles:'הדלקת נרות',havdalah:'צאת שבת',chatzot:'חצות',alot_hashachar:'עלות השחר'};
+const LS_KEY = 'smarthome_v2';
+// סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
+// תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
+// מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
+const BUILD_TOP_MARK = 52;
+// ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
+// תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
+let minimalViewMode = false;
+const TL_MIN_PX_PER_HOUR = 40; // קבוע-אבסולוטי: כל שעה אמיתית = 40 פיקסל, בכל מקום ובכל זמן
+const TL_MIN_BLOCK_MIN_PX = 20; // גובה-מינימום לכל בלוק/קטע (כדי שטקסט-שעה יישאר קריא)
+const TL_MIN_BLOCK_MAX_PX = 220; // גובה-מקסימום לכל בלוק/קטע (בלוק ארוך לא "יברח")
+let BUILD_BOTTOM_MARK = 0; // "0" = עדיין לא הגענו לסוף הסקריפט — יתעדכן ל-1 בשורות האחרונות ממש
+let serverBuildTop = 0, serverBuildBottom = 0; // מתקבלים מהשרת (server_build_marks)
+function updateBuildVersionIndicator(){
+  const el = document.getElementById('build-version-indicator');
+  if(!el) return;
+  el.textContent = `${BUILD_TOP_MARK}.${BUILD_BOTTOM_MARK}.${serverBuildTop}.${serverBuildBottom}`;
 }
-
-// ── SOCKET.IO ────────────────────────────────────────────
-io.on('connection', (socket) => {
-  console.log('🖥️ ממשק התחבר');
-  socket.emit('mqtt_status', { connected: mqttConnected });
-  socket.emit('all_states', relayState);
-  CONTROLLERS.forEach(ctrl => {
-    socket.emit('controller_status', { online: controllerOnline[ctrl.id] || false, controller: ctrl.name, controllerId: ctrl.id });
-  });
-  if (serverConfig) socket.emit('server_config', serverConfig);
-  if (serverLog.length) socket.emit('server_log', serverLog);
-  socket.emit('ivr_today_events', ivrTodayEvents);
-  // שלח רשימת התקני HA
-  socket.emit('ha_devices', haDevices);
-  socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
-  socket.emit('scheduled_modes', scheduledModes);
-  // זמנים הלכתיים אמיתיים של היום — מאותו מקור-אמת שהשרת עצמו משתמש בו לתזמון בפועל.
-  // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
-  // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
-  socket.emit('zmanim_today', getZmanim(new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
-  // מידע על טיימר-חזרה ממתין (אם יש) — כדי שלקוח שנטען באמצע הספירה-לאחור יראה מיד את המידע הנכון
-  socket.emit('pending_mode_revert', _pendingRevertInfo);
-  // סימוני-בנייה (ראו הסבר ליד IDX_TOP_MARK) — כדי שהלקוח יוכל להציג את שלמות-שני-הקבצים יחד
-  socket.emit('server_build_marks', { top: IDX_TOP_MARK, bottom: IDX_BOTTOM_MARK });
-
-  // ── Login ──
-  socket.on('login', ({ name, password }) => {
-    if (EMERGENCY_PASSWORD && password === EMERGENCY_PASSWORD) {
-      const adminUser = runtimeUsers.find(u => u.role === 'admin') || runtimeUsers[0];
-      socket.emit('login_result', { success: true, user: publicProfile(adminUser) });
-      socket.emit('server_log', serverLog);
-      return;
-    }
-    const user = runtimeUsers.find(u => u.name === name);
-    if (!user) { socket.emit('login_result', { success: false }); return; }
-    const isHash = user.password?.startsWith('$2b$') || user.password?.startsWith('$2a$');
-    const valid = isHash ? bcrypt.compareSync(password, user.password) : password === user.password;
-    if (valid) {
-      if (!isHash) { user.password = bcrypt.hashSync(password, 10); saveConfigLocal(); }
-      addServerLog({ type: 'info', msg: `כניסה למערכת: ${user.name}`, user: user.name });
-      socket.emit('login_result', { success: true, user: publicProfile(user) });
-      socket.emit('server_log', serverLog);
-    } else {
-      socket.emit('login_result', { success: false });
-    }
-  });
-
-  socket.on('get_users', () => { socket.emit('users_list', runtimeUsers.map(u => publicProfile(u))); });
-
-  socket.on('relay_command', async ({ id, state }) => {
-    try {
-      if (id === 'all') {
-        const allIds = [...Object.keys(schedulerRelayNames).map(Number)];
-        for (const i of allIds) await publishRelay(i, state);
-      } else {
-        await publishRelay(parseInt(id), state);
-      }
-    } catch(err) { console.error('❌', err.message); }
-  });
-
-  // טיימר-ידני מהיר (כפתור "⏱ טיימר" בטאב ממסרים) — רץ **בשרת**, לא ב-setTimeout של הדפדפן.
-  // בלי זה, סגירת/רענון הדפדפן, או המחשב/טלפון שנרדם, היה מוחק את הכיבוי-המתוזמן לצמיתות
-  // והממסר היה נשאר דלוק ללא הגבלה. משתמש באותו מנגנון בדיוק כמו טיימרי-IVR (ivrPendingTimers),
-  // ששורד גם Stop→Start של ה-Add-on עצמו (נשמר ל-config.json).
-  socket.on('quick_timer', async ({ relayId, minutes, userName }) => {
-    const relayName = schedulerRelayNames[relayId] || `ממסר ${relayId}`;
-    const m = parseInt(minutes, 10);
-    if (!relayId || isNaN(m) || m <= 0) return;
-    try {
-      await publishRelay(relayId, 'ON', 'טיימר ידני');
-      const timerId = `manual_${Date.now()}_${Math.round(Math.random()*1e6)}`;
-      const startedAt = Date.now(), dueAt = startedAt + m * 60000;
-      ivrPendingTimers.push({ id: timerId, relayId, revertAction: 'OFF', startedAt, dueAt, label: `${relayName} (טיימר ידני)`, callerId: null });
-      ivrTodayEvents.push({ id: timerId, relayId, callerId: null, startedAt, dueAt, dateKey: new Date(startedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) });
-      saveConfigLocal();
-      io.emit('ivr_today_events', ivrTodayEvents);
-      addServerLog({ type: 'info', msg: `⏱️ טיימר ידני: ${relayName} → ON, יחזור אוטומטית בעוד ${m} דקות`, user: userName || 'משתמש' });
-    } catch (err) {
-      addServerLog({ type: 'danger', msg: `❌ טיימר ידני נכשל: ${relayName} — ${err.message}`, user: 'שרת' });
-    }
-  });
-
-  // ── HA התקנים ──
-  // שמירת הגדרות HA (token + URL)
-  socket.on('save_ha_settings', async ({ token, url }) => {
-    if (token !== undefined) haToken = token;
-    if (url) haUrl = url;
-    saveConfigLocal();
-    socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
-    socket.emit('ha_save_status', { ok: true, msg: 'הגדרות HA נשמרו ✅' });
-    console.log('💾 הגדרות HA נשמרו');
-  });
-
-  // רענון רשימת התקנים מ-HA
-  socket.on('fetch_ha_devices', async () => {
-    try {
-      socket.emit('ha_fetch_status', { stage: 'fetching', msg: 'מושך התקנים מ-Home Assistant...' });
-      const states = await haFetchAllStates();
-      socket.emit('ha_fetch_status', { stage: 'done', msg: `נמצאו ${states.length} התקנים ✅` });
-      socket.emit('ha_available_devices', states);
-    } catch(e) {
-      socket.emit('ha_fetch_status', { stage: 'error', msg: 'שגיאה: ' + e.message });
-    }
-  });
-
-  // הוספת/עדכון התקני HA שנבחרו
-  socket.on('save_ha_devices', (selectedDevices) => {
-    const tasmotaMax = CONTROLLERS.reduce((s, c) => s + c.relayCount, 0);
-
-    // בנה מפה של entity_id → relayId קיים (סנן null/NaN)
-    const existingRelayIds = {};
-    haDevices.forEach(d => {
-      if (d.entity_id && d.relayId && !isNaN(d.relayId)) {
-        existingRelayIds[d.entity_id] = d.relayId;
-      }
-    });
-
-    // פונקציה למציאת relayId חופשי — בטוחה מפני NaN ולולאה אינסופית
-    function findNextRelayId() {
-      const usedIds = new Set([
-        ...Object.values(existingRelayIds).filter(id => id && !isNaN(id)),
-        ...haDevices.filter(d => d.relayId && !isNaN(d.relayId)).map(d => d.relayId)
-      ]);
-      let nextId = Math.max(tasmotaMax, 14) + 1; // לפחות 15
-      while (usedIds.has(nextId)) nextId++;
-      return nextId;
-    }
-
-    // עדכן רשימה — שמור relayId קיים או הקצה חדש
-    haDevices = selectedDevices.map(dev => {
-      if (existingRelayIds[dev.entity_id]) {
-        return { ...dev, relayId: existingRelayIds[dev.entity_id] };
-      } else {
-        const nextId = findNextRelayId();
-        existingRelayIds[dev.entity_id] = nextId; // עדכן למניעת כפילות
-        console.log(`🔧 הוקצה relayId ${nextId} ל-${dev.entity_id}`);
-        return { ...dev, relayId: nextId };
-      }
-    });
-
-    rebuildHaRelayNames();
-    saveConfigLocal();
-    io.emit('ha_devices', haDevices);
-    io.emit('relay_names_update', Object.entries(schedulerRelayNames).map(([id, name]) => ({ id: Number(id), name })));
-    socket.emit('ha_save_status', { ok: true, msg: `${haDevices.length} התקנים נשמרו ✅` });
-    console.log(`🏠 נשמרו ${haDevices.length} התקני HA: ${haDevices.map(d => `${d.entity_id}→${d.relayId}`).join(', ')}`);
-    console.log(`🏠 נשמרו ${haDevices.length} התקני HA`);
-  });
-
-  // עדכון מצב חי של התקני HA
-  socket.on('refresh_ha_states', async () => {
-    try {
-      for (const dev of haDevices) {
-        if (!dev.relayId) continue;
-        try {
-          const st = await haGetState(dev.entity_id);
-          const newState = st.state === 'on' ? 'ON' : 'OFF';
-          relayState[dev.relayId] = newState;
-          io.emit('relay_state', { id: dev.relayId, state: newState });
-        } catch(e) { /* התקן לא זמין */ }
-      }
-    } catch(e) { console.error('שגיאה בעדכון מצב HA:', e.message); }
-  });
-
-  // ── Sync Programs ──
-  socket.on('sync_programs', ({ programs, activeModeId, relayNames, modes, fullConfig }) => {
-    const newIds = new Set((programs || []).map(p => String(p.id)));
-    Array.from(_firedToday).forEach(k => { const progId = k.split('_')[0]; if (!newIds.has(progId)) _firedToday.delete(k); });
-    schedulerPrograms = programs || [];
-    schedulerActiveModeId = activeModeId || 0;
-    if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; });
-    if (fullConfig) serverConfig = fullConfig;
-    socket.emit('sync_ack', { count: schedulerPrograms.length, firedRunOnceToday: Array.from(_firedRunOnceToday.values()) });
-    saveConfigLocal();
-  });
-
-  // ── Mode Switch ──
-  // הערה: computeModeSwitchImpact הוסרה מכאן (הייתה מוגדרת כפול, זהה ל-computeModeSwitchImpactGlobal
-  // שבסקופ המודול) — כדי שכל תיקון עתידי לא ייאלץ להתבצע פעמיים בשתי עותקים זהים.
-  // שני ה-handlers למטה משתמשים כעת ישירות ב-computeModeSwitchImpactGlobal.
-
-  socket.on('request_mode_switch', ({ newModeId }) => {
-    socket.emit('mode_switch_review', { newModeId, ...computeModeSwitchImpactGlobal(newModeId) });
-  });
-
-  socket.on('confirm_mode_switch', ({ newModeId, turnOffRelayIds, activateProgIds }) => {
-    schedulerActiveModeId = newModeId;
-    saveConfigLocal();
-    (turnOffRelayIds || []).forEach(relayId => {
-      publishRelay(relayId, 'OFF').then(() => {
-        if (relayOwner[relayId]) delete relayOwner[relayId];
-        io.emit('scheduler_fired', { progName: 'כיבוי — מעבר מצב ידני', relayId, action: 'OFF' });
-      }).catch(() => {});
-    });
-    if ((activateProgIds || []).length) {
-      const impact = computeModeSwitchImpactGlobal(newModeId);
-      activateProgIds.forEach(progId => {
-        // filter — תוכנית יכולה לכלול מספר ממסרים
-        const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
-        const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
-        matches.forEach(match => {
-          publishRelay(match.relayId, 'ON').then(() => {
-            relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
-            io.emit('scheduler_fired', { progName: match.progName, relayId: match.relayId, action: 'ON' });
-            // אותו תיקון כמו במעבר האוטומטי — למנוע דילוג שקט על הכיבוי-לפי-משך העתידי
-            if (match.fireSec !== undefined) _actuallyFired.add(`${match.progId}_${match.relayId}_${match.segType}_${match.cycleIdx??'x'}_${match.fireSec}_start_${_catchupTodayKey}`);
-            // תוכנית runOnce שהופעלה כהשלמה — יש לכבות את הדגל בדיוק כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
-            if (match.runOnce) {
-              const p = schedulerPrograms.find(x => x.id === match.progId);
-              if (p && p.active) {
-                p.active = false;
-                _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
-                io.emit('program_updated', { id: p.id, active: false });
-                saveConfigLocal();
-              }
-            }
-          }).catch(() => {});
-        });
-      });
-    }
-  });
-
-  // ── Users ──
-  socket.on('save_users', (users) => {
-    runtimeUsers = users.map(u => {
-      const existing = runtimeUsers.find(r => r.name === u.name);
-      if (!u.password) return { ...u, password: existing?.password || '' };
-      const isHash = u.password.startsWith('$2b$') || u.password.startsWith('$2a$');
-      if (isHash) return u;
-      return { ...u, password: bcrypt.hashSync(u.password, 10) };
-    });
-    io.emit('users_list', runtimeUsers.map(u => publicProfile(u)));
-    saveConfigLocal();
-  });
-
-  // ── IVR Users ──
-  socket.on('get_ivr_users', () => { socket.emit('ivr_users_list', buildIvrUsersList()); });
-
-  socket.on('save_ivr_users', async (users) => {
-    try {
-      const newPhoneMap = {};
-      const newPermissions = {};
-      (users || []).forEach(u => {
-        if (!u.phone || !u.id) return;
-        newPhoneMap[u.phone] = u.id;
-        newPermissions[u.id] = {
-          name: u.name, isAdmin: !!u.isAdmin,
-          allowedRelays: u.isAdmin ? [] : (u.allowedRelays || []),
-          allowedActions: u.isAdmin ? ['ON','OFF'] : (u.allowedActions || []),
-          maxDurationMinOn: u.isAdmin ? 0 : (u.maxDurationMinOn ?? 0),
-          maxDurationMinOff: u.isAdmin ? 0 : (u.maxDurationMinOff ?? 0),
-        };
-      });
-      yemotPhoneMap = newPhoneMap;
-      yemotPermissions = newPermissions;
-      saveConfigLocal();
-      io.emit('ivr_users_list', buildIvrUsersList());
-      socket.emit('ivr_save_status', { stage: 'done', msg: 'נשמר בהצלחה ✅' });
-    } catch(e) {
-      socket.emit('ivr_save_status', { stage: 'error', msg: 'שגיאה: ' + e.message });
-    }
-  });
-
-  // ── Yemot Files ──
-  socket.on('get_yemot_file', async ({ ext, filename } = {}) => {
-    try {
-      const content = await yemotDownloadFile(`ivr/${ext}/${filename}`);
-      socket.emit('yemot_file_content', { ok: true, content });
-    } catch(e) { socket.emit('yemot_file_content', { ok: false, error: e.message }); }
-  });
-
-  socket.on('save_yemot_file', async ({ ext, filename, content } = {}) => {
-    try {
-      await yemotUploadFile(`ivr/${ext}/${filename}`, content || '', filename);
-      socket.emit('yemot_save_status', { stage: 'done', msg: 'נשמר בהצלחה ✅' });
-    } catch(e) { socket.emit('yemot_save_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
-  });
-
-  socket.on('get_yemot_autoupdate_preview', () => {
-    try { socket.emit('yemot_autoupdate_preview', { ok: true, ...buildYemotAutoFiles() }); }
-    catch(e) { socket.emit('yemot_autoupdate_preview', { ok: false, error: e.message }); }
-  });
-
-  socket.on('run_yemot_autoupdate', async ({ ext } = {}) => {
-    try {
-      const { tts000, tts001, tts002, extIni } = buildYemotAutoFiles();
-      await yemotUploadFile(`ivr/${ext}/000.tts`, tts000, '000.tts');
-      await yemotUploadFile(`ivr/${ext}/001.tts`, tts001, '001.tts');
-      await yemotUploadFile(`ivr/${ext}/002.tts`, tts002, '002.tts');
-      await yemotUploadFile(`ivr/${ext}/ext.ini`, extIni, 'ext.ini');
-      socket.emit('yemot_autoupdate_status', { stage: 'done', msg: 'עודכן בהצלחה ✅' });
-    } catch(e) { socket.emit('yemot_autoupdate_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
-  });
-
-  socket.on('sync_yemot_whitelist', async () => {
-    try {
-      const templateId = await yemotGetWhitelistTemplateId();
-      const entries = await yemotGetTemplateEntries(templateId);
-      const existingPhones = new Set(entries.map(e => normalizePhoneDigits(e.phone)));
-      const blockedPhones = new Set(entries.filter(e => e.blocked).map(e => normalizePhoneDigits(e.phone)));
-      let added = 0, alreadyThere = 0;
-      const blockedList = [], failedList = [];
-      for (const phone of Object.keys(yemotPhoneMap)) {
-        const norm = normalizePhoneDigits(phone);
-        if (blockedPhones.has(norm)) { blockedList.push(phone); continue; }
-        if (existingPhones.has(norm)) { alreadyThere++; continue; }
-        try { await yemotAddPhoneToWhitelist(templateId, phone); added++; }
-        catch(e) { failedList.push(phone); }
-      }
-      let msg = `${added} נוספו, ${alreadyThere} כבר ברשימה`;
-      if (blockedList.length) msg += `, ⚠️ ${blockedList.length} חסומים`;
-      socket.emit('yemot_whitelist_status', { stage: 'done', msg });
-    } catch(e) { socket.emit('yemot_whitelist_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
-  });
-
-  // הרשומה כבר קיימת מקומית אצל השולח (הוא הוסיף אותה בעצמו לפני השליחה) — לכן משדרים רק לכל השאר,
-  // לא בחזרה אליו. בלי זה, הדפדפן שביצע את הפעולה ראה את הרשומה שלו כפולה (מקומי + הד מהשרת).
-  socket.on('log_entry', (entry) => { addServerLog(entry, socket); });
-
-  // ── תזמוני מצב ──
-  // ── סימולציית-תזמון (בדיקה, לא נוגעת במצב אמיתי) ──
-  socket.on('simulate_schedule', ({ fromDateStr, toDateStr, simModeId } = {}) => {
-    try {
-      const report = simulateScheduleRange(fromDateStr, toDateStr, simModeId);
-      socket.emit('simulate_schedule_result', { ok: true, events: report });
-    } catch(e) {
-      socket.emit('simulate_schedule_result', { ok: false, error: e.message });
-    }
-  });
-
-  socket.on('get_scheduled_modes', () => {
-    socket.emit('scheduled_modes', scheduledModes);
-  });
-
-  socket.on('save_scheduled_modes', (modes) => {
-    scheduledModes = modes || [];
-    saveConfigLocal();
-    io.emit('scheduled_modes', scheduledModes);
-    socket.emit('scheduled_modes_saved', { ok: true, count: scheduledModes.length });
-    addServerLog({ type: 'info', msg: `🕐 נשמרו ${scheduledModes.length} תזמוני מצב`, user: 'מערכת' });
-  });
-
-  socket.on('disconnect', () => { console.log('🖥️ ממשק התנתק'); });
-});
-
-// ── SCHEDULER ENGINE (זהה לגרסה המקורית) ───────────────
-// ימים/חגים שבהם מלאכה אסורה — קובע מתי הדלקת נרות/הבדלה רלוונטיים.
-// מבוסס על אימות ישיר של calendar_data.js בפועל (36,524 רשומות, 2026-2125):
-// שדה 'יום' מכיל שמות ימים בעברית ('שבת' וכו'), ושדה 'חג/אירוע' מתייג כל יום בנפרד —
-// כולל חגים דו-יומיים (וידאתי בפועל: ראש השנה מתויג "ראש השנה" בשני התאריכים ברצף,
-// לא רק ביום הראשון) — ולכן מספיק לבדוק את היום עצמו + מחר, בלי טיפול מיוחד לחג דו-יומי.
-// 'חול המועד פסח/סוכות' אינם ברשימה בכוונה (אסור-מלאכה לא חל עליהם).
-const ASSUR_MELACHA_HOLIDAYS = new Set(['פסח', 'פסח (שביעי)', 'שבועות', 'ראש השנה', 'יום כיפור', 'סוכות', 'שמחת תורה']);
-// מיפוי יום-בחודש-העברי למספר 1-30 — אומת מול קובץ הלוח המלא (36,524 רשומות) בלי שגיאה אחת.
-// נדרש לזיהוי "ראש חודש" (calType: rosh_chodesh_aleph/rosh_chodesh_lamed).
+// זמנים הלכתיים אמיתיים מהשרת (אירוע zmanim_today) — מוכרז כאן, ממש בתחילת הסקריפט,
+// כי getProgMinutes נקרא כבר בתוך renderAll() ב-INIT, לפני שהיה אפשר להגיע לשורה הזו
+// אם היא מוכרזת מאוחר יותר בקובץ (TDZ — ReferenceError שמקריס את כל שאר הסקריפט,
+// כולל connectMQTT() וטעינת רשימת המשתמשים — זה בדיוק מה שגרם ל"לא טוען משתמשים").
+let serverZmanim = {};
+// מידע על טיימר-חזרה ממתין בשרת (אם יש): { revertToMode, revertAtEpochMs } | null.
+// מתעדכן ע"י אירוע 'pending_mode_revert' מהשרת. נחוץ לסימולציית ציר-הזמן (computeModeSegments).
+let serverPendingRevert = null;
+// אותה סיבה בדיוק: isAssurMelachaEntryClient (המשמשת בתוך updateZmanimBarExtras, שנקראת ב-INIT)
+// זקוקה לזה — גם היא חייבת להיות מוכרזת לפני ה-INIT, לא רק לפני השימוש הראשון שלה בתוך הפונקציה.
+const ASSUR_MELACHA_HOLIDAYS_CLIENT = new Set(['פסח','פסח (שביעי)','שבועות','ראש השנה','יום כיפור','סוכות','שמחת תורה']);
+// ═══ דריסת-זמן לצורך סימולציה/בדיקה ═══════════════════════════════════════════
+// לבדיקה: מה יראה ציר-הזמן/המערכת אם "עכשיו" היה רגע אחר (למשל כדי לדמות חציית-חצות,
+// או תזמון-מצב עתידי) — בלי לחכות בפועל לזמן האמיתי. השאירו null בשימוש רגיל!
+// לשימוש: הסירו את ההערה מהשורה הבאה וקבעו תאריך/שעה רצויים (שנה, חודש-1, יום, שעה, דקה):
+// const _DEBUG_NOW_OVERRIDE = new Date(2026, 6, 11, 1, 0, 0).getTime(); // דוגמה: שבת 01:00
+const _DEBUG_NOW_OVERRIDE = null;
+function getNowMs(){ return _DEBUG_NOW_OVERRIDE ?? Date.now(); }
+// מיפוי יום-בחודש-העברי (המחרוזת שמופיעה בתחילת שדה "תאריך עברי") למספר 1-30 — אומת מול קובץ
+// הלוח המלא (36,524 רשומות, 100 שנה) בלי שגיאה אחת. נדרש לזיהוי "ראש חודש" (יום א או ל בחודש).
+// מוכרז כאן, לפני ה-INIT, כי renderAll()←renderRelays()←relayCardHtml()←isProgEffective() יכולה
+// להגיע לתוכנית עם calType מוגדר כבר בטעינת-העמוד הראשונה — בדיוק כמו כל שאר מקרי ה-TDZ בפרויקט הזה.
 const HEB_DAY_MAP = {
   "א'":1, "ב'":2, "ג'":3, "ד'":4, "ה'":5, "ו'":6, "ז'":7, "ח'":8, "ט'":9, "י'":10,
   'י"א':11, 'י"ב':12, 'י"ג':13, 'י"ד':14, 'ט"ו':15, 'ט"ז':16, 'י"ז':17, 'י"ח':18, 'י"ט':19, "כ'":20,
   'כ"א':21, 'כ"ב':22, 'כ"ג':23, 'כ"ד':24, 'כ"ה':25, 'כ"ו':26, 'כ"ז':27, 'כ"ח':28, 'כ"ט':29, "ל'":30
 };
+// אינדקס-חיפוש של קובץ הלוח (calendar_data.js) — נבנה פעם אחת, בשימוש ב-getCalEntry. גם הוא חייב
+// להיות מוכרז כאן, לפני ה-INIT, מאותה סיבה בדיוק (updateZmanimBarExtras קוראת ל-getCalEntry ב-INIT).
+let _calIndexCache = null;
+// מונה ניסיונות-חוזרים לחישוב הדלקת נרות/הבדלה — גם הוא חייב להיות מוכרז לפני ה-INIT,
+// מאותה סיבה בדיוק (updateZmanimBarExtras נקראת ב-INIT ומשתמשת בו).
+let _zmanimBarRetryCount = 0;
+
+// ── LOCALSTORAGE ─────────────────────────────────────────
+function saveLS() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      programs, modes, activeModeId,
+      nextProgId,
+      log: logEntries.slice(0,250)
+    }));
+  } catch(e){}
+  syncProgramsToServer();
+}
+
+let _syncConfirmed = false; // האם הסנכרון אושר מהשרת
+let _importPending = false; // האם יש ייבוא ממתין לאישור
+
+function syncProgramsToServer() {
+  if (socket && socket.connected) {
+    _syncConfirmed = false;
+    socket.emit('sync_programs', {
+      programs,
+      activeModeId,
+      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      fullConfig: {
+        relayNames: relays.map(r=>({id:r.id,name:r.name})),
+        programs,
+        modes,
+        activeModeId,
+        nextProgId,
+      }
+    });
+  }
+}
+
+function migrateProg(p) {
+  // migration: modeId (ישן) → modeIds (חדש)
+  if (!p.modeIds) {
+    p.modeIds = (p.modeId !== null && p.modeId !== undefined) ? [p.modeId] : [0];
+  }
+  return p;
+}
+
+function applyServerConfig(d) {
+  if (!d) return;
+  serverConfig = d; // שמור גלובלית לשימוש ב-quickActions וכו'
+  if (d.relayNames) d.relayNames.forEach(rn => { const r=relays.find(x=>x.id===rn.id); if(r) r.name=rn.name; });
+  if (d.programs?.length)  { programs.length=0;  d.programs.forEach(p=>programs.push(migrateProg(p))); }
+  if (d.modes?.length)     { modes.length=0;     d.modes.forEach(m=>modes.push(m)); }
+  if (d.activeModeId !== undefined) activeModeId = d.activeModeId;
+  if (d.nextProgId)  nextProgId = d.nextProgId;
+  // שמור ב-LocalStorage כדי שבפתיחה הבאה יטען מהר
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      programs, modes, activeModeId, nextProgId,
+      log: logEntries.slice(0,250)
+    }));
+  } catch(e){}
+  renderAll();
+  addLog('info', 'הגדרות סונכרנו מהשרת');
+}
+function loadLS() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.relayNames) d.relayNames.forEach(rn => { const r=relays.find(x=>x.id===rn.id); if(r) r.name=rn.name; });
+    if (d.programs?.length) { programs.length=0; d.programs.forEach(p=>programs.push(migrateProg(p))); }
+    if (d.modes?.length)    { modes.length=0;    d.modes.forEach(m=>modes.push(m)); }
+    if (d.activeModeId !== undefined) activeModeId = d.activeModeId;
+    if (d.nextProgId)  nextProgId = d.nextProgId;
+    if (d.log?.length) { logEntries.length=0; d.log.forEach(e=>logEntries.push(e)); }
+  } catch(e){}
+}
+
+// ── STATE ────────────────────────────────────────────────
+const relays = [
+  // בקר ראשי
+  {id:1,name:'ממסר 1',state:false,ctrl:'main'},
+  {id:2,name:'ממסר 2',state:false,ctrl:'main'},
+  {id:3,name:'ממסר 3',state:false,ctrl:'main'},
+  {id:4,name:'ממסר 4',state:false,ctrl:'main'},
+  {id:5,name:'ממסר 5',state:false,ctrl:'main'},
+  {id:6,name:'ממסר 6',state:false,ctrl:'main'},
+  // בקר שני
+  {id:7,name:'ממסר ב1',state:false,ctrl:'second'},
+  {id:8,name:'ממסר ב2',state:false,ctrl:'second'},
+  {id:9,name:'ממסר ב3',state:false,ctrl:'second'},
+  {id:10,name:'ממסר ב4',state:false,ctrl:'second'},
+  {id:11,name:'ממסר ב5',state:false,ctrl:'second'},
+  {id:12,name:'ממסר ב6',state:false,ctrl:'second'},
+  {id:13,name:'ממסר ב7',state:false,ctrl:'second'},
+  {id:14,name:'ממסר ב8',state:false,ctrl:'second'},
+];
+
+// הגדרת קבוצות בקרים לתצוגה
+const controllerGroups = [
+  { id: 'main',   name: 'בית — KC868-A6',     relayIds: [1,2,3,4,5,6] },
+  { id: 'second', name: 'קומה שנייה — KC868-A8', relayIds: [7,8,9,10,11,12,13,14] },
+];
+let nextProgId = 5;
+const programs = [
+  {seqId:1,id:101,name:'דוד — שבת',relay:[1],type:'zman',zman:'candles',offsetDir:'-',offsetVal:90,action:'ON',days:[5],priority:false,active:true,delay:0,modeIds:[0]},
+  {seqId:2,id:102,name:'דוד — כיבוי לילה',relay:[1],type:'time',time:'23:00',action:'OFF',days:[0,1,2,3,4,5,6],priority:false,active:true,delay:0,modeIds:[0]},
+  {seqId:3,id:103,name:'בוקר טוב',relay:[2,3],type:'time',time:'07:00',action:'ON',days:[0,1,2,3,4],priority:false,active:true,delay:30,modeIds:[0]},
+  {seqId:4,id:104,name:'אורחים — חד פעמי',relay:[3],type:'time',time:'18:30',action:'ON',days:[3],priority:true,active:true,delay:0,modeIds:[0]},
+];
+const modes = [
+  {id:0,name:'רגיל'},
+  {id:1,name:'מצב חופשה'},
+  {id:2,name:'מצב אורחים'},
+];
+let activeModeId = 0;
+// ── USERS & PERMISSIONS ──────────────────────────────────
+// המשתמשים והסיסמאות נשמרים בשרת בלבד
+// הדפדפן מקבל פרופיל ציבורי לאחר כניסה מוצלחת
+let currentUser = null; // המשתמש המחובר כרגע — מגיע מהשרת
+let serverConfig = {}; // הגדרות שרת (quickActions וכו')
+let _scheduledModes = []; // תזמוני החלפת מצב
+let mqttClient = null;
+let socket = null;
+let zmanim = {};
+const logEntries = [];
+let editingProgId = null;
+let selectMode = false;
+let selectedProgIds = new Set();
+
+// ── LOGIN & PERMISSIONS ──────────────────────────────────
+function initLoginScreen() {
+  // בקש רשימת משתמשים מהשרת (ללא סיסמאות)
+  if (socket && socket.connected) {
+    socket.emit('get_users');
+  }
+}
+
+function populateUserSelect(users) {
+  serverUsers = users; // שמור לשימוש ב-renderUsers
+  const sel = document.getElementById('login-user-select');
+  sel.innerHTML = '<option value="">בחר משתמש...</option>';
+  users.forEach(u => {
+    const opt = document.createElement('option');
+    opt.value = u.name;
+    opt.textContent = u.name;
+    sel.appendChild(opt);
+  });
+  renderUsers(); // עדכן תצוגת הרשאות
+}
+
+function doLogin() {
+  const name = document.getElementById('login-user-select').value;
+  const pass = document.getElementById('login-password').value;
+  if (!name) { document.getElementById('login-error').style.display = 'block'; return; }
+  // שלח לשרת לאימות
+  socket.emit('login', { name, password: pass });
+}
+
+function doLogout() {
+  if (!confirm('לצאת מהמערכת?')) return;
+  addLog('info', `יציאה מהמערכת: ${currentUser?.name}`);
+  currentUser = null;
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-overlay').style.display = 'flex';
+}
+
+function applyPermissions() {
+  if (!currentUser) return;
+  const isAdmin = currentUser.role === 'admin';
+
+  // מציאה בטוחה של כרטיסיות לפי תוכן ה-onclick
+  document.querySelectorAll('.tab').forEach(btn => {
+    const oc = btn.getAttribute('onclick') || '';
+    if (oc.includes("'log'")) {
+      btn.style.display = (isAdmin || currentUser.canViewLog) ? '' : 'none';
+    }
+    if (oc.includes("'ivr'")) {
+      btn.style.display = (isAdmin || currentUser.canViewIvr) ? '' : 'none';
+    }
+    if (oc.includes("'ha_devices'")) {
+      btn.style.display = (isAdmin || currentUser.canViewHaDevices) ? '' : 'none';
+    }
+  });
+}
+
+function canControlRelay(relayId) {
+  if (!currentUser) return false;
+  // admin עם relays ריק = גישה לכל, כולל התקני HA דינמיים
+  if (currentUser.role === 'admin') return true;
+  if (!currentUser.relays || !currentUser.relays.length) return false;
+  if (!currentUser.relays.includes(relayId)) return false;
+  if (currentUser.allowedHours) {
+    const h = new Date().getHours();
+    if (h < currentUser.allowedHours.from || h >= currentUser.allowedHours.to) {
+      toast(`⛔ שליטה מותרת רק בין ${currentUser.allowedHours.from}:00–${currentUser.allowedHours.to}:00`);
+      return false;
+    }
+  }
+  return true;
+}
+
+// ── SERVER LOG ───────────────────────────────────────────
+function syncLogToServer(entry) {
+  if (socket && socket.connected) {
+    socket.emit('log_entry', { ...entry, user: currentUser?.name || 'מערכת' });
+  }
+}
+
+// ── INIT ─────────────────────────────────────────────────
+loadLS();
+renderAll();
+// loadZmanim() הוסרה מכאן בכוונה — זריחה/שקיעה עכשיו מגיעות מקובץ הלוח המקומי (updateZmanimBarExtras),
+// לא מ-hebcal (API חיצוני שתלוי בזמינות-רשת שאינה בשליטתנו). הפונקציה עצמה עדיין קיימת בקובץ
+// (למקרה שנרצה בעתיד השוואה/גיבוי), פשוט לא נקראת יותר אוטומטית.
+updateZmanimBarExtras();
+setInterval(updateZmanimBarExtras, 5 * 60 * 1000); // רענון כל 5 דק' — חשוב למי שמשאיר את הדף פתוח לאורך זמן
+updateStickyOffsets();
+window.addEventListener('resize', updateStickyOffsets);
+connectMQTT(); // רשימת משתמשים תיטען אחרי חיבור
+
+function renderAll() {
+  renderRelays();
+  renderPrograms();
+  renderModes();
+  renderLog();
+  populateBulkModeSelect();
+}
+
+// ── SOCKET.IO ────────────────────────────────────────────
+function connectMQTT() {
+  addLog('info','מנסה להתחבר לשרת...');
+  socket = io(window.location.origin);
+  socket.on('connect', () => {
+    addLog('success','מחובר לשרת! המערכת מוכנה.');
+    setStatus(true);
+    syncProgramsToServer();
+    // בקש רשימת משתמשים
+    socket.emit('get_users');
+    socket.emit('get_ivr_users');
+  });
+
+  socket.on('users_list', (names) => {
+    populateUserSelect(names);
+  });
+
+  socket.on('ivr_users_list', (users) => {
+    ivrUsers = users;
+    renderIvrUsers();
+    populateYemotTestSelectors();
+  });
+
+  socket.on('ivr_save_status', ({ stage, msg }) => {
+    toast(msg);
+    if (stage === 'error') console.error('IVR save error:', msg);
+  });
+
+  // טעינה/שמירה של קובץ TTS/ext.ini בשלוחת ימות (כרטיסיית IVR)
+  socket.on('yemot_file_content', ({ ok, content, error }) => {
+    if (ok) {
+      document.getElementById('ivr-tts-content').value = content;
+      toast('נטען בהצלחה ✅');
+    } else {
+      toast('שגיאה בטעינה: ' + error);
+      console.error('Yemot load error:', error);
+    }
+  });
+
+  socket.on('yemot_save_status', ({ stage, msg }) => {
+    toast(msg);
+    if (stage === 'error') console.error('Yemot save error:', msg);
+  });
+
+  socket.on('yemot_autoupdate_preview', ({ ok, tts000, tts001, tts002, extIni, error }) => {
+    if (ok) {
+      document.getElementById('ivr-tts-content').value =
+        `═══ 000.tts (רשימת ממסרים + בחירה) ═══\n${tts000}\n\n` +
+        `═══ 001.tts (בחירת פעולה) ═══\n${tts001}\n\n` +
+        `═══ 002.tts (בחירת משך זמן) ═══\n${tts002}\n\n` +
+        `═══ ext.ini ═══\n${extIni}`;
+      toast('זו תצוגה מקדימה בלבד — עדיין לא הועלה לימות');
+    } else {
+      toast('שגיאה בבניית התצוגה המקדימה: ' + error);
+    }
+  });
+
+  socket.on('yemot_autoupdate_status', ({ stage, msg }) => {
+    toast(msg);
+    if (stage === 'error') console.error('Yemot autoupdate error:', msg);
+  });
+
+  socket.on('yemot_whitelist_status', ({ stage, msg }) => {
+    toast(msg);
+    if (stage === 'error') console.error('Yemot whitelist sync error:', msg);
+  });
+
+  socket.on('login_result', ({ success, user }) => {
+    if (success) {
+      currentUser = user;
+      document.getElementById('login-overlay').style.display = 'none';
+      document.getElementById('user-pill-name').textContent = user.name;
+      document.getElementById('login-error').style.display = 'none';
+      applyPermissions();
+      renderAll();
+    } else {
+      document.getElementById('login-error').style.display = 'block';
+    }
+  });
+
+  socket.on('server_config', (d) => {
+    applyServerConfig(d);
+  });
+
+  socket.on('server_log', (entries) => {
+    // טען יומן מהשרת — מיזוג עם מקומי
+    if (entries && entries.length) {
+      logEntries.length = 0;
+      entries.forEach(e => logEntries.push(e));
+      renderLog();
+    }
+    // אבחון-זמן חד-פעמי — הושבת אחרי שהשתמשנו בו לאיתור ולתיקון באג ה-3-שעות (ראה סיכום פרויקט).
+    // להפעלה מחדש במקרה הצורך: הסר את ה-/* */ מסביב לבלוק למטה.
+    /*
+    try {
+      const _diagRaw = new Date();
+      const _diagP = getIsraelParts(_diagRaw);
+      const _diagIL = new Date(_diagP.year, _diagP.month-1, _diagP.day, _diagP.hour, _diagP.minute, _diagP.second);
+      const _diagTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      addLog('info', `🕵️ אבחון-זמן: אזור-זמן דפדפן="${_diagTz}" | עכשיו-גולמי=${_diagRaw.toString()} | עכשיו-מתוקן-לישראל=${_diagIL.toString()} | getCalData().length=${typeof getCalData==='function'?getCalData().length:'לא-קיים-עדיין'}`);
+    } catch(e) { addLog('danger', `❌ שגיאה באבחון-זמן: ${e.message}`); }
+    */
+  });
+
+  socket.on('log_broadcast', (entry) => {
+    // קבל רשומת יומן מחובר אחר בזמן אמת
+    const exists = logEntries.find(e => e.time===entry.time && e.msg===entry.msg);
+    if (!exists) {
+      logEntries.unshift(entry);
+      if (logEntries.length > 300) logEntries.pop();
+      renderLog();
+    }
+  });
+
+  socket.on('scheduler_fired', ({ progName, relayId, action }) => {
+    updateRelayUI(relayId, action === 'ON');
+  });
+  socket.on('mqtt_status', (data) => {
+    setStatus(data.connected);
+    if (!data.connected) addLog('info','שרת מנותק מ-MQTT...');
+  });
+
+  socket.on('controller_status', ({ online, controller }) => {
+    setControllerStatus(online, controller);
+  });
+  socket.on('all_states', (states) => {
+    const now = new Date();
+    const _p1 = getIsraelParts(now);
+    const nowMin = _p1.hour * 60 + _p1.minute;
+    const dateKey = `${_p1.year}-${String(_p1.month).padStart(2,'0')}-${String(_p1.day).padStart(2,'0')}`;
+    relays.forEach(r => {
+      const s = states[r.id];
+      if (!s) return;
+      const isOn = s === 'ON';
+      updateRelayUI(r.id, isOn);
+      if (isOn) {
+        const hasOpen = manualEvents.some(e => e.relayId === r.id && e.endMin === null);
+        if (!hasOpen) {
+          manualEvents.push({ relayId: r.id, date: dateKey, startMin: nowMin, endMin: null, source: 'מצב בעת כניסה' });
+        }
+      }
+    });
+    _relayEventsCache = {};
+    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+  socket.on('relay_state', ({ id, state }) => {
+    updateRelayUI(id, state === 'ON');
+  });
+  // אירועי IVR של היום (לא היסטוריה רב-יומית, ולא תלוי אם דפדפן היה פתוח כשהפעולה קרתה)
+  socket.on('ivr_today_events', (timers) => {
+    rebuildIvrManualEvents(timers);
+    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+  // עדכון תוכנית מהשרת (למשל ביטול אוטומטי של "חד פעמי")
+  socket.on('sync_ack', ({ count, firedRunOnceToday: fired }) => {
+    _syncConfirmed = true;
+    // קבל תוכניות runOnce שפעלו היום מהשרת
+    if (fired && fired.length) {
+      fired.forEach(p => { _firedRunOnceToday[p.id] = { ...p, _firedDone: true }; });
+      if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    }
+    // אם יש ייבוא ממתין — בצע אותו עכשיו
+    if (_importPending) {
+      _importPending = false;
+      document.getElementById('import-file-input')?.click();
+    }
+  });
+
+  socket.on('program_updated', ({ id, active }) => {
+    const p = programs.find(x => x.id === id);
+    if (p) {
+      p.active = active;
+      if (p.runOnce) markRunOnceFired(p);
+      renderPrograms(); renderRelays();
+      if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+      saveLS();
+      addLog('info', `[חד פעמי] תוכנית "${p.name}" בוטלה אוטומטית אחרי הפעלה (עודכן מהשרת)`);
+    }
+  });
+  // ── HOME ASSISTANT ──
+  socket.on('ha_settings', (settings) => {
+    applyHaSettings(settings);
+  });
+
+  socket.on('ha_save_status', ({ ok, msg }) => {
+    toast(ok ? '✅ ' + msg : '❌ ' + msg);
+  });
+
+  socket.on('ha_fetch_status', ({ stage, msg }) => {
+    const el = document.getElementById('ha-fetch-status');
+    if (el) el.textContent = msg;
+    if (stage === 'error') toast('❌ ' + msg);
+  });
+
+  socket.on('ha_available_devices', (devices) => {
+    haAvailableDevices = devices;
+    // סמן אוטומטית התקנים שכבר נוספו
+    haSelectedIds = new Set(haActiveDevices.map(d => d.entity_id));
+    document.getElementById('ha-available-section').style.display = '';
+    renderHaAvailable();
+    toast(`✅ נמצאו ${devices.length} התקנים`);
+  });
+
+  socket.on('ha_devices', (devices) => {
+    haActiveDevices = devices;
+    // הוסף ממסרים חדשים לרשימת relays אם לא קיימים
+    devices.forEach(dev => {
+      if (!relays.find(r => r.id === dev.relayId)) {
+        relays.push({ id: dev.relayId, name: dev.friendly_name, state: false, ctrl: 'ha' });
+      } else {
+        const r = relays.find(r => r.id === dev.relayId);
+        if (r) r.name = dev.friendly_name;
+      }
+    });
+    renderHaActive();
+    renderRelays();
+  });
+
+  socket.on('relay_names_update', (names) => {
+    names.forEach(({ id, name }) => {
+      const r = relays.find(r => r.id === id);
+      if (r) r.name = name;
+    });
+    renderRelays();
+    if (document.getElementById('tab-ha_devices')?.classList.contains('active')) renderHaActive();
+  });
+
+  // זמנים הלכתיים אמיתיים מהשרת — ראו getProgMinutes ותיקון ה-19:20 הקשיח
+  socket.on('zmanim_today', (z) => {
+    serverZmanim = z || {};
+    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+
+  // טיימר-חזרה ממתין (אם יש) — נחוץ לסימולציית ציר-הזמן כדי להתחיל מנקודה מדויקת "מעכשיו"
+  socket.on('pending_mode_revert', (info) => {
+    serverPendingRevert = info || null;
+    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+  });
+
+  socket.on('server_build_marks', (marks) => {
+    serverBuildTop = marks?.top ?? 0;
+    serverBuildBottom = marks?.bottom ?? 0;
+    updateBuildVersionIndicator();
+  });
+
+  socket.on('simulate_schedule_result', ({ ok, events, error }) => {
+    if(!ok){ document.getElementById('sim-results').innerHTML = `<div style="color:#ef4444;padding:12px">❌ ${error}</div>`; return; }
+    renderSimResults(events);
+  });
+
+  // ── תזמוני מצב ──
+  socket.on('scheduled_modes', (modes) => {
+    _scheduledModes = modes || [];
+    renderScheduledModes();
+  });
+
+  socket.on('scheduled_modes_saved', ({ ok, count }) => {
+    if (ok) toast(`✅ ${count} תזמוני מצב נשמרו`);
+  });
+
+  socket.on('mode_changed', ({ newModeId, label }) => {
+    activeModeId = newModeId;
+    renderModes(); renderPrograms(); renderRelays();
+    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    saveLS();
+    // ⚠️ לא מוסיפים כאן addLog — הרישום ליומן כבר מגיע מהשרת דרך 'log_broadcast'
+    // (addServerLog בתוך commitAutoModeSwitch). הוספה כאן גרמה לכפילות בשורת היומן.
+  });
+
+  socket.on('disconnect', () => {
+    _syncConfirmed = false;
+    setStatus(false);
+    addLog('danger','התנתק מהשרת');
+  });
+}
+function updateRelayUI(id,state){
+  const r=relays.find(r=>parseInt(r.id)===id);
+  if(r&&r.state!==state){r.state=state;renderRelays();}
+}
+function sendRelay(id, state, source='ידני') {
+  if (!canControlRelay(id)) return;
+  const r = relays.find(r => r.id === id);
+  const payload = state ? 'ON' : 'OFF';
+  if (socket && socket.connected) {
+    socket.emit('relay_command', { id, state: payload });
+    addLog('sent', `ממסר ${id} (${r ? r.name : ''}) → ${payload} [${source}]`);
+  } else {
+    addLog('danger', `[מנותק] לא ניתן לשלוח לממסר ${id}`);
+    toast('אין חיבור לשרת');
+  }
+  if (r) { r.state = state; renderRelays(); }
+  addManualEvent(id, state, source);
+}
+  
+function setStatus(on){
+  const pill=document.getElementById('status-pill');
+  const txt=document.getElementById('status-text');
+  if(on===true){pill.className='status-pill connected';txt.textContent='שרת מחובר';}
+  else if(on==='reconnecting'){pill.className='status-pill';txt.textContent='מתחבר מחדש...';}
+  else{pill.className='status-pill';txt.textContent='שרת מנותק';}
+}
+
+function setControllerStatus(online, controllerName) {
+  // זהה את הסיומת לפי שם הבקר
+  const isSecond = controllerName && (controllerName.includes('קומה') || controllerName.includes('second'));
+  const suffix = isSecond ? 'second' : 'main';
+  const dot = document.getElementById(`controller-dot-${suffix}`);
+  const txt = document.getElementById(`controller-text-${suffix}`);
+  if (!dot || !txt) return;
+  if (online) {
+    dot.style.background = 'var(--accent2, #4ade80)';
+    txt.textContent = isSecond ? 'קומה ב׳ מחוברת' : 'בית מחובר';
+  } else {
+    dot.style.background = '#f87171';
+    txt.textContent = isSecond ? 'קומה ב׳ מנותקת' : 'בית מנותק';
+  }
+}
+
+// ── ZMANIM ───────────────────────────────────────────────
+async function loadZmanim(){
+  try{
+    const t=new Date(),y=t.getFullYear(),m=t.getMonth()+1,d=t.getDate();
+    const url=`https://www.hebcal.com/zmanim?cfg=json&latitude=${LAT}&longitude=${LNG}&date=${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}&sec=0`;
+    const res=await fetch(url);const data=await res.json();
+    zmanim=data.times;
+    const fmt=t=>t?new Date(t).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'—';
+    document.getElementById('z-date').textContent=data.date||t.toLocaleDateString('he-IL');
+    document.getElementById('z-sunrise').textContent=fmt(zmanim.sunrise);
+    document.getElementById('z-sunset').textContent=fmt(zmanim.sunset);
+    document.getElementById('z-candles').textContent=fmt(zmanim.candles);
+    document.getElementById('z-havdalah').textContent=fmt(zmanim.havdalah);
+  }catch(e){document.getElementById('z-date').textContent=new Date().toLocaleDateString('he-IL');}
+}
+
+// ── הדלקת נרות / הבדלה הקרובה — מהלוח המקומי (calendar_data.js) בלבד, אותו מקור-אמת שהשרת משתמש בו ──
+function isAssurMelachaEntryClient(entry){
+  if(!entry) return false;
+  if(entry['יום']==='שבת') return true;
+  return ASSUR_MELACHA_HOLIDAYS_CLIENT.has(entry['חג/אירוע']);
+}
+function labelForCalEntry(entry){
+  if(!entry) return '';
+  if(entry['חג/אירוע']) return entry['חג/אירוע'];
+  if(entry['פרשה']) return `פרשת ${entry['פרשה']}`;
+  return '';
+}
+function timeAlreadyPassed(timeStr, now){
+  if(!timeStr) return true;
+  const [hh,mm]=timeStr.split(':').map(Number);
+  const t=new Date(now); t.setHours(hh,mm,0,0);
+  return now.getTime() > t.getTime();
+}
+// סורק עד 10 ימים קדימה ומוצא את הדלקת הנרות/ההבדלה האמיתית הבאה (לא רק "האם היום"), עם תווית
+// (שם החג, או "פרשת X" לשבת רגילה) — בדיוק אותו היגיון כמו getZmanim בשרת (candlesOk/havdalahOk).
+function findNextCandlesAndHavdalah(fromDate){
+  let nextCandles=null, nextHavdalah=null;
+  for(let i=0;i<10 && (!nextCandles||!nextHavdalah);i++){
+    const d=new Date(fromDate); d.setDate(d.getDate()+i); d.setHours(0,0,0,0);
+    const entry=getCalEntry(d);
+    if(!entry) continue;
+    const tmrw=new Date(d); tmrw.setDate(tmrw.getDate()+1);
+    const tEntry=getCalEntry(tmrw);
+    // הדלקת נרות: אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום, לא זמן-השקיעה עצמו
+    const candlesTimeStr = entry['שקיעה'] ? (() => {
+      const m = timeStrToMinutesLocal(entry['שקיעה']);
+      if (m === null) return null;
+      const cm = (m - 22 + 1440) % 1440;
+      return `${String(Math.floor(cm/60)).padStart(2,'0')}:${String(cm%60).padStart(2,'0')}`;
+    })() : null;
+    if(!nextCandles && candlesTimeStr && isAssurMelachaEntryClient(tEntry)){
+      if(i>0 || !timeAlreadyPassed(candlesTimeStr, fromDate)){
+        nextCandles={date:d, time:candlesTimeStr, label:labelForCalEntry(tEntry)};
+      }
+    }
+    if(!nextHavdalah && entry['מוצאי שבת'] && isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry)){
+      if(i>0 || !timeAlreadyPassed(entry['מוצאי שבת'], fromDate)){
+        nextHavdalah={date:d, time:entry['מוצאי שבת'], label:labelForCalEntry(entry)};
+      }
+    }
+  }
+  return {nextCandles, nextHavdalah};
+}
+function fmtNextDateLabel(d, base){
+  if(d.toDateString()===base.toDateString()) return 'היום';
+  const tmrw=new Date(base); tmrw.setDate(tmrw.getDate()+1);
+  if(d.toDateString()===tmrw.toDateString()) return 'מחר';
+  return d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
+}
+
+// ═══ סימולציית מקטעי-מצב לציר הזמן ═══════════════════════════════════════
+// מדמה קדימה (בדיוק לפי אותה לוגיקה כמו processScheduledModes/commitAutoModeSwitch בשרת:
+// טיימר-חזרה יחיד גלובלי, שכל תזמון-מצב חדש — עם duration או בלי — מבטל) איזה מצב פעיל
+// בכל רגע, לאורך טווח הימים המוצג בציר הזמן. מחזיר מערך של {startMs, endMs, modeId}.
+function timeStrToMinutesLocal(t){ if(!t) return null; const [h,m]=t.split(':').map(Number); return h*60+m; }
+
+const ZMAN_SM_FIELD_MAP = { sunset:'שקיעה', sunrise:'נץ החמה', tzeit:'צאת הכוכבים', dawn:'עלות השחר' };
+function getZmanMinutesForDateSM(zmanVal, dayDate){
+  const entry = getCalEntry(dayDate);
+  if(!entry) return null;
+  if(zmanVal==='candles' || zmanVal==='havdalah'){
+    const tmrw = new Date(dayDate); tmrw.setDate(tmrw.getDate()+1);
+    const tEntry = getCalEntry(tmrw);
+    if(zmanVal==='candles'){
+      if(!isAssurMelachaEntryClient(tEntry)) return null;
+      // אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום, לא זמן-השקיעה עצמו
+      const sunsetMin = timeStrToMinutesLocal(entry['שקיעה']);
+      return sunsetMin !== null ? sunsetMin - 22 : null;
+    } else {
+      if(!(isAssurMelachaEntryClient(entry) && !isAssurMelachaEntryClient(tEntry))) return null;
+      return timeStrToMinutesLocal(entry['מוצאי שבת']);
+    }
+  }
+  const field = ZMAN_SM_FIELD_MAP[zmanVal];
+  if(!field) return null;
+  return timeStrToMinutesLocal(entry[field]);
+}
+
+// ממיר זמן-שרת אמיתי (UTC אמיתי, כמו Date.now() בשרת) ל"בסיס-הזמן" שכל שאר קוד הלקוח כבר מניח
+// (תאריכי JS שנבנים מקומית בדפדפן, למשל dayDate.setHours(0,0,0,0)) — בלי זה, אם אזור-הזמן המוגדר
+// בדפדפן שונה מ-Asia/Jerusalem (למשל UTC), יש הפרש-שעות קבוע (למשל 3 שעות בקיץ) בין הזמן ה"אמיתי"
+// שהשרת שולח לבין הזמן שנבנה מקומית — זה בדיוק מה שגרם לתגית "מצב חופשה" להופיע בשעה לא נכונה.
+// מחלץ שנה/חודש/יום/שעה/דקה/שנייה לפי זמן ישראל, ברגע נתון — באמצעות formatToParts (מספרים בלבד),
+// לא new Date(string). זה קריטי: פענוח מחרוזות-תאריך לא-ISO (כמו מה שtoLocaleString מפיק) הוא
+// *לא אחיד בין דפדפנים* — זה בדיוק מה שגרם לפער-3-שעות אצל משתמש אחד ולא אצל אחר, על אותו קוד בדיוק.
+function getIsraelParts(date){
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).formatToParts(date);
+  const get = t => parseInt(parts.find(p => p.type === t).value, 10);
+  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour')%24, minute: get('minute'), second: get('second') };
+}
+// המרת תאריך ל-"YYYY-MM-DD" לפי זמן ישראל (לא UTC!) — כל שימוש קודם ב-date.toISOString().slice(0,10)
+// לצורך "מפתח-יום" עלול לסמן את היום הלא-נכון ליד גבולות-חצות (הפרש 3 שעות בקיץ בישראל) — בדיוק
+// מה שגרם לאירוע IVR של יום חמישי להיות משויך ליום שישי בציר-הזמן. תמיד להשתמש בזו במקום.
+function ilDateKey(date){
+  const p = getIsraelParts(date);
+  return `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`;
+}
+function toLocalBasisFromServerEpoch(trueEpochMs){
+  const p = getIsraelParts(new Date(trueEpochMs));
+  return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
+}
+function nowInLocalBasis(){
+  const p = getIsraelParts(new Date(getNowMs()));
+  return new Date(p.year, p.month-1, p.day, p.hour, p.minute, p.second).getTime();
+}
+function computeModeSegments(fromDate, rangeDays){
+  const segments = [];
+  const rangeStart = fromDate.getTime();
+  const rangeEnd = rangeStart + rangeDays*86400000;
+  const nowMs = nowInLocalBasis();
+
+  // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח, ממוינים לפי זמן.
+  const fireEvents = [];
+  for(let d=0; d<=rangeDays; d++){
+    const dayDate = new Date(fromDate); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
+    const dow = dayDate.getDay();
+    for(const sm of (_scheduledModes||[])){
+      if(!sm.active) continue;
+      if(sm.days && sm.days.length && !sm.days.includes(dow)) continue;
+      // בדיקת calType (כולל ראש-חודש) — קודם לא נבדק כלל כאן, רק בשרת; תזמון-מצב עם תאריך-מיוחד
+      // היה מוצג בציר-הזמן כאילו הוא קורה כל יום, מטעה במיוחד לגבי ראש-חודש/תאריך-שנתי/חד-פעמי.
+      if(sm.calType && sm.calType!=='none'){
+        const entry = getCalEntry(dayDate);
+        if(!entry) continue;
+        const [ed,em,ey] = entry['תאריך לועזי'].split('/').map(Number);
+        if(sm.calType==='annual'){
+          const calDate = entry['תאריך עברי']||'';
+          if(!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
+        } else if(sm.calType==='once'){
+          const calDate = entry['תאריך עברי']||'';
+          if(calDate!==sm.calLabel || ey!==sm.calYear) continue;
+        } else if(sm.calType==='rosh_chodesh_aleph'){
+          if(getHebrewDayNumber(entry)!==1) continue;
+        } else if(sm.calType==='rosh_chodesh_lamed'){
+          if(getHebrewDayNumber(entry)!==30) continue;
+        }
+      }
+      let fireMin = null;
+      if((sm.type||'time')==='time'){
+        fireMin = timeStrToMinutesLocal(sm.time||'00:00');
+      } else {
+        const base = getZmanMinutesForDateSM(sm.zman, dayDate);
+        if(base===null) continue;
+        fireMin = base + (sm.offsetDir==='-'?-1:1)*(sm.offsetVal||0);
+      }
+      if(fireMin===null || fireMin<0) continue;
+      const atMs = dayDate.getTime() + fireMin*60000;
+      if(atMs<rangeStart || atMs>rangeEnd) continue;
+      // קריטי: תזמון שכבר ירה *בעבר האמיתי* (לפני "עכשיו") אסור לדמות מחדש — הוא כבר "אפוי" בתוך
+      // activeModeId (המצב הנוכחי בפועל) ו/או serverPendingRevert (אם עוד רץ). לדמות אותו מחדש כאן
+      // יוצר טיימר-חזרה כפול/סותר שמוחק את כל התוצאה (זה בדיוק הבאג שנמצא בבדיקה בפועל).
+      if(atMs < nowMs) continue;
+      const durationSec = sm.durationOn ? ((sm.durationH||0)*3600+(sm.durationM||0)*60) : 0;
+      fireEvents.push({ atMs, toModeId: sm.toModeId, durationSec, smName: sm.name });
+    }
+  }
+  fireEvents.sort((a,b)=>a.atMs-b.atMs);
+
+  // ציר-הזמן הוא תחזית קבועה על סמך התזמונים המוגדרים בלבד — לא תלוי מה קורה בפועל ברגע הנוכחי.
+  // לכן הסימולציה תמיד מתחילה מ"מצב 0" (רגיל) כנקודת-ייחוס קבועה, ומתעלמת הן מ-activeModeId
+  // (המצב הפעיל בפועל, שיכול להשתנות ע"י מעבר-מצב ידני) והן מטיימר-חזרה אמיתי שכבר רץ בשרת —
+  // אחרת מעבר-מצב ידני היה "מאפס" את התצוגה למשתמש, בניגוד לכוונה (לראות תמיד את אותה תחזית).
+  const TIMELINE_HOME_MODE = 0;
+  let curMode = TIMELINE_HOME_MODE;
+  let curTime = rangeStart;
+  let pendingRevert = null;
+  let fireIdx = 0;
+
+  while(curTime < rangeEnd){
+    const nextFire = fireEvents[fireIdx];
+    let nextAtMs = Infinity, nextType = null;
+    if(nextFire && (!pendingRevert || nextFire.atMs <= pendingRevert.atMs)){ nextAtMs = nextFire.atMs; nextType = 'fire'; }
+    else if(pendingRevert){ nextAtMs = pendingRevert.atMs; nextType = 'revert'; }
+    if(nextType===null || nextAtMs > rangeEnd) break;
+
+    segments.push({ startMs: curTime, endMs: nextAtMs, modeId: curMode });
+    curTime = nextAtMs;
+
+    if(nextType==='fire'){
+      const prevMode = curMode;
+      curMode = nextFire.toModeId;
+      pendingRevert = null; // כל תזמון-מצב חדש מבטל טיימר-חזרה קודם — בדיוק כמו בשרת
+      if(nextFire.durationSec>0){
+        pendingRevert = { atMs: nextFire.atMs + nextFire.durationSec*1000, toModeId: prevMode };
+      }
+      fireIdx++;
+    } else {
+      curMode = pendingRevert.toModeId;
+      pendingRevert = null;
+    }
+  }
+  segments.push({ startMs: curTime, endMs: rangeEnd, modeId: curMode });
+  return segments;
+}
+
+// מוצא את המצב האפקטיבי (מדומה) בזמן נתון, מתוך מקטעים שכבר חושבו
+function modeAtTime(segments, ms){
+  for(const seg of segments){ if(ms>=seg.startMs && ms<seg.endMs) return seg.modeId; }
+  return activeModeId;
+}
+
+function updateZmanimBarExtras(){
+  try {
+    // אם קובץ הלוח (calendar_data.js, 20MB) עדיין לא נטען/נפרס במלואו — ננסה שוב בעוד 2 שניות,
+    // במקום לחכות עד 5 דקות לרענון התקופתי הבא. עד 15 ניסיונות (30 שניות) לפני שמוותרים ומתעדים.
+    if (getCalData().length === 0) {
+      _zmanimBarRetryCount++;
+      if (_zmanimBarRetryCount <= 15) {
+        setTimeout(updateZmanimBarExtras, 2000);
+        return;
+      }
+      console.error('❌ קובץ הלוח (calendar_data.js) לא נטען אחרי 30 שניות');
+      if (typeof addLog === 'function') addLog('danger', '❌ קובץ הלוח ההלכתי (calendar_data.js) לא נטען אחרי 30 שניות — הדלקת נרות/הבדלה לא יוצגו. בדוק חיבור רשת/גודל הקובץ.');
+      return;
+    }
+    _zmanimBarRetryCount = 0;
+    // "עכשיו" מעוגן לזמן ישראל במפורש, בלי string round-trip (ראו getIsraelParts להסבר המלא)
+    const _nowParts = getIsraelParts(new Date());
+    const now=new Date(_nowParts.year, _nowParts.month-1, _nowParts.day, _nowParts.hour, _nowParts.minute, _nowParts.second);
+    const todayEntry=getCalEntry(now);
+    const alotEl=document.getElementById('z-alot');
+    if(alotEl) alotEl.textContent = todayEntry?.['עלות השחר'] || '—';
+    // זריחה/שקיעה — מקובץ הלוח המקומי, לא מ-hebcal (API חיצוני שתלוי בזמינות-רשת ולא בשליטתנו).
+    // אותו עיקרון בדיוק כמו עלות-השחר/הדלקת-נרות — מקור-אמת אחד, בלי תלות ברשת חיצונית.
+    const sunriseEl=document.getElementById('z-sunrise');
+    if(sunriseEl) sunriseEl.textContent = todayEntry?.['נץ החמה'] || '—';
+    const sunsetEl=document.getElementById('z-sunset');
+    if(sunsetEl) sunsetEl.textContent = todayEntry?.['שקיעה'] || '—';
+    const dateEl=document.getElementById('z-date');
+    if(dateEl) dateEl.textContent = now.toLocaleDateString('he-IL');
+    const {nextCandles, nextHavdalah} = findNextCandlesAndHavdalah(now);
+    const cEl=document.getElementById('z-candles');
+    if(cEl) cEl.textContent = nextCandles ? `${nextCandles.time} · ${fmtNextDateLabel(nextCandles.date,now)}${nextCandles.label?' · '+nextCandles.label:''}` : '—';
+    const hEl=document.getElementById('z-havdalah');
+    if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
+    // אם ציר-הזמן פתוח כרגע וקודם רץ בלי נתוני-לוח (calendar_data.js עוד לא היה מוכן) — רענן אותו עכשיו
+    if (document.getElementById('tab-timeline')?.classList.contains('active') && typeof renderTimeline==='function') renderTimeline();
+  } catch(e) {
+    console.error('❌ updateZmanimBarExtras נכשל:', e);
+    if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב הדלקת נרות/הבדלה: ${e.message}`);
+  }
+}
+
+// ── מיקומי sticky דינמיים — נמדדים בפועל (offsetHeight), לא קבועים, כי הגבהים משתנים לפי רוחב מסך ──
+function updateStickyOffsets(){
+  // הערה: כל "-1" כאן הוא חפיפה מכוונת של פיקסל אחד בין אלמנטים קפואים-מוערמים — מונע פער-עיגול
+  // תת-פיקסל שגורם לצבע מהתוכן-שגולל לבצבץ לרגע בגבול שבין שני אלמנטים קפואים (בלתי-מורגש לעין,
+  // אבל פותר "בהבהוב" שהיה קיים מאז ומתמיד ורק בלט עכשיו בגלל צבעי-הבלוקים הבוהקים בתצוגה החדשה).
+  const topbarH = document.querySelector('.topbar')?.offsetHeight || 0;
+  const zEl = document.querySelector('.zmanim-bar');
+  if(zEl) zEl.style.top = Math.max(0, topbarH - 1) + 'px';
+  const zH = zEl?.offsetHeight || 0;
+  const tabsEl = document.querySelector('.tabs');
+  if(tabsEl) tabsEl.style.top = Math.max(0, topbarH + zH - 2) + 'px';
+  const tabsH = tabsEl?.offsetHeight || 0;
+  const toolbarEl = document.querySelector('.prog-toolbar');
+  if(toolbarEl) toolbarEl.style.top = Math.max(0, topbarH + zH + tabsH - 3) + 'px';
+  const toolbarH = toolbarEl?.offsetHeight || 0;
+  const bulkEl = document.getElementById('bulk-bar');
+  if(bulkEl) bulkEl.style.top = Math.max(0, topbarH + zH + tabsH + toolbarH - 4) + 'px';
+  // כותרת-שמות-העמודות בתצוגה-המינימלית לציר-הזמן — הבאג האמיתי היה: עדכנו top על tl-min-relay-header
+  // (האלמנט הפנימי, בלי position:sticky בכלל!) במקום על tl-min-header-wrap (החיצוני, שבו יש sticky
+  // בפועל) — לכן שום ערך לא עבד. גם עוברים לחישוב מדויק לפי getBoundingClientRect().bottom של פס-
+  // הזמנים (המיקום האמיתי-בפועל) במקום סכימת-גבהים נפרדת שהצטברה עם טעויות-עיגול תת-פיקסל.
+  const tlMinHeaderWrap = document.getElementById('tl-min-header-wrap');
+  if(tlMinHeaderWrap && zEl){
+    const zRect = zEl.getBoundingClientRect();
+    tlMinHeaderWrap.style.top = Math.max(0, zRect.bottom - 1) + 'px';
+  }
+}
+
+// ── HELPERS ───────────────────────────────────────────────
+// זמנים הלכתיים אמיתיים של היום, מתקבלים מהשרת (אירוע zmanim_today) — אותו מקור-אמת
+// שהשרת עצמו משתמש בו לתזמון בפועל. מתעדכן על כל חיבור/חיבור-מחדש.
+// (המשתנה עצמו הוכרז מוקדם יותר בקובץ, לפני ה-INIT — ראו שם להסבר)
+function zmanimKeyForZmanClient(zman){
+  return {sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam'}[zman] || zman;
+}
+function getProgMinutes(p, relayIndex){
+  // relayIndex: which relay in p.relay[] (for stagger delay). Default 0.
+  const ri = relayIndex || 0;
+  const delayMin = ri * Math.round((p.delay||0) / 60 * 100) / 100; // seconds → minutes (fractional)
+  let base;
+  if(p.type==='time'){const[hh,mm]=p.time.split(':').map(Number);base=hh*60+mm;}
+  else{
+    const key = zmanimKeyForZmanClient(p.zman);
+    const timeStr = serverZmanim[key];
+    if(!timeStr){
+      // נפילה זמנית — עד שהשרת שולח zmanim_today (בדרך כלל תוך שניות מהחיבור). לא אמור לקרות בפועל.
+      base = 19*60+20;
+    } else {
+      const [hh,mm]=timeStr.split(':').map(Number);
+      base = hh*60+mm + (p.offsetDir==='-'?-1:1)*(p.offsetVal||0);
+    }
+  }
+  return base + delayMin;
+}
+// Integer minutes for a specific relay in a program (for block placement)
+function getRelayFireMin(p, relayId){
+  const ri = p.relay.indexOf(relayId);
+  if(ri<0) return getProgMinutes(p,0);
+  const delayMin = ri * (p.delay||0) / 60; // seconds → minutes
+  return getProgMinutes(p,0) + delayMin;
+}
+// End minute when duration auto-off fires (for relay r in program p)
+function getRelayEndMin(p, relayId){
+  if(!p.durationOn || (!p.durationH && !p.durationM)) return null;
+  const durMin = (p.durationH||0)*60 + (p.durationM||0);
+  return getRelayFireMin(p, relayId) + durMin;
+}
+// מחזירה רשימת זוגות {fireMin,endMin,action} לממסר relayId בתוכנית p.
+// תוכנית רגילה — זוג אחד (כמו getRelayFireMin/getRelayEndMin).
+// תוכנית עם מחזורי הפסקה — זוג לכל מחזור (פעולה X דק' → הפך Y דק'), עד תום ה-duration הכולל.
+function getRelayEventPairs(p, relayId){
+  // תוכנית-בת (יש parentProgId) — הזמנים נגזרים דינמית מהפסקות ההורה
+  if(p.parentProgId){
+    return getChildEventPairs(p);
+  }
+  const start=getRelayFireMin(p,relayId);
+  const totalEnd=getRelayEndMin(p,relayId);
+  if(totalEnd===null) return [{fireMin:start,endMin:null,action:p.action}];
+  if(!p.cycleOn || !p.cycleOnMin || !p.cycleOffMin){
+    return [{fireMin:start,endMin:totalEnd,action:p.action}];
+  }
+  // מחזורים: X דק' פעולה (action) ← Y דק' הפסקה (פעולה הפוכה)
+  const onMin=p.cycleOnMin, offMin=p.cycleOffMin, cycleLen=onMin+offMin;
+  const totalMin=totalEnd-start;
+  const fullCycles=Math.floor(totalMin/cycleLen);
+  const pairs=[];
+  for(let i=0;i<fullCycles;i++){
+    const segStart=start+i*cycleLen;
+    pairs.push({fireMin:segStart, endMin:segStart+onMin, action:p.action, cycleIdx:i, segType:'on'});
+    pairs.push({fireMin:segStart+onMin, endMin:segStart+cycleLen, action:p.action==='ON'?'OFF':'ON', cycleIdx:i, segType:'off'});
+  }
+  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה. אם זו שארית ON-בלבד (בלי OFF אחריה, כי היא
+  // מסתיימת עם סוף התוכנית) — היא segType:'single' (לא 'on'), כי רק תצוגת 'single' יודעת "לסגור" חזותית
+  // בהמשך הרינדור; אותו עיקרון תיקון בדיוק כמו בשרת.
+  const remainder = totalMin - fullCycles*cycleLen;
+  if (remainder > 0) {
+    const segStart = start + fullCycles*cycleLen;
+    const onPart = Math.min(remainder, onMin);
+    if (remainder > onMin) {
+      pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'on'});
+      pairs.push({fireMin:segStart+onPart, endMin:segStart+remainder, action:p.action==='ON'?'OFF':'ON', cycleIdx:fullCycles, segType:'off'});
+    } else {
+      pairs.push({fireMin:segStart, endMin:segStart+onPart, action:p.action, cycleIdx:fullCycles, segType:'single'});
+    }
+  }
+  if(!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action}];
+  return pairs;
+}
+// מחזירה את הפסקות (off-segments) של תוכנית p לממסר relayId — לשימוש תוכנית-בת
+function getCycleOffSegments(p, relayId){
+  return getRelayEventPairs(p,relayId).filter(seg=>seg.segType==='off');
+}
+// תוכנית-בת (B) — מחשבת בלוק נפרד לכל הפסקה (off-segment) של תוכנית-האם (A),
+// לפי childTiming (לפני/אחרי) + childOffsetMin, ו-childConfine (הגבלה לזמן ההפסקה).
+function getChildEventPairs(child){
+  const parent=programs.find(x=>x.id===child.parentProgId);
+  if(!parent) return []; // הורה נמחק — לא מציגים כלום
+  const parentRelay=parent.relay[0];
+  // חשב off-segments של ההורה ללא קשר ל-active שלו (הבת נגזרת ממבנה ההורה)
+  const parentRelayCopy = { ...parent }; // עובד על עותק כדי לא לשנות
+  const offSegs=getRelayEventPairs(parentRelayCopy,parentRelay).filter(seg=>seg.segType==='off');
+  if(!offSegs.length) return [];
+  const BUFFER_MIN=0.5; // ~30 שניות לפני סוף ההפסקה
+  const offsetMin=child.childOffsetMin ?? child.offsetMin ?? 0;
+  const timing=child.childTiming ?? child.timing ?? 'before';
+  const confine=child.childConfine ?? child.confine ?? false;
+  const pairs=[];
+  offSegs.forEach((seg,idx)=>{
+    const breakStart=seg.fireMin, breakEnd=seg.endMin;
+    let fireMin;
+    if(timing==='before'){
+      fireMin=breakStart-offsetMin;
+    } else { // after / overlap
+      fireMin=breakStart+offsetMin;
+    }
+    let endMin=null;
+    if(confine && breakEnd !== null){
+      endMin=Math.max(fireMin, breakEnd-BUFFER_MIN);
+    }
+    pairs.push({fireMin, endMin, action:child.action, cycleIdx:idx, segType:'child'});
+  });
+  return pairs;
+}
+function isProgModeMatch(p){
+  // תמיכה ב-modeIds (מערך חדש) וב-modeId (ישן — migration אוטומטי)
+  const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+  return modeIds.includes(activeModeId);
+}
+// פלטת צבעים למצבים — לתצוגת "מה יקרה בכל מצב" בציר הזמן. אינדקס לפי מספר המצב עצמו (עם חזרה מעגלית
+// אם יש הרבה מצבים). מצב 0 (הנוכחי בדרך כלל) לא מקבל סימון מיוחד — רק מצבים "אחרים" מהמצב הפעיל עכשיו.
+const MODE_COLORS = ['#4f8ef7','#f7a94f','#a94ff7','#2dd4bf','#f74f8e','#84cc16','#eab308'];
+function getModeColorInfo(p){
+  const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+  if(modeIds.includes(activeModeId)) return null; // שייך (גם) למצב הנוכחי — בלי סימון מיוחד
+  const mId = modeIds[0];
+  const modeName = (modes.find(m=>m.id===mId)||{}).name || `מצב ${mId}`;
+  return { color: MODE_COLORS[((mId%MODE_COLORS.length)+MODE_COLORS.length)%MODE_COLORS.length], modeName };
+}
+function isProgEffective(p){
+  if(!isProgModeMatch(p))return false;
+  return matchesCalFilter(p);
+}
+function relayName(id){return relays.find(r=>r.id===id)?.name||'ממסר '+id;}
+
+// ── CONFLICTS ────────────────────────────────────────────
+// בודק אם תוכנית "פעילה" (ON) בזמן t, לפי זוגות הזמנים שלה לממסר נתון
+function isActiveAtMin(pairs, t){
+  return pairs.some(s => s.fireMin <= t && (s.endMin === null || s.endMin > t));
+}
+// כמו isActiveAtMin, אבל רק "תביעה מוגנת" (יש duration בפועל) — בלי הגבלת זמן כלל = אין כוונה
+// מוגנת על העתיד, לא נחשב כ"מחזיק" לצורך זיהוי קונפליקט. שימוש רק בתוך findOffOverlap.
+function isActiveWithClaimAtMin(pairs, t){
+  return pairs.some(s => s.endMin !== null && s.fireMin <= t && s.endMin > t);
+}
+// התנגשות מדויקת בין שתי תוכניות על ממסר משותף — בדיוק כמו ההגנה ב-runtime (isBlockedByPriority
+// בשרת): האם זמן-OFF בפועל של אחת חופף לחלון בו השנייה עדיין "פעילה" (ON)
+function findOffOverlap(a, b, relayId){
+  const pairsA = getRelayEventPairs(a, relayId);
+  const pairsB = getRelayEventPairs(b, relayId);
+  const offTimesA = pairsA.filter(s => s.endMin !== null).map(s => s.endMin);
+  const offTimesB = pairsB.filter(s => s.endMin !== null).map(s => s.endMin);
+  for (const t of offTimesA) { if (isActiveWithClaimAtMin(pairsB, t)) return { offProg: a, activeProg: b, time: t }; }
+  for (const t of offTimesB) { if (isActiveWithClaimAtMin(pairsA, t)) return { offProg: b, activeProg: a, time: t }; }
+  return null;
+}
+// בוחר מנצח: עדיפות (priority) גוברת תמיד; שתי priority יחד = קונפליקט לא-פתור (לא אוטומטי);
+// אם אף אחת לא priority — מי שממשיכה לדלוק אחרי שהשנייה כיבתה (activeProg) "מנצחת" בפועל
+function pickWinner(a, b, overlap){
+  if (a.priority && b.priority) return { winner: null, loser: null, bothPriority: true };
+  if (a.priority && !b.priority) return { winner: a, loser: b };
+  if (b.priority && !a.priority) return { winner: b, loser: a };
+  if (overlap) return { winner: overlap.activeProg, loser: overlap.offProg };
+  return a.seqId > b.seqId ? { winner: a, loser: b } : { winner: b, loser: a }; // גיבוי בלי מידע על חפיפה בפועל
+}
+function detectConflicts(){
+  const actives = programs.filter(p => p.active && isProgEffective(p) && !p.parentProgId);
+  const conflicts = [];
+  for (let i = 0; i < actives.length; i++) {
+    for (let j = i + 1; j < actives.length; j++) {
+      const a = actives[i], b = actives[j];
+      const sharedR = a.relay.filter(r => b.relay.includes(r));
+      if (!sharedR.length) continue;
+      // ימים ריקים = כל יום (כמו בכל מקום אחר במערכת) — לא "אף יום"
+      const aAllDays = !a.days || !a.days.length, bAllDays = !b.days || !b.days.length;
+      if (!aAllDays && !bAllDays && !a.days.filter(d => b.days.includes(d)).length) continue;
+
+      sharedR.forEach(relayId => {
+        const overlap = findOffOverlap(a, b, relayId);
+        if (!overlap) return;
+        const { winner, loser, bothPriority } = pickWinner(a, b, overlap);
+        conflicts.push({ a, b, sharedR: [relayId], winner, loser, bothPriority, kind: 'off-overlap' });
+      });
+    }
+  }
+  return conflicts;
+}
+function renderConflicts(){
+  const c=detectConflicts();
+  const banner=document.getElementById('conflict-banner');
+  const list=document.getElementById('conflict-list');
+  if(!c.length){banner.classList.remove('show');return;}
+  banner.classList.add('show');
+  list.innerHTML=c.map(cf=>{
+    const rNames=cf.sharedR.map(id=>relayName(id)).join(', ');
+    if (cf.bothPriority) {
+      return `<div class="cf-item">⚠️ תוכנית <strong>#${cf.a.seqId} (${cf.a.name})</strong> ותוכנית <strong>#${cf.b.seqId} (${cf.b.name})</strong> על ${rNames} — שתיהן מסומנות עדיפות ומתנגשות זו בזו. זה לא נפתר אוטומטית — יש להסיר עדיפות מאחת מהן או לשנות את הזמנים.</div>`;
+    }
+    const prioNote=cf.winner.priority?' (סומנה כעדיפות)':'';
+    return `<div class="cf-item">תוכנית <strong>#${cf.a.seqId}</strong> ותוכנית <strong>#${cf.b.seqId}</strong> על ${rNames} — חפיפת כיבוי/הדלקה — עדיפות לתוכנית <strong>#${cf.winner.seqId} (${cf.winner.name})</strong>${prioNote}</div>`;
+  }).join('');
+}
+
+// ── MODES ────────────────────────────────────────────────
+function renderModes(){
+  const grid=document.getElementById('modes-grid');
+  grid.innerHTML=modes.map(m=>{
+    const cnt=programs.filter(p=>{const ids=p.modeIds??(p.modeId!=null?[p.modeId]:[0]);return ids.includes(m.id);}).length;
+    const isActive=activeModeId===m.id;
+    return `<div class="mode-card ${isActive?'active-mode':''}">
+      <div class="mode-card-top">
+        <input class="mode-name-input" value="${m.name}" onchange="renameModeById(${m.id},this.value)" placeholder="שם המצב...">
+        ${isActive?'<span class="mode-active-badge">פעיל</span>':''}
+      </div>
+      <div class="mode-prog-count">${cnt} תוכניות שמשויכות</div>
+      <button class="mode-activate-btn" onclick="setActiveMode(${m.id})">${isActive?'✓ פעיל כעת':'הפעל מצב'}</button>
+    </div>`;
+  }).join('')+'<div class="mode-add-card" onclick="addMode()">+ מצב חדש</div>';
+  const activeMode=modes.find(m=>m.id===activeModeId);
+  const lbl=document.getElementById('active-mode-label');
+  if(lbl)lbl.textContent=activeMode?.name||'הכל';
+  // עדכן תפריט גלילה
+  const sel=document.getElementById('mode-select');
+  if(sel){
+    sel.innerHTML=modes.map(m=>`<option value="${m.id}" ${m.id===activeModeId?'selected':''}>${m.name}</option>`).join('');
+  }
+}
+function confirmModeChange(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canChangeMode){
+    toast('אינך מורשה להחליף מצב');return;
+  }
+  const sel=document.getElementById('mode-select');
+  if(!sel)return;
+  const newId=parseInt(sel.value);
+  if(newId===activeModeId)return;
+  const newName=modes.find(m=>m.id===newId)?.name||'';
+  if(confirm(`לעבור למצב "${newName}"?\nשים לב: רק תוכניות המשויכות למצב זה יהיו פעילות.`)){
+    setActiveMode(newId);
+  } else {
+    // החזר לבחירה הנוכחית
+    sel.value=activeModeId;
+  }
+}
+function setActiveMode(id){
+  if (id === activeModeId) return;
+  socket.emit('request_mode_switch', { newModeId: id });
+}
+let _pendingModeSwitch = null;
+socket.on('mode_switch_review', (data) => {
+  const { newModeId, staleRelays, missedPrograms } = data;
+  if (!staleRelays.length && !missedPrograms.length) {
+    commitModeSwitch(newModeId, [], []); // אין שום השפעה לבדוק — מעבר ישיר
+    return;
+  }
+  _pendingModeSwitch = data;
+  const body = document.getElementById('mode-switch-modal-body');
+  let html = '';
+  if (staleRelays.length) {
+    html += `<h4 style="color:#fbbf24;margin:14px 0 8px">ממסרים דלוקים ממצב קודם</h4>
+      <p style="font-size:13px;color:#999;margin:0 0 10px">מסומן = יכבה. בטל סימון כדי להשאיר דלוק.</p>`;
+    staleRelays.forEach(r => {
+      html += `<label class="ms-row"><input type="checkbox" class="ms-stale-cb" value="${r.relayId}" checked>
+        ${r.relayName} <span style="color:#888">— כעת בשליטת "${r.ownerProgName}"</span></label>`;
+    });
+  }
+  if (missedPrograms.length) {
+    html += `<h4 style="color:#60a5fa;margin:18px 0 8px">תוכניות שפספסו את זמנן במצב החדש</h4>
+      <p style="font-size:13px;color:#999;margin:0 0 10px">מסומן = יופעל כעת. ברירת מחדל — לא להפעיל.</p>`;
+    missedPrograms.forEach(m => {
+      html += `<label class="ms-row"><input type="checkbox" class="ms-missed-cb" value="${m.progId}">
+        ${m.relayName} ← "${m.progName}"${m.isPriority?' (עדיפות)':''}</label>`;
+    });
+  }
+  body.innerHTML = html;
+  document.getElementById('mode-switch-modal-overlay').classList.add('open');
+});
+function applyModeSwitchChoice(useDefaults){
+  const data = _pendingModeSwitch;
+  if (!data) return;
+  let turnOffRelayIds, activateProgIds;
+  if (useDefaults) {
+    turnOffRelayIds = data.staleRelays.map(r=>r.relayId); // ברירת מחדל: לכבות הכל
+    activateProgIds = []; // ברירת מחדל: לא להפעיל כלום
+  } else {
+    turnOffRelayIds = Array.from(document.querySelectorAll('.ms-stale-cb:checked')).map(el=>parseInt(el.value));
+    activateProgIds = Array.from(document.querySelectorAll('.ms-missed-cb:checked')).map(el=>parseInt(el.value));
+  }
+  document.getElementById('mode-switch-modal-overlay').classList.remove('open');
+  commitModeSwitch(data.newModeId, turnOffRelayIds, activateProgIds);
+  _pendingModeSwitch = null;
+}
+function commitModeSwitch(newModeId, turnOffRelayIds, activateProgIds){
+  socket.emit('confirm_mode_switch', { newModeId, turnOffRelayIds, activateProgIds });
+  activeModeId = newModeId;
+  renderModes();renderPrograms();renderRelays();
+  if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+  saveLS();
+  toast('מצב פעיל: '+(modes.find(m=>m.id===newModeId)?.name||''));
+}
+function cycleModes(){
+  const idx=modes.findIndex(m=>m.id===activeModeId);
+  setActiveMode(modes[(idx+1)%modes.length].id);
+}
+function renameModeById(id,name){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לשנות שם מצב');return;
+  }
+  const m=modes.find(x=>x.id===id);
+  if(m){m.name=name;renderModes();saveLS();populateBulkModeSelect();}
+}
+function addMode(){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה להוסיף מצבים');return;
+  }
+  const id=Date.now();
+  modes.push({id,name:'מצב חדש'});
+  renderModes();saveLS();
+  populateBulkModeSelect();
+}
+
+// ── RENDER RELAYS ─────────────────────────────────────────
+function renderRelays(){
+  const g=document.getElementById('relay-grid');
+  let html='';
+  // בקרי Tasmota
+  controllerGroups.forEach(ctrl=>{
+    const ctrlRelays=relays.filter(r=>r.ctrl===ctrl.id);
+    if(!ctrlRelays.length)return;
+    html+=`<div class="ctrl-separator"><span class="ctrl-sep-label">🔌 ${ctrl.name}</span></div>`;
+    html+=ctrlRelays.map(r=>relayCardHtml(r)).join('');
+  });
+  // התקני HA
+  const haRelays=relays.filter(r=>r.ctrl==='ha');
+  if(haRelays.length){
+    html+=`<div class="ctrl-separator"><span class="ctrl-sep-label">🏠 התקני Home Assistant</span></div>`;
+    html+=haRelays.map(r=>relayCardHtml(r)).join('');
+  }
+  g.innerHTML=html;
+}
+function relayCardHtml(r){
+  const cnt=programs.filter(p=>p.relay.includes(r.id)&&p.active&&isProgEffective(p)).length;
+  return `<div class="relay-card ${r.state?'relay-on':''}" id="card-${r.id}">
+    <div class="relay-header">
+      <span class="relay-num">${r.ctrl==='ha'?'🏠':''} ${r.id}</span>
+    </div>
+    <input class="relay-name-input" value="${r.name}"
+      onchange="saveRelayName(${r.id},this.value)" placeholder="שם...">
+    <div class="relay-controls">
+      <label class="toggle-switch">
+        <input type="checkbox" ${r.state?'checked':''} onchange="sendRelay(${r.id},this.checked)">
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+      <span class="relay-state-label">${r.state?'פועל':'כבוי'}</span>
+      <button class="btn-timer" onclick="quickTimer(${r.id})">⏱ טיימר</button>
+    </div>
+    <div class="relay-footer">
+      <span class="last-action" id="last-${r.id}">—</span>
+      <span class="prog-count" onclick="showTab('programs',null);highlightRelayProgs(${r.id})" title="לחץ לתוכניות">${cnt} תוכניות</span>
+    </div>
+  </div>`;
+}
+function saveRelayName(id,name){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לשנות שמות ממסרים');return;
+  }
+  const r=relays.find(x=>x.id===id);
+  if(r){r.name=name;renderPrograms();renderTimeline();saveLS();}
+}
+function highlightRelayProgs(relayId){
+  setTimeout(()=>{
+    document.querySelectorAll('.prog-card').forEach(c=>{
+      const chip=c.querySelector('.prog-chip');
+      // highlight cards containing this relay — crude but works
+      c.style.transition='box-shadow 0.3s';
+      c.style.boxShadow='';
+    });
+    // Would need to store relay on DOM; skipping for brevity
+  },100);
+}
+
+// ── RENDER PROGRAMS ───────────────────────────────────────
+function renderPrograms(){
+  renderConflicts();
+  const conflicts=detectConflicts();
+  const conflictLoserMap={};
+  conflicts.forEach(cf=>{ if (cf.loser && cf.winner) conflictLoserMap[cf.loser.id]=cf.winner.seqId; });
+
+  const l=document.getElementById('prog-list');
+  // תוכניות-בת (parentProgId) לא מוצגות כשורה עצמאית — רק כענף תחת ההורה
+  l.innerHTML=programs.filter(p=>!p.parentProgId).map(p=>{
+    const names=p.relay.map(id=>relayName(id)).join(', ');
+    const timeDesc=p.type==='zman'?`${ZMAN_LABELS[p.zman]||p.zman} ${p.offsetDir}${p.offsetVal} דק'`:p.time;
+    const daysDesc=p.days.map(d=>DAYS_HE[d]).join(' ');
+    const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+    const modeMatch = modeIds.includes(activeModeId);
+    const modeBadges = modeIds.map(mid => {
+      const modeObj = modes.find(m => m.id === mid);
+      return modeObj ? `<span class="prog-mode-badge">${modeObj.name}</span>` : '';
+    }).join('');
+    const effective=isProgEffective(p);
+    const cfWith=conflictLoserMap[p.id];
+    const child = p.childProgId ? programs.find(x=>x.id===p.childProgId) : null;
+    // עמעום-הכרטיס מתבסס רק על אי-התאמת *מצב* (modeMatch), לא על אי-התאמת *תאריך* (calType) —
+    // תוכנית עם תאריך-עברי עתידי (שנתי/חד-פעמי/ראש-חודש) היא לגמרי תקינה ופעילה, רק "עוד לא הגיע
+    // תורה" — עמעום שלה נראה כאילו היא שבורה/לא-פעילה, מטעה. (isProgEffective עצמו לא השתנה —
+    // עדיין בשימוש במקומות אחרים שכן צריכים גם את בדיקת-התאריך, כמו ספירת "X תוכניות" בכרטיס-ממסר.)
+    return `<div class="prog-card ${!p.active?'inactive':''} ${!modeMatch?'dim':''} ${p.priority?'priority':''} ${selectMode&&selectedProgIds.has(p.id)?'selected':''}" id="progcard-${p.seqId}">
+      ${selectMode?`<input type="checkbox" class="prog-select-chk" ${selectedProgIds.has(p.id)?'checked':''} onchange="toggleProgSelect(${p.id})">`:''}
+      <span class="prog-num">#${p.seqId}</span>
+      <button class="prog-active-toggle" onclick="toggleProgActive(${p.id})" title="${p.active?'כבה':'הפעל'}"></button>
+      <div class="prog-info">
+        <div class="prog-name-row">
+          <div class="prog-name">${p.name}</div>
+          ${modeBadges}
+        </div>
+        <div class="prog-detail">
+          <span class="prog-chip ${p.action==='ON'?'on-c':'off-c'}">${p.action==='ON'?'הדלקה':'כיבוי'}</span>
+          <span class="prog-chip">${names}</span>
+          <span class="prog-chip ${p.type==='zman'?'shabbat':''}">${timeDesc}</span>
+          <span class="prog-chip">${daysDesc}</span>
+          ${p.runOnce?'<span class="prog-chip once">חד פעמי</span>':''}
+          ${p.priority?'<span class="prog-chip" style="color:var(--accent3);border-color:rgba(167,139,250,0.28)">⭐ עדיפות</span>':''}
+          ${p.relay.length>1?`<span class="prog-chip">מרווח: ${p.delay}שנ'</span>`:''}
+          ${p.durationOn&&(p.durationH||p.durationM)?`<span class="prog-chip" style="color:var(--accent3);border-color:rgba(167,139,250,0.28)">⏱ למשך ${p.durationH?p.durationH+'שע ':' '}${p.durationM?p.durationM+'דק':''}</span>`:''}
+          ${p.cycleOn&&p.cycleOnMin&&p.cycleOffMin?`<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🔁 מחזורים: ${p.cycleOnMin}/${p.cycleOffMin} דק'</span>`:''}
+          ${p.calType&&p.calType!=='none'&&p.calLabel?`<span class="prog-chip" style="color:var(--warn);border-color:rgba(245,158,11,0.28)">📅 ${p.calLabel}</span>`:''}
+          ${cfWith?`<span class="prog-chip conflict-c" onclick="scrollToProg(${cfWith})">⚠ התנגשות עם #${cfWith}</span>`:''}
+          ${!modeMatch?'<span class="prog-chip" style="color:var(--muted)">לא פעיל במצב נוכחי</span>':''}
+        </div>
+        ${child?`<div style="margin-top:8px;padding-right:14px;border-right:2px solid var(--accent3)">
+          <div style="font-size: 12px;color:var(--accent3);font-weight:600;margin-bottom:3px">↳ תוכנית-בת #${child.seqId}: ${child.name}</div>
+          <div class="prog-detail">
+            <span class="prog-chip ${child.action==='ON'?'on-c':'off-c'}">${child.action==='ON'?'הדלקה':'כיבוי'}</span>
+            <span class="prog-chip">${relayName(child.relay[0])}</span>
+            <span class="prog-chip">${child.childTiming==='before'?'לפני':'אחרי'} ההפסקה · ${child.childOffsetMin} דק'</span>
+            ${child.childRequireAck?'<span class="prog-chip" style="color:var(--accent2)">דורש אישור בקר</span>':''}
+            ${child.childConfine?'<span class="prog-chip" style="color:var(--muted)">מוגבל לזמן ההפסקה</span>':''}
+            ${!child.active?'<span class="prog-chip" style="color:var(--muted)">לא פעיל</span>':''}
+          </div>
+        </div>`:''}
+      </div>
+      <div class="prog-actions">
+        <button class="prog-btn edit" onclick="openAddProgram(${p.id})">✏ ערוך</button>
+        <button class="prog-btn" onclick="duplicateProg(${p.id})">שכפל</button>
+        <button class="prog-btn del" onclick="deleteProg(${p.id})">מחק</button>
+      </div>
+    </div>`;
+  }).join('');
+  // נקה מהבחירה תוכניות שכבר לא קיימות
+  selectedProgIds.forEach(id=>{ if(!programs.some(p=>p.id===id)) selectedProgIds.delete(id); });
+  updateBulkBar();
+}
+function scrollToProg(seqId){
+  const el=document.getElementById('progcard-'+seqId);
+  if(el){
+    el.scrollIntoView({behavior:'smooth',block:'center'});
+    el.style.boxShadow='0 0 0 2px var(--warn)';
+    setTimeout(()=>el.style.boxShadow='',2200);
+  }
+}
+// תיקון seqId-ים כפולים שנוצרו ע"י שכפול-תוכניות בגרסה ישנה (לפני התיקון בשורה למעלה) — ממספר מחדש
+// ברצף (1,2,3...) לפי הסדר הנוכחי, בלי לגעת ב-id/relay/כל שדה אחר, ומוודא ש-nextProgId יהיה מעל כולם.
+function openSimModal(){
+  const overlay = document.getElementById('sim-modal-overlay');
+  const fromEl = document.getElementById('sim-from-date'), toEl = document.getElementById('sim-to-date');
+  if(!fromEl.value){
+    const p = getIsraelParts(new Date());
+    fromEl.value = `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`;
+    const end = new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+2);
+    toEl.value = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
+  }
+  const sel = document.getElementById('sim-mode-select');
+  sel.innerHTML = '<option value="">(המצב הנוכחי)</option>' + modes.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
+  document.getElementById('sim-results').innerHTML = '<div style="color:var(--muted);padding:12px">בחר טווח ולחץ "הרץ סימולציה"</div>';
+  overlay.style.display = 'flex';
+}
+function closeSimModal(){ document.getElementById('sim-modal-overlay').style.display = 'none'; }
+function runScheduleSimulation(){
+  const fromDateStr = document.getElementById('sim-from-date').value;
+  const toDateStr = document.getElementById('sim-to-date').value;
+  const modeSel = document.getElementById('sim-mode-select').value;
+  if(!fromDateStr || !toDateStr){ toast('בחר טווח תאריכים'); return; }
+  if(!socket || !socket.connected){ toast('אין חיבור לשרת — לא ניתן להריץ סימולציה'); return; }
+  document.getElementById('sim-results').innerHTML = '<div style="color:var(--muted);padding:12px">⏳ מריץ סימולציה...</div>';
+  socket.emit('simulate_schedule', { fromDateStr, toDateStr, simModeId: modeSel!==''?parseInt(modeSel):undefined });
+}
+function renderSimResults(events){
+  const el = document.getElementById('sim-results');
+  if(!events.length){ el.innerHTML = '<div style="color:var(--muted);padding:12px">אין שום אירוע בטווח הזה</div>'; return; }
+  let html = '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:right;color:var(--muted);font-size:11px">'
+    + '<th style="padding:4px 8px">זמן</th><th style="padding:4px 8px">תוכנית</th><th style="padding:4px 8px">ממסר</th><th style="padding:4px 8px">פעולה</th><th style="padding:4px 8px">הערה</th></tr></thead><tbody>';
+  events.forEach(e=>{
+    const rowStyle = e.blocked ? 'background:rgba(239,68,68,0.12)' : (e.action==='ON'?'background:rgba(34,197,94,0.06)':'');
+    const actionColor = e.blocked ? '#ef4444' : (e.action==='ON'?'#22c55e':'#94a3b8');
+    html += `<tr style="border-top:1px solid var(--border);${rowStyle}">
+      <td style="padding:4px 8px;white-space:nowrap;font-family:monospace">${e.time}</td>
+      <td style="padding:4px 8px">${e.prog}</td>
+      <td style="padding:4px 8px">${e.relay}</td>
+      <td style="padding:4px 8px;color:${actionColor};font-weight:600">${e.blocked?'⛔ '+e.action:e.action}</td>
+      <td style="padding:4px 8px;color:var(--muted)">${e.note||''}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+// תיקון תוכניות-בת "משותפות" — נתונים ישנים שנוצרו לפני תיקון duplicateProg (ראו שם), שבהם כמה
+// תוכניות-הורה שונות מצביעות באמת על אותה תוכנית-בת ממש (אותו id). עריכת "מוגבל לזמן ההפסקה" וכו'
+// דרך הורה אחד הייתה משנה בפועל רשומה משותפת, ונראית כאילו שני ההורים "תלויים אחד בשני".
+function repairSharedChildren() {
+  const childUsage = {}; // childProgId -> [parentProg, ...]
+  programs.forEach(p => {
+    if (p.childProgId) {
+      (childUsage[p.childProgId] = childUsage[p.childProgId] || []).push(p);
+    }
+  });
+  const shared = Object.entries(childUsage).filter(([,parents]) => parents.length > 1);
+  if (!shared.length) { toast('לא נמצאו תוכניות-בת משותפות — הכל תקין'); return; }
+  const totalParents = shared.reduce((sum,[,parents])=>sum+parents.length-1, 0);
+  if (!confirm(`נמצאו ${shared.length} תוכניות-בת ששותפות ל-${totalParents} הורים נוספים. ליצור עותק עצמאי לכל הורה נוסף? זה משפיע רק על תוכניות-הבת (לא נוגע בהורים עצמם).`)) return;
+  shared.forEach(([childId, parents]) => {
+    const origChild = programs.find(c => c.id === Number(childId) || c.id === childId);
+    if (!origChild) return;
+    // ההורה הראשון ברשימה שומר את הבת המקורית; לכל השאר יוצרים עותק עצמאי חדש
+    parents.slice(1).forEach((parent, i) => {
+      const newChild = JSON.parse(JSON.stringify(origChild));
+      newChild.id = Date.now() + i + 1;
+      newChild.seqId = nextProgId++;
+      newChild.parentProgId = parent.id;
+      parent.childProgId = newChild.id;
+      programs.push(newChild);
+    });
+  });
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ תוקנו ${shared.length} תוכניות-בת משותפות`);
+}
+function renumberSeqIds() {
+  const counts = {};
+  programs.forEach(p => { counts[p.seqId] = (counts[p.seqId]||0)+1; });
+  const dupSeqIds = Object.entries(counts).filter(([,v])=>v>1).map(([k])=>k);
+  if (!dupSeqIds.length) { toast('לא נמצאו מספרים כפולים — הכל תקין'); return; }
+  if (!confirm(`נמצאו ${dupSeqIds.length} מספרי-תוכנית כפולים (#${dupSeqIds.join(', #')}). למספר הכל מחדש ברצף? זה משנה רק את המספר המוצג (#), לא משפיע על שום הגדרה אחרת.`)) return;
+  const sorted = [...programs].sort((a,b)=>(a.seqId-b.seqId)||(a.id-b.id));
+  sorted.forEach((p,i)=>{ p.seqId = i+1; });
+  nextProgId = programs.length + 1;
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ מוספרו מחדש ${programs.length} תוכניות, בלי מספרים כפולים`);
+}
+function duplicateProg(id) {
+  const orig = programs.find(p => p.id === id);
+  if (!orig) return;
+  const newProg = JSON.parse(JSON.stringify(orig));
+  // Date.now() — אותה שיטת-מזהה אמינה שכל שאר יצירת-התוכניות כבר משתמשת בה (ראו saveProgram/child
+  // creation). לא nextProgId — זה מונה קטן (מתחיל מ-5) שעלול "להתנגש" עם ID גדול וקיים כבר במערכת
+  // (למשל מתוכנית מיובאת), וליצור בטעות שתי רשומות עם אותו מזהה בדיוק — שאז נראות "כאותה תוכנית".
+  newProg.id = Date.now();
+  // seqId: nextProgId++ — **אותו מונה בדיוק** כמו כל שאר נתיבי-יצירת-seqId (תוכנית-בת, תוכנית רגילה).
+  // לא Math.max(seqIds)+1 (כפי שהיה כאן קודם) — שתי שיטות-מספור שונות לאותו שדה יכולות "להתנגש"
+  // זו בזו בדיוק כמו שקרה קודם עם ה-id (ראו סעיף 24 בסיכום) — זו הסיבה שנוצרו seqId כפולים בפועל.
+  newProg.seqId = nextProgId++;
+  newProg.name = orig.name + ' (עותק)';
+  newProg.active = false;
+  // אם לתוכנית יש תוכנית-בת, חייבים לשכפל **גם אותה** בנפרד — אחרת newProg.childProgId עדיין מצביע
+  // על הבת **המקורית**, ואז שתי ההורים (המקור והעותק) בפועל חולקים את אותה תוכנית-בת ממש: עריכת
+  // הבת דרך כל אחד מההורים משנה את אותה רשומה משותפת, ונראה כאילו הם "תלויים אחד בשני".
+  if (orig.childProgId) {
+    const origChild = programs.find(c => c.id === orig.childProgId);
+    if (origChild) {
+      const newChild = JSON.parse(JSON.stringify(origChild));
+      newChild.id = Date.now() + 1; // +1 כדי לא להתנגש עם newProg.id שנוצר באותה מילישנייה
+      newChild.seqId = nextProgId++;
+      newChild.parentProgId = newProg.id;
+      newProg.childProgId = newChild.id;
+      programs.push(newChild);
+    } else {
+      newProg.childProgId = null; // ההורה המקורי כבר לא קיים — לא נשאיר הפניה תלויה
+    }
+  }
+  programs.push(newProg);
+  syncProgramsToServer();
+  renderPrograms();
+  toast(`✅ תוכנית "${orig.name}" שוכפלה`);
+}
+
+function toggleProgActive(id){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
+    toast('אינך מורשה לשנות סטטוס תוכניות');return;
+  }
+  const p=programs.find(x=>x.id===id);
+  if(p){
+    p.active=!p.active;
+    // השבתת הורה משביתה גם את תוכנית-הבת שלה — אחרת היא נשארת "רפאים" ומוצגת בציר-הזמן
+    // גם כשההורה כבוי (הבת לא מופיעה כשורה עצמאית ברשימה, ולכן משתמש עלול לא לשים לב שהיא נשארה פעילה)
+    if(!p.active && p.childProgId){
+      const child=programs.find(x=>x.id===p.childProgId);
+      if(child && child.active) child.active=false;
+    }
+    // ההפוך: הפעלת הורה מבחוץ (לא דרך עריכה+שמירה) חייבת להפעיל בחזרה גם את הבת — אחרת היא נשארת
+    // מושבתת מכיבוי קודם, ההורה "רץ" אבל הבת לא מופיעה בציר-הזמן עד שנכנסים לעריכה ושומרים (בדיוק
+    // התקלה שדווחה: "מפעילים מבחוץ, ציר-הזמן מציג רק את ההורה, עד שנכנסים לעריכה+שמירה").
+    if(p.active && p.childProgId){
+      const child=programs.find(x=>x.id===p.childProgId);
+      if(child && !child.active) child.active=true;
+    }
+    addLog('info', `תוכנית "${p.name}" — ${p.active ? 'הופעלה ✅' : 'הושבתה ⏸'}`);
+    renderPrograms();renderRelays();saveLS();
+    if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+  }
+}
+function deleteProg(id){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canDeletePrograms){
+    toast('אינך מורשה למחוק תוכניות');return;
+  }
+  if(!confirm('למחוק תוכנית זו?'))return;
+  const p=programs.find(x=>x.id===id);
+  // מחיקת תוכנית-בת אם קיימת
+  if(p&&p.childProgId){
+    const ci=programs.findIndex(x=>x.id===p.childProgId);
+    if(ci>-1)programs.splice(ci,1);
+  }
+  const i=programs.findIndex(x=>x.id===id);
+  if(i>-1){programs.splice(i,1);renderPrograms();renderRelays();if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();saveLS();syncProgramsToServer();}
+}
+function toggleSelectMode(){
+  selectMode=!selectMode;
+  if(!selectMode) selectedProgIds.clear();
+  document.getElementById('select-mode-btn').style.color = selectMode ? 'var(--accent)' : '';
+  document.getElementById('select-mode-btn').style.borderColor = selectMode ? 'rgba(79,142,247,0.4)' : '';
+  populateBulkModeSelect();
+  renderPrograms();
+  setTimeout(updateStickyOffsets, 0);
+}
+function toggleProgSelect(id){
+  if(selectedProgIds.has(id)) selectedProgIds.delete(id); else selectedProgIds.add(id);
+  updateBulkBar();
+  // עדכון ויזואלי בלבד — בלי רינדור מלא כדי לא לאבד פוקוס
+  const p=programs.find(x=>x.id===id);
+  if(p){
+    const card=document.getElementById('progcard-'+p.seqId);
+    if(card) card.classList.toggle('selected', selectedProgIds.has(id));
+  }
+}
+function selectAllPrograms(){
+  programs.filter(p=>!p.parentProgId).forEach(p=>selectedProgIds.add(p.id));
+  renderPrograms();
+}
+function clearProgSelection(){
+  selectedProgIds.clear();
+  renderPrograms();
+}
+function populateBulkModeSelect(){
+  const sel=document.getElementById('bulk-mode-select');
+  if(!sel) return;
+  sel.innerHTML = modes.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
+}
+function updateBulkBar(){
+  const bar=document.getElementById('bulk-bar');
+  const cnt=document.getElementById('bulk-count');
+  if(!bar||!cnt) return;
+  if(selectMode && selectedProgIds.size>0){
+    bar.classList.add('show');
+    cnt.textContent = selectedProgIds.size + ' נבחרו';
+  } else if(selectMode){
+    bar.classList.add('show');
+    cnt.textContent = '0 נבחרו';
+  } else {
+    bar.classList.remove('show');
+  }
+}
+function bulkSetActive(active){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
+    toast('אינך מורשה לשנות סטטוס תוכניות');return;
+  }
+  if(!selectedProgIds.size){toast('לא נבחרו תוכניות');return;}
+  let n=0;
+  selectedProgIds.forEach(id=>{
+    const p=programs.find(x=>x.id===id);
+    if(p && p.active!==active){
+      p.active=active;n++;
+      // אותו עיקרון כמו בכפתור היחיד — השבתת הורה משביתה גם את הבת שלו
+      if(!active && p.childProgId){
+        const child=programs.find(x=>x.id===p.childProgId);
+        if(child && child.active) child.active=false;
+      }
+    }
+  });
+  if(n) addLog('info', `${n} תוכניות ${active?'הופעלו ✅':'הושבתו ⏸'} (פעולה מרובה)`);
+  renderPrograms();renderRelays();saveLS();
+  if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+  toast(`${n} תוכניות עודכנו`);
+}
+function bulkDelete(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canDeletePrograms){
+    toast('אינך מורשה למחוק תוכניות');return;
+  }
+  if(!selectedProgIds.size){toast('לא נבחרו תוכניות');return;}
+  if(!confirm(`למחוק ${selectedProgIds.size} תוכניות נבחרות? פעולה זו אינה הפיכה.`))return;
+  let n=0;
+  selectedProgIds.forEach(id=>{
+    const p=programs.find(x=>x.id===id);
+    // מחיקת תוכנית-בת אם קיימת
+    if(p&&p.childProgId){
+      const ci=programs.findIndex(x=>x.id===p.childProgId);
+      if(ci>-1)programs.splice(ci,1);
+    }
+    const i=programs.findIndex(x=>x.id===id);
+    if(i>-1){programs.splice(i,1);n++;}
+  });
+  selectedProgIds.clear();
+  if(n) addLog('danger', `${n} תוכניות נמחקו (פעולה מרובה)`);
+  renderPrograms();renderRelays();
+  if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+  saveLS();syncProgramsToServer();
+  toast(`${n} תוכניות נמחקו`);
+}
+function bulkAddMode(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
+    toast('אינך מורשה לערוך תוכניות');return;
+  }
+  if(!selectedProgIds.size){toast('לא נבחרו תוכניות');return;}
+  const sel=document.getElementById('bulk-mode-select');
+  if(!sel || sel.value==='') return;
+  const modeId=parseInt(sel.value);
+  let n=0;
+  selectedProgIds.forEach(id=>{
+    const p=programs.find(x=>x.id===id);
+    if(!p) return;
+    if(!p.modeIds) p.modeIds = (p.modeId !== null && p.modeId !== undefined) ? [p.modeId] : [0];
+    if(!p.modeIds.includes(modeId)){p.modeIds.push(modeId);n++;}
+  });
+  const modeName = modes.find(m=>m.id===modeId)?.name || modeId;
+  if(n) addLog('info', `מצב "${modeName}" נוסף ל-${n} תוכניות (פעולה מרובה)`);
+  renderPrograms();saveLS();syncProgramsToServer();
+  toast(n ? `מצב נוסף ל-${n} תוכניות` : 'כל התוכניות הנבחרות כבר כללו את המצב הזה');
+}
+
+
+// ── ADD/EDIT MODAL ────────────────────────────────────────
+function openAddProgram(editId){
+  editingProgId=editId||null;
+  document.getElementById('modal-title').textContent=editId?'עריכת תוכנית':'הוסף תוכנית חדשה';
+
+  const sel=document.getElementById('prog-relay-select');
+  sel.innerHTML=relays.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+
+  const dp=document.getElementById('days-picker');
+  dp.innerHTML=['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'].map((d,i)=>
+    `<label style="cursor:pointer;font-size: 13px;display:flex;align-items:center;gap:3px">
+      <input type="checkbox" value="${i}" checked> ${d}
+    </label>`).join('');
+
+  const modeDiv=document.getElementById('prog-mode-select');
+  modeDiv.innerHTML=modes.map(m=>`<label class="mode-chip" data-mid="${m.id}" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" value="${m.id}" style="margin:0"> ${m.name}</label>`).join('');
+
+  const childSel=document.getElementById('child-relay-select');
+  childSel.innerHTML=relays.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+
+  // ═══ איפוס-מלא-מפורש של *כל* שדה, תמיד, לפני כל דבר אחר ═══════════════════════════
+  // קריטי: זה חייב לרוץ תמיד (גם בעריכה, גם בתוכנית-חדשה) — כדי שאף שדה לא יוכל "לדלוף" משארית
+  // של עריכה קודמת (תוכנית אחרת, תוכנית-בת וכו') אם איזשהו נתיב-מילוי בהמשך הפונקציה מפספס שדה.
+  document.getElementById('prog-name-input').value='';
+  document.getElementById('prog-action-select').value='ON';
+  document.getElementById('prog-type-select').value='time';
+  document.getElementById('prog-time-input').value='07:00';
+  document.getElementById('prog-zman-select').value='sunset';
+  document.getElementById('prog-offset-dir').value='+';
+  document.getElementById('prog-offset-val').value=0;
+  document.getElementById('prog-runonce').checked=false;
+  document.getElementById('prog-priority').checked=false;
+  document.getElementById('prog-active').checked=true;
+  document.getElementById('prog-delay').value=0;
+  document.getElementById('prog-duration-on').checked=false;
+  document.getElementById('prog-duration-h').value=0;
+  document.getElementById('prog-duration-m').value=30;
+  document.getElementById('prog-cycle-on').checked=false;
+  document.getElementById('prog-cycle-on-min').value=20;
+  document.getElementById('prog-cycle-off-min').value=10;
+  document.getElementById('prog-child-on').checked=false;
+  document.getElementById('child-action-select').value='ON';
+  document.getElementById('child-timing').value='before';
+  document.getElementById('child-offset-min').value=2;
+  document.getElementById('child-require-ack').checked=false;
+  document.getElementById('child-confine').checked=true;
+  _calSel = null;
+  document.getElementById('prog-cal-type').value='none';
+  document.getElementById('prog-cal-search').style.display='none';
+  document.getElementById('cal-selected').style.display='none';
+  // ══════════════════════════════════════════════════════════════════════════════════
+
+  if(editId){
+    const p=programs.find(x=>x.id===editId);
+    if(!p)return;
+    document.getElementById('prog-name-input').value=p.name;
+    Array.from(sel.options).forEach(o=>o.selected=p.relay.includes(parseInt(o.value)));
+    document.getElementById('prog-action-select').value=p.action;
+    document.getElementById('prog-type-select').value=p.type;
+    document.getElementById('prog-time-input').value=p.time||'07:00';
+    document.getElementById('prog-zman-select').value=p.zman||'sunset';
+    document.getElementById('prog-offset-dir').value=p.offsetDir||'+';
+    document.getElementById('prog-offset-val').value=p.offsetVal||0;
+    Array.from(document.querySelectorAll('#days-picker input')).forEach(cb=>cb.checked=p.days.includes(parseInt(cb.value)));
+    document.getElementById('prog-runonce').checked=!!p.runOnce;
+    document.getElementById('prog-priority').checked=!!p.priority;
+    document.getElementById('prog-active').checked=!!p.active;
+    document.getElementById('prog-delay').value=p.delay||0;
+    document.getElementById('prog-duration-on').checked=!!p.durationOn;
+    document.getElementById('prog-duration-h').value=p.durationH||0;
+    document.getElementById('prog-duration-m').value=p.durationM||30;
+    // מחזורי הפסקה
+    document.getElementById('prog-cycle-on').checked=!!p.cycleOn;
+    document.getElementById('prog-cycle-on-min').value=p.cycleOnMin||20;
+    document.getElementById('prog-cycle-off-min').value=p.cycleOffMin||10;
+    // תוכנית-בת
+    const existingChild = p.childProgId ? programs.find(x=>x.id===p.childProgId) : null;
+    document.getElementById('prog-child-on').checked=!!existingChild;
+    if(existingChild){
+      document.getElementById('child-relay-select').value=existingChild.relay[0];
+      document.getElementById('child-action-select').value=existingChild.action||'ON';
+      document.getElementById('child-timing').value=existingChild.childTiming||'before';
+      document.getElementById('child-offset-min').value=existingChild.childOffsetMin??2;
+      document.getElementById('child-require-ack').checked=!!existingChild.childRequireAck;
+      document.getElementById('child-confine').checked=existingChild.childConfine!==false;
+    }
+    // Calendar
+    document.getElementById('prog-cal-type').value = p.calType||'none';
+    updateCalSection();
+    if (p.calType && p.calType!=='none' && p.calDay) {
+      _calSel = {dd:p.calDay,mm:p.calMonth,yyyy:p.calYear,heb:p.calLabel||''};
+      const showYear = p.calType==='once';
+      const label = showYear ? `${p.calLabel} (${String(p.calDay).padStart(2,'0')}/${String(p.calMonth).padStart(2,'0')}/${p.calYear})` : `${p.calLabel} · כל שנה`;
+      document.getElementById('cal-selected-text').textContent = label;
+      document.getElementById('cal-selected').style.display='flex';
+      document.getElementById('prog-cal-search').style.display='';
+    }
+    const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+    document.querySelectorAll('#prog-mode-select input[type=checkbox]').forEach(cb => {
+      cb.checked = modeIds.includes(parseInt(cb.value));
+    });
+    updateProgForm();
+  } else {
+    document.querySelectorAll('#prog-mode-select input[type=checkbox]').forEach(cb => {
+      cb.checked = parseInt(cb.value) === activeModeId;
+    });
+  }
+
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function showConflictModal(bothPrioConflicts){
+  const body = document.getElementById('conflict-modal-body');
+  body.innerHTML = bothPrioConflicts.map(cf=>{
+    const rNames = cf.sharedR.map(id=>relayName(id)).join(', ');
+    return `<div class="cf-row">תוכנית <b>#${cf.a.seqId} "${cf.a.name}"</b> ↔ תוכנית <b>#${cf.b.seqId} "${cf.b.name}"</b> — שתיהן מסומנות <b>עדיפות</b> ועל ${rNames}, וחופפות בזמן. <b>שתיהן הושבתו אוטומטית</b> (לא פעילות). יש להסיר עדיפות מאחת מהן או לשנות את הזמנים, ולהפעיל מחדש.</div>`;
+  }).join('');
+  document.getElementById('conflict-modal-overlay').classList.add('open');
+}
+function closeConflictModal(){
+  document.getElementById('conflict-modal-overlay').classList.remove('open');
+}
+
+function closeModal(){document.getElementById('modal-overlay').classList.remove('open');editingProgId=null;}
+function updateProgForm(){
+  const t=document.getElementById('prog-type-select').value;
+  document.getElementById('time-section').style.display=t==='time'?'':'none';
+  document.getElementById('zman-section').style.display=t==='zman'?'':'none';
+  // Duration
+  const durOn=document.getElementById('prog-duration-on').checked;
+  const durInputs=document.getElementById('duration-inputs');
+  const cycleSection=document.getElementById('cycle-section');
+  durInputs.style.display=durOn?'flex':'none';
+  cycleSection.style.display=durOn?'block':'none';
+  let totalMin=0;
+  if(durOn){
+    const h=parseInt(document.getElementById('prog-duration-h').value)||0;
+    const m=parseInt(document.getElementById('prog-duration-m').value)||0;
+    totalMin=h*60+m;
+    const action=document.getElementById('prog-action-select').value;
+    const reverseAction=action==='ON'?'כיבוי':'הדלקה';
+    const timeStr=(h>0?`${h} שעות `:'')+(m>0?`${m} דקות`:'');
+    document.getElementById('duration-preview').textContent=timeStr?`→ לאחר ${timeStr}: ${reverseAction}`:'';
+  }
+  // Cycle (מחזורי הפסקה)
+  const cycleOn=document.getElementById('prog-cycle-on').checked;
+  const cycleInputs=document.getElementById('cycle-inputs');
+  cycleInputs.style.display=cycleOn?'flex':'none';
+  if(cycleOn&&durOn){
+    const onMin=parseInt(document.getElementById('prog-cycle-on-min').value)||0;
+    const offMin=parseInt(document.getElementById('prog-cycle-off-min').value)||0;
+    const cycleLen=onMin+offMin;
+    const cycles=cycleLen>0?Math.floor(totalMin/cycleLen):0;
+    document.getElementById('cycle-preview').textContent=cycleLen>0
+      ?`→ ${cycles} מחזורים מלאים של ${onMin} דק' פעולה + ${offMin} דק' הפסקה (סה"כ ${totalMin} דק')`
+      :'';
+  }
+  // Child program
+  const childOn=document.getElementById('prog-child-on').checked;
+  const childInputs=document.getElementById('child-inputs');
+  childInputs.style.display=childOn?'flex':'none';
+  if(childOn){
+    const timing=document.getElementById('child-timing').value;
+    document.getElementById('child-ack-row').style.display=(timing==='after')?'flex':'none';
+  }
+}
+// ── תוכנית-בת (לזמני הפסקה) ────────────────────────────────
+// יוצרת/מעדכנת/מוחקת את תוכנית B (בת) בהתאם להגדרה ב-A (הורה)
+function applyChildProgram(parentProg, childData, oldChildId){
+  // אם אין הגדרת בת חדשה — מחק בת קיימת (אם הייתה)
+  if(!childData){
+    if(oldChildId){
+      const i=programs.findIndex(x=>x.id===oldChildId);
+      if(i>-1)programs.splice(i,1);
+    }
+    parentProg.childProgId=null;
+    return;
+  }
+  // יש הגדרת בת — עדכן קיימת או צור חדשה
+  let child = oldChildId ? programs.find(x=>x.id===oldChildId) : null;
+  const childFields={
+    name: parentProg.name+' — תוכנית בת',
+    relay:[childData.relay],
+    type:parentProg.type,
+    time:parentProg.time,
+    zman:parentProg.zman,
+    offsetDir:parentProg.offsetDir,
+    offsetVal:parentProg.offsetVal,
+    action:childData.action,
+    days:[...parentProg.days],
+    priority:false,
+    runOnce:false,
+    active:parentProg.active,
+    delay:0,
+    modeIds: parentProg.modeIds ?? (parentProg.modeId != null ? [parentProg.modeId] : [0]),
+    calType:parentProg.calType,
+    calDay:parentProg.calDay,
+    calMonth:parentProg.calMonth,
+    calYear:parentProg.calYear,
+    calLabel:parentProg.calLabel,
+    durationOn:false,durationH:0,durationM:0,
+    cycleOn:false,cycleOnMin:0,cycleOffMin:0,
+    parentProgId:parentProg.id,
+    childTiming:childData.timing,
+    childOffsetMin:childData.offsetMin,
+    childRequireAck:childData.requireAck,
+    childConfine:childData.confine,
+  };
+  if(child){
+    Object.assign(child,childFields);
+  } else {
+    child={...childFields,id:Date.now()+1,seqId:nextProgId++};
+    programs.push(child);
+  }
+  parentProg.childProgId=child.id;
+}
+function saveProgram(){
+  if(editingProgId){
+    if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
+      toast('אינך מורשה לערוך תוכניות');return;
+    }
+  } else {
+    if(currentUser && currentUser.role!=='admin' && !currentUser.canAddPrograms){
+      toast('אינך מורשה להוסיף תוכניות');return;
+    }
+  }
+  const name=document.getElementById('prog-name-input').value.trim();
+  if(!name){toast('נא להזין שם לתוכנית');return;}
+  const sel=document.getElementById('prog-relay-select');
+  const relayIds=Array.from(sel.selectedOptions).map(o=>parseInt(o.value));
+  if(!relayIds.length){toast('נא לבחור ממסר');return;}
+  if(document.getElementById('prog-child-on').checked){
+    if(!document.getElementById('prog-duration-on').checked||!document.getElementById('prog-cycle-on').checked){
+      toast('תוכנית-בת דורשת "למשך" + "מחזורי הפסקה" פעילים');return;
+    }
+  }
+  const type=document.getElementById('prog-type-select').value;
+  const days=Array.from(document.querySelectorAll('#days-picker input:checked')).map(x=>parseInt(x.value));
+  const modeIds = Array.from(document.querySelectorAll('#prog-mode-select input[type=checkbox]:checked')).map(cb=>parseInt(cb.value));
+  if(modeIds.length===0) modeIds.push(0); // ברירת מחדל: מצב רגיל
+  const calType = document.getElementById('prog-cal-type').value;
+  const data={
+    name,relay:relayIds,type,
+    time:document.getElementById('prog-time-input').value,
+    zman:document.getElementById('prog-zman-select').value,
+    offsetDir:document.getElementById('prog-offset-dir').value,
+    offsetVal:parseInt(document.getElementById('prog-offset-val').value)||0,
+    action:document.getElementById('prog-action-select').value,
+    days,priority:document.getElementById('prog-priority').checked,
+    runOnce:document.getElementById('prog-runonce').checked,
+    active:document.getElementById('prog-active').checked,
+    delay:parseInt(document.getElementById('prog-delay').value)||0,
+    modeIds,
+    calType: calType,
+    calDay: _calSel ? _calSel.dd : null,
+    calMonth: _calSel ? _calSel.mm : null,
+    calYear: _calSel ? _calSel.yyyy : null,
+    calLabel: _calSel ? _calSel.heb : null,
+    durationOn: document.getElementById('prog-duration-on').checked,
+    durationH: parseInt(document.getElementById('prog-duration-h').value)||0,
+    durationM: parseInt(document.getElementById('prog-duration-m').value)||0,
+    cycleOn: document.getElementById('prog-cycle-on').checked,
+    cycleOnMin: parseInt(document.getElementById('prog-cycle-on-min').value)||0,
+    cycleOffMin: parseInt(document.getElementById('prog-cycle-off-min').value)||0,
+  };
+  const childOn=document.getElementById('prog-child-on').checked;
+  const childData=childOn?{
+    relay: parseInt(document.getElementById('child-relay-select').value),
+    action: document.getElementById('child-action-select').value,
+    timing: document.getElementById('child-timing').value,
+    offsetMin: parseInt(document.getElementById('child-offset-min').value)||0,
+    requireAck: document.getElementById('child-require-ack').checked,
+    confine: document.getElementById('child-confine').checked,
+  }:null;
+
+  // חסימת שמירה — תוכנית עם עדיפות שמתנגשת (חפיפת OFF) עם תוכנית עדיפות אחרת קיימת.
+  // זה המקרה היחיד בלי הכרעה אוטומטית, אז עוצרים כאן לפני שמירה — לא רק מתריעים.
+  if (data.active && data.priority) {
+    const others = programs.filter(p => p.id !== editingProgId && p.active && p.priority && !p.parentProgId);
+    for (const other of others) {
+      const dataAllDays = !data.days || !data.days.length, otherAllDays = !other.days || !other.days.length;
+      if (!dataAllDays && !otherAllDays && !data.days.filter(d => other.days.includes(d)).length) continue;
+      const sharedR = data.relay.filter(r => other.relay.includes(r));
+      for (const relayId of sharedR) {
+        const overlap = findOffOverlap(data, other, relayId);
+        if (overlap) {
+          toast(`❌ לא ניתן לשמור — מתנגשת עם תוכנית עדיפות קיימת "#${other.seqId} ${other.name}" על ${relayName(relayId)}. הסר עדיפות מאחת מהן או שנה זמנים.`);
+          return;
+        }
+      }
+    }
+  }
+
+  if(editingProgId){
+    const p=programs.find(x=>x.id===editingProgId);
+    if(p){
+      const oldChildId=p.childProgId;
+      Object.assign(p,data);
+      applyChildProgram(p,childData,oldChildId);
+    }
+  } else {
+    data.id=Date.now();data.seqId=nextProgId++;
+    programs.push(data);
+    applyChildProgram(data,childData,null);
+  }
+  renderPrograms();renderRelays();renderModes();
+  if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+  saveLS();closeModal();
+  syncProgramsToServer();
+  toast(editingProgId?'תוכנית עודכנה':'תוכנית נשמרה');
+}
+
+// ── EXPORT / IMPORT ───────────────────────────────────────
+function exportJSON(){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לייצא הגדרות');return;
+  }
+  const blob=new Blob([JSON.stringify({programs,modes,relayNames:relays.map(r=>({id:r.id,name:r.name})),activeModeId,nextProgId,scheduledModes:_scheduledModes},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='smarthome_programs.json';a.click();
+  toast('ייצוא JSON הצליח');
+}
+function importJSON(ev){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לייבא הגדרות');ev.target.value='';return;
+  }
+  // בדוק שהסנכרון אושר לפני ייבוא
+  if(!_syncConfirmed){
+    toast('⏳ ממתין לאישור סנכרון מהשרת — נסה שנית בעוד רגע');
+    ev.target.value='';return;
+  }
+  const file=ev.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const d=JSON.parse(e.target.result);
+      if(d.relayNames)d.relayNames.forEach(rn=>{const r=relays.find(x=>x.id===rn.id);if(r)r.name=rn.name;});
+      if(d.programs){programs.length=0;d.programs.forEach(p=>programs.push(migrateProg(p)));}
+      if(d.modes){modes.length=0;d.modes.forEach(m=>modes.push(m));}
+      if(d.activeModeId!==undefined)activeModeId=d.activeModeId;
+      if(d.nextProgId)nextProgId=d.nextProgId;
+      if(d.scheduledModes){
+        _scheduledModes=d.scheduledModes;
+        socket.emit('save_scheduled_modes',_scheduledModes);
+      }
+      renderAll();renderTimeline();
+      // בדוק התנגשויות בעלות-OFF מדויקות (אותו אלגוריתם כמו ב-runtime ובבאנר):
+      // 1) שתי תוכניות priority שמתנגשות זו בזו — אין הכרעה אוטומטית; משביתים את שתיהן
+      //    כדי לא להשאיר התנהגות לא-צפויה, ומבקשים תיקון ידני.
+      // 2) שתי תוכניות בלי priority — נשארות פעילות; ה-runtime פותר אוטומטית (מי שמסתיים
+      //    מאוחר יותר "מנצח" בפועל) — רק מתריעים למודעות.
+      const allConflicts = detectConflicts();
+      const bothPrioConflicts = allConflicts.filter(cf => cf.bothPriority);
+      const nonPrioConflicts = allConflicts.filter(cf => !cf.a.priority && !cf.b.priority);
+
+      const disabledIds = new Set();
+      bothPrioConflicts.forEach(cf => {
+        [cf.a, cf.b].forEach(p => {
+          if (p.active && !disabledIds.has(p.id)) {
+            p.active = false;
+            disabledIds.add(p.id);
+          }
+        });
+        const rNames = cf.sharedR.map(id=>relayName(id)).join(', ');
+        addLog('warning', `[ייבוא] שתי תוכניות עדיפות מתנגשות הושבתו אוטומטית: #${cf.a.seqId} "${cf.a.name}" ↔ #${cf.b.seqId} "${cf.b.name}" על ${rNames} — יש לתקן ידנית (להסיר עדיפות מאחת או לשנות זמנים) ולהפעיל מחדש`);
+      });
+      if (disabledIds.size) { saveLS(); renderAll(); renderTimeline(); }
+
+      if (nonPrioConflicts.length) {
+        nonPrioConflicts.forEach(cf=>{
+          const rNames = cf.sharedR.map(id=>relayName(id)).join(', ');
+          addLog('warning', `[ייבוא] התנגשות תוכניות לא-עדיפות: #${cf.a.seqId} "${cf.a.name}" ↔ #${cf.b.seqId} "${cf.b.name}" על ${rNames} — אף אחת לא מסומנת עדיפות, מומלץ לסמן אחת מהן או לשנות זמנים`);
+        });
+      }
+
+      if (disabledIds.size) {
+        toast(`⚠ ייבוא הצליח, אך ${disabledIds.size} תוכניות עדיפות-מתנגשות הושבתו אוטומטית`);
+        showConflictModal(bothPrioConflicts); // חוסם — חייב לחיצת "הבנתי" כדי לא לפספס
+      } else if (nonPrioConflicts.length) {
+        toast(`⚠ ייבוא הצליח, אך נמצאו ${nonPrioConflicts.length} התנגשויות בין תוכניות ללא עדיפות — ראה פירוט בלשונית תוכניות וביומן`);
+      } else {
+        toast('ייבוא הצליח!');
+      }
+      saveLS();
+      syncProgramsToServer();
+    }catch(err){console.error('importJSON error:', err);toast('שגיאה בייבוא הקובץ');}
+  };
+  reader.readAsText(file);ev.target.value='';
+}
+
+// ── TIMELINE ──────────────────────────────────────────────
+function fmtMin(m){const h=Math.floor(m/60),mn=m%60;return `${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')}`;}
+
+function initTlDates(){
+  const from=document.getElementById('tl-from-date');
+  const to=document.getElementById('tl-to-date');
+  if(!from||!to)return;
+  if(!from.value){
+    // קריטי: לא toISOString() (תמיד UTC!) — משתמשים בחלקים המספריים המתוקנים לישראל, כדי שהמחרוזת
+    // שנכתבת לשדה עצמו כבר תהיה נכונה, ולא תגרום ל-new Date(string) לפרש אותה כ-UTC בהמשך.
+    const p = getIsraelParts(new Date());
+    const fmt = (y,m,d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    from.value = fmt(p.year, p.month, p.day);
+    const end=new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+6);
+    to.value = fmt(end.getFullYear(), end.getMonth()+1, end.getDate());
+  }
+}
+function setTlRange(days){
+  const p = getIsraelParts(new Date());
+  const fmt = (y,m,d) => `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  const from=document.getElementById('tl-from-date');
+  const to=document.getElementById('tl-to-date');
+  from.value = fmt(p.year, p.month, p.day);
+  const end=new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+days-1);
+  to.value = fmt(end.getFullYear(), end.getMonth()+1, end.getDate());
+  renderTimeline();
+}
+function getTlDates(){
+  const fEl=document.getElementById('tl-from-date');
+  const tEl=document.getElementById('tl-to-date');
+  // "היום" מעוגן במפורש לזמן ישראל (לא לאזור-הזמן הגולמי שהדפדפן/מכשיר מוגדר אליו) — כדי שזה יהיה
+  // נכון גם אם המכשיר מוגדר לאזור-זמן אחר (למשל UTC). כל שאר החישוב (גם מנוע מקטעי-המצב) בונה על
+  // הערך הזה, כך שהכל נשאר עקבי כלפי עצמו וגם נכון כלפי השעון האמיתי בישראל.
+  const _todayParts = getIsraelParts(new Date(getNowMs()));
+  const today=new Date(_todayParts.year, _todayParts.month-1, _todayParts.day, 0, 0, 0, 0);
+  // קריטי: לא new Date(fEl.value)! מחרוזת "YYYY-MM-DD" (בלי שעה) תמיד מתפרשת כ-UTC ע"י JS, בכל
+  // דפדפן, ללא יוצא מן הכלל — גם אם המחרוזת עצמה כבר נכונה. מפרקים אותה ידנית ובונים עם הקונסטרוקטור
+  // המספרי (שתמיד מקומי, לא תלוי-פרשנות), כדי שזה יישאר נכון בלי קשר לפורמט המחרוזת.
+  const parseDateInput = (val) => {
+    const [y,m,d] = val.split('-').map(Number);
+    return new Date(y, m-1, d, 0, 0, 0, 0);
+  };
+  // כשדריסת-זמן פעילה (_DEBUG_NOW_OVERRIDE), מתעלמים מערך-שדה קיים (שיכול "להיתקע" מביקור קודם,
+  // לפני שהדריסה הוגדרה) — הדריסה אמורה תמיד לקבוע את "היום", לא להיות תלויה במצב-שדה ישן.
+  const from=(fEl&&fEl.value&&_DEBUG_NOW_OVERRIDE===null)?parseDateInput(fEl.value):today;
+  const to=(tEl&&tEl.value&&_DEBUG_NOW_OVERRIDE===null)?parseDateInput(tEl.value):new Date(today.getTime()+6*86400000);
+  const dates=[];
+  for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1))dates.push(new Date(d));
+  return dates;
+}
+
+// ── חד פעמי (runOnce) ──────────────────────────────────────
+// מחזיר את תאריך ה-YYYY-MM-DD הקרוב ביותר (מהיום והלאה) מבין p.days
+// שבו תוכנית runOnce תתבצע בפועל (ההפעלה היחידה לפני שתתבטל).
+// תוצאה מחושבת פעם אחת לכל תוכנית ונשמרת ב-cache לאורך renderTimeline.
+let _runOnceDateCache = {};
+function getRunOnceTargetDateKey(p){
+  if(!p.runOnce) return null;
+  if(_runOnceDateCache[p.id]!==undefined) return _runOnceDateCache[p.id];
+  if(!p.active){ _runOnceDateCache[p.id]=null; return null; }
+  const hasDays = p.days && p.days.length>0;
+  const today=new Date();today.setHours(0,0,0,0);
+  for(let d=0; d<8; d++){
+    const cand=new Date(today);
+    cand.setDate(cand.getDate()+d);
+    const di=cand.getDay();
+    if((!hasDays||p.days.includes(di)) && matchesCalFilterForDate(p,cand)){
+      const key=ilDateKey(cand);
+      _runOnceDateCache[p.id]=key;
+      return key;
+    }
+  }
+  _runOnceDateCache[p.id]=null;
+  return null;
+}
+// ── חד פעמי שפעל היום — לתצוגה בציר הזמן ──────────────────
+// כשתוכנית runOnce מבוטלת (active=false), שומרים אותה כאן להצגה בציר
+let _firedRunOnceToday = {}; // { progId: programSnapshot }
+
+function markRunOnceFired(p) {
+  _firedRunOnceToday[p.id] = { ...p, _firedToday: true };
+}
+
+// בודק אם תוכנית p רלוונטית לתאריך date — לוקח בחשבון runOnce
+function progAppliesOnDate(p,date){
+  const hasDays = p.days && p.days.length>0;
+  const di=date.getDay();
+  if(hasDays && !p.days.includes(di)) return false;
+  if(!matchesCalFilterForDate(p,date)) return false;
+  if(p.runOnce){
+    const target=getRunOnceTargetDateKey(p);
+    if(!target) return false;
+    const dateKey=ilDateKey(date);
+    return dateKey===target;
+  }
+  return true;
+}
+
+function getTimeBlocksForDate(date, daySegments){
+  const di=date.getDay();
+  const dayStart=date.getTime();
+  // אילו מצבים בכלל רלוונטיים ליום הזה — מתוך מקטעי-הסימולציה (אם הועברו), אחרת רק המצב הנוכחי
+  // (תאימות-לאחור). בלי זה, תוכנית ממצב שיהיה פעיל רק באמצע היום (עקב תזמון-מצב) לא הייתה משפיעה
+  // בכלל על גבולות הבלוקים — וכל היום היה מוצג כבלוק ריק אחד, עם "מצב-בזמן-חצות" (הישן) בלבד.
+  const relevantModes = new Set();
+  if(daySegments && daySegments.length){
+    const dayEnd=dayStart+1440*60000;
+    daySegments.forEach(seg=>{ if(seg.startMs<dayEnd && seg.endMs>dayStart) relevantModes.add(seg.modeId); });
+  } else {
+    relevantModes.add(activeModeId);
+  }
+  const dayProgs=programs.filter(p=>{
+    if(!p.active||!progAppliesOnDate(p,date)) return false;
+    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+    return modeIds.some(mid=>relevantModes.has(mid));
+  });
+  // בדיקה מדויקת-לפי-זמן: תוכנית "רלוונטית ליום" (dayProgs) בכללי, אבל **קטע ספציפי שלה** נכלל רק
+  // אם המצב-שלה בפועל פעיל **בדיוק ברגע שהקטע הזה קורה** (לא רק "רלוונטי איפשהו ביום"). בלי זה,
+  // תוכנית-מצב-0 "דולפת" גם לתוך חלון-הזמן שבו תזמון-מצב כבר העביר למצב אחר (למשל "חוץ לבית").
+  function progSegActiveAt(p, atMs){
+    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+    if(!daySegments || !daySegments.length) return modeIds.includes(activeModeId);
+    let m = null;
+    try { m = modeAtTime(daySegments, atMs); } catch(e) { m = null; }
+    if(m===null) return modeIds.includes(activeModeId);
+    return modeIds.includes(m);
+  }
+  const dateKey=ilDateKey(date);
+  const dayManual=manualEvents.filter(e=>e.date===dateKey); // ← אירועים ידניים/IVR של היום הזה
+
+  // תוכניות-מאתמול שחוצות לתוך היום הזה (למשל 23:45 שישי + 7 שעות = 06:45 שבת) — בלי זה, יום שאין
+  // בו שום תוכנית-משלו נופל ל"ריק כל היום", ומצב-הרקע (getRelayStateAtTime, שכן יודע לחזור אחורה
+  // ולזהות שהממסר עדיין דלוק) נבדק רק פעם אחת בחצות — ומוצג "דולק" שגוי לכל היום, גם אחרי שכבר כבה.
+  const yesterday = new Date(date.getTime() - 86400000);
+  const carriedOverEnds = []; // { p, rId, endMin (מותאם ליום הנוכחי, 0-1440) }
+  // כולל גם תוכניות-בת (p.parentProgId) — הן עכשיו מקבלות סימון-כיבוי עקבי (ראו renderTimeline),
+  // אז אין סיבה להחריג אותן כאן.
+  programs.filter(p=>p.active && progAppliesOnDate(p,yesterday)).forEach(p=>{
+    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+    if(!modeIds.some(mid=>relevantModes.has(mid))) return;
+    p.relay.forEach(rId=>{
+      getRelayEventPairs(p,rId).forEach(seg=>{
+        if(seg.endMin!==null && seg.endMin>1440){
+          const endMinToday = seg.endMin-1440;
+          // בדיקה מדויקת-לפי-זמן: המצב-של-התוכנית-הזו חייב להיות פעיל בפועל ברגע-הכיבוי (אחרי
+          // חציית-החצות, בתוך היום הנוכחי) — לא רק "רלוונטי איפשהו ביום" (אותה בעיה כמו למעלה,
+          // חשובה במיוחד לתוכניות-שבת-חוצות-חצות עם תזמון-מצב).
+          if(!progSegActiveAt(p, dayStart+endMinToday*60000)) return;
+          carriedOverEnds.push({p, rId, endMin: endMinToday, segAction: seg.action});
+        }
+      });
+    });
+  });
+
+  // גבולות ממעברי-מצב עצמם בתוך היום הזה — גם אם אין שום תוכנית בדיוק באותו רגע
+  const modeTransitionMins=[];
+  if(daySegments && daySegments.length){
+    const dayStart=date.getTime();
+    daySegments.forEach(seg=>{
+      const sm=Math.round((seg.startMs-dayStart)/60000), em=Math.round((seg.endMs-dayStart)/60000);
+      if(sm>0&&sm<1440) modeTransitionMins.push(sm);
+      if(em>0&&em<1440) modeTransitionMins.push(em);
+    });
+  }
+
+  if(!dayProgs.length && !dayManual.length && !modeTransitionMins.length && !carriedOverEnds.length)return [{startMin:0,endMin:1440,hasEvents:false,empty:true}];
+
+  // אסוף את כל נקודות האירוע — הדלקה וכיבוי בלבד (ללא padding)
+  const mins=new Set([0,1440,...modeTransitionMins]);
+  carriedOverEnds.forEach(cp=>{
+    const em=Math.ceil(cp.endMin);
+    if(em>=0&&em<=1440) mins.add(em);
+  });
+  dayProgs.forEach(p=>{
+    p.relay.forEach((rId)=>{
+      getRelayEventPairs(p,rId).forEach(seg=>{
+        const fireM=Math.floor(seg.fireMin);
+        if(!progSegActiveAt(p, dayStart+fireM*60000)) return; // המצב-של-התוכנית-הזו לא פעיל ברגע הזה בפועל
+        if(fireM>=0&&fireM<=1440) mins.add(fireM);
+        if(seg.endMin!==null){
+          // עיגול כלפי מעלה (לא מטה!) — אחרת שני ממסרים באותה תוכנית עם delay, שמסתיימים בתוך אותה
+          // דקה (למשל 08:05:00 ו-08:05:30), "נבלעים" לאותו גבול-בלוק, והרקע של הבלוק שאחרי מציג את
+          // הממסר השני כאילו הוא עדיין דולק לאורך כל הבלוק (עד האירוע הבא), במקום לכבות בזמן.
+          const em=Math.ceil(seg.endMin);
+          if(em>=0&&em<=1440) mins.add(em);
+        }
+      });
+    });
+  });
+  // ← הוספה: גבולות מאירועים ידניים/IVR — כדי שבלוק ייפתח גם בלי תוכנית קרובה
+  dayManual.forEach(ev=>{
+    const s=Math.max(0,Math.floor(ev.startMin));
+    if(s<=1440) mins.add(s);
+    const en=ev.endMin!==null?Math.floor(ev.endMin):1440;
+    if(en>=0&&en<=1440) mins.add(en);
+  });
+
+  const sorted=[...mins].sort((a,b)=>a-b);
+  const raw=[];
+  for(let i=0;i<sorted.length-1;i++){
+    const s=sorted[i],e=sorted[i+1];
+    const hasProg=dayProgs.some(p=>p.relay.some(rId=>
+      getRelayEventPairs(p,rId).some(seg=>{
+        if(!progSegActiveAt(p, dayStart+Math.floor(seg.fireMin)*60000)) return false;
+        const m=Math.floor(seg.fireMin);
+        if(m>=s&&m<e)return true;
+        return seg.endMin!==null&&Math.ceil(seg.endMin)>=s&&Math.ceil(seg.endMin)<e;
+      })
+    ));
+    // ← הוספה: בלוק עם אירוע ידני/IVR שמתחיל/מסתיים בטווח הזה נחשב "hasEvents" גם בלי תוכנית
+    const hasManual=dayManual.some(ev=>{
+      const evS=Math.floor(ev.startMin);
+      const evE=ev.endMin!==null?Math.floor(ev.endMin):1440;
+      return (evS>=s&&evS<e)||(evE>=s&&evE<e);
+    });
+    // בלוק שנפתח רק בגלל מעבר-מצב (בלי תוכנית/אירוע ממש בטווח שלו) — עדיין נחשב "hasEvents", אחרת
+    // הוא יתמזג לבלוק-ריק שכן ולא יקבל את תגית-המצב בתצוגה.
+    const hasModeTransition = modeTransitionMins.includes(s);
+    // ← הוספה: בלוק שמכיל את רגע-הכיבוי של תוכנית-שחוצה-מאתמול נחשב "hasEvents" גם בלי תוכנית-משלו
+    const hasCarriedOver = carriedOverEnds.some(cp=>{
+      const em=Math.ceil(cp.endMin);
+      return em>=s && em<e;
+    });
+    raw.push({startMin:s,endMin:e,hasEvents:hasProg||hasManual||hasModeTransition||hasCarriedOver});
+  }
+
+  // מיזוג בלוקים ריקים רצופים לבלוק אחד
+  const merged=[];
+  raw.forEach(b=>{
+    const last=merged[merged.length-1];
+    if(last&&!last.hasEvents&&!b.hasEvents)
+      last.endMin=b.endMin;
+    else merged.push({...b});
+  });
+  merged.carriedOverEnds = carriedOverEnds;
+  return merged;
+}
+// Cache of relay state events per relay per date — built once per renderTimeline call
+let _relayEventsCache = {}; // key: "relayId|YYYY-MM-DD" → sorted events array
+
+// ── MANUAL EVENTS (הפעלות ידניות וטיימרים) ───────────────
+// { relayId, startMin, endMin (null=פתוח), source, date (YYYY-MM-DD) }
+const manualEvents = [];
+
+function addManualEvent(relayId, state, source, durationMin=null) {
+  const now = new Date();
+  const _p2 = getIsraelParts(now);
+  const dateKey = `${_p2.year}-${String(_p2.month).padStart(2,'0')}-${String(_p2.day).padStart(2,'0')}`;
+  const nowMin = _p2.hour*60 + _p2.minute;
+
+  if (state) {
+    // הפעלה — הוסף אירוע פתוח
+    // סגור אירוע קודם פתוח לאותו ממסר
+    manualEvents.forEach(e => {
+      if (e.relayId === relayId && e.endMin === null && e.date === dateKey) {
+        e.endMin = nowMin;
+      }
+    });
+    manualEvents.push({
+      relayId, date: dateKey,
+      startMin: nowMin,
+      endMin: durationMin ? nowMin + durationMin : null,
+      source
+    });
+  } else {
+    // כיבוי — סגור אירוע פתוח
+    manualEvents.forEach(e => {
+      if (e.relayId === relayId && e.endMin === null && e.date === dateKey) {
+        e.endMin = nowMin;
+      }
+    });
+  }
+  // נקה אירועים ישנים (יותר מ-2 ימים) — cutoff מחושב באותה שיטה עקבית (getIsraelParts), לא new Date(nowIL)
+  // (nowIL לא קיים בפונקציה הזו כלל — זו הייתה שארית ממשתנה שהוסר, וגרמה ל-ReferenceError בכל שימוש)
+  const cutoffDate = new Date(now.getTime() - 2*86400000);
+  const _pCutoff = getIsraelParts(cutoffDate);
+  const cutoffKey = `${_pCutoff.year}-${String(_pCutoff.month).padStart(2,'0')}-${String(_pCutoff.day).padStart(2,'0')}`;
+  for (let i = manualEvents.length-1; i >= 0; i--) {
+    if (manualEvents[i].date < cutoffKey) manualEvents.splice(i,1);
+  }
+  _relayEventsCache = {};
+  renderTimeline();
+}
+
+// ── סנכרון אירועי IVR ל-Timeline ──────────────────────────
+// תוסף (לא מוחק-ובונה-מחדש!) — כל אירוע נוסף פעם אחת לפי ה-id הייחודי שלו, ברגע
+// שרואים אותו לראשונה. dueAt:null = פעולה קבועה (בלוק פתוח, כמו פעולה ידנית) — אם
+// בעתיד אותו id מגיע עם dueAt לא-null (כיבוי קבוע שסוגר הדלקה קבועה), מעדכנים את
+// הבלוק הקיים במקום (לפי הפניה לאובייקט, לא לפי אינדקס — שורד גם ניקוי/splice).
+function _ilDateParts(epochMs) {
+  const p = getIsraelParts(new Date(epochMs));
+  return { dateKey: `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`, min: p.hour * 60 + p.minute };
+}
+const _ivrEventRefs = {}; // id → הפניה ישירה לאובייקט ב-manualEvents (לעדכון endMin בעתיד)
+const _ivrEventRefs2 = {}; // id → הפניה לרשומת-ההמשך ביום-הבא, רק לאירועים שחוצים חצות
+function rebuildIvrManualEvents(events) {
+  (events || []).forEach(t => {
+    if (_ivrEventRefs[t.id]) {
+      // נראה בעבר — רק לעדכן אם הסתיים/נסגר בינתיים (dueAt היה null, יש לו ערך אמיתי כעת)
+      if (t.dueAt !== null && t.dueAt !== undefined) {
+        const start = _ilDateParts(t.startedAt || t.dueAt);
+        const end = _ilDateParts(t.dueAt);
+        if (end.dateKey === start.dateKey) {
+          _ivrEventRefs[t.id].endMin = end.min;
+        } else {
+          // חוצה חצות — הרשומה של היום נשארת פתוחה עד סוף היום, ונוסף רישום-המשך למחר (אם עוד לא קיים)
+          _ivrEventRefs[t.id].endMin = 1440;
+          if (!_ivrEventRefs2[t.id]) {
+            const contEntry = { relayId: t.relayId, date: end.dateKey, startMin: 0, endMin: end.min, source: _ivrEventRefs[t.id].source };
+            manualEvents.push(contEntry);
+            _ivrEventRefs2[t.id] = contEntry;
+          } else {
+            _ivrEventRefs2[t.id].endMin = end.min;
+          }
+        }
+      }
+      return;
+    }
+    const start = _ilDateParts(t.startedAt || t.dueAt || Date.now());
+    const source = `IVR — ID ${t.callerId}`;
+    let endMin = null; // null = בלוק פתוח (פעולה קבועה שעדיין לא נסגרה)
+    if (t.dueAt !== null && t.dueAt !== undefined) {
+      const end = _ilDateParts(t.dueAt);
+      if (end.dateKey === start.dateKey) {
+        endMin = end.min;
+      } else {
+        // חוצה חצות — רשומת-היום נשארת פתוחה עד 1440, ורשומה נוספת נוצרת ליום-ההמשך (0 עד שעת-הסיום)
+        endMin = 1440;
+      }
+    }
+    const entry = { relayId: t.relayId, date: start.dateKey, startMin: start.min, endMin, source };
+    manualEvents.push(entry);
+    _ivrEventRefs[t.id] = entry;
+    if (t.dueAt !== null && t.dueAt !== undefined) {
+      const end = _ilDateParts(t.dueAt);
+      if (end.dateKey !== start.dateKey) {
+        const contEntry = { relayId: t.relayId, date: end.dateKey, startMin: 0, endMin: end.min, source };
+        manualEvents.push(contEntry);
+        _ivrEventRefs2[t.id] = contEntry;
+      }
+    }
+  });
+  // ניקוי רגיל — אירועי IVR ישנים (יותר מיומיים) לא צריכים להישאר לנצח
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 2);
+  const cutoffKey = ilDateKey(cutoff);
+  for (let i = manualEvents.length - 1; i >= 0; i--) {
+    if (manualEvents[i].source?.startsWith('IVR') && manualEvents[i].date < cutoffKey) manualEvents.splice(i, 1);
+  }
+  _relayEventsCache = {};
+}
+
+// בודק אם אירוע-הסיום (כיבוי/הדלקה הפוכה) של תוכנית p על relayId, בזמן endMin (יחסי ליום
+// scanDate), מבוטל בפועל ע"י תוכנית אחרת שמחזיקה את הממסר באותו רגע — אותו היגיון בדיוק
+// כמו checkRelayOwnerBlock בשרת, רק מחושב סטטית מראש (מתוך תכנון התוכניות), כדי שציר הזמן
+// יציג את המצב בפועל ולא רק את ה"תכנון הגולמי" של כל תוכנית בנפרד.
+function isEndEventSuppressed(p, seg, relayId, scanDate, effMode){
+  const checkMode = effMode !== undefined && effMode !== null ? effMode : activeModeId;
+  if (p.priority) return null; // תוכנית עדיפות לעולם לא מבוטלת, גם לא ע"י תוכנית-עדיפות אחרת (מקרה קצה נדיר)
+  const endMin = seg.endMin;
+  let suppressor = null;
+  for (const other of programs) {
+    if (other.id === p.id) continue;
+    const otherModeIds = other.modeIds ?? (other.modeId!==null&&other.modeId!==undefined?[other.modeId]:[0]);
+    if (!other.active || !otherModeIds.includes(checkMode) || !progAppliesOnDate(other, scanDate)) continue;
+    if (!other.relay.includes(relayId)) continue;
+    const otherPairs = getRelayEventPairs(other, relayId);
+    for (const oseg of otherPairs) {
+      if (oseg.action !== 'ON') continue;
+      if (oseg.endMin === null) continue; // בלי duration כלל — אין כוונה מוגנת, אף פעם לא "בעלים" שחוסם
+      const coversNow = oseg.fireMin <= endMin && oseg.endMin > endMin;
+      if (!coversNow) continue;
+      if (other.priority) { suppressor = other; break; }
+      if (!suppressor && seg.endMin !== null && oseg.endMin > seg.endMin) suppressor = other; // מסתיים מאוחר יותר — מנצח
+    }
+    if (suppressor && suppressor.priority) break;
+  }
+  return suppressor;
+}
+
+function _getRelayEvents(relayId, date, modeId) {
+  const effMode = modeId !== undefined && modeId !== null ? modeId : activeModeId;
+  const dateKey = ilDateKey(date);
+  const cacheKey = `${relayId}|${dateKey}|${effMode}`;
+  if (_relayEventsCache[cacheKey]) return _relayEventsCache[cacheKey];
+  const LOOKBACK_DAYS = 30;
+  const allEvents = [];
+  for(let d = 0; d <= LOOKBACK_DAYS; d++){
+    const scanDate = new Date(date);
+    scanDate.setDate(scanDate.getDate() - d);
+    const scanDi = scanDate.getDay();
+    const offsetMin = -d * 1440;
+    const progs = programs.filter(p => {
+      const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+      if (!modeIds.includes(effMode) || !progAppliesOnDate(p, scanDate)) return false;
+      if (!p.relay.includes(relayId)) return false;
+      if (p.parentProgId) {
+        // תוכנית-בת — צריכה גם את ה-active של עצמה וגם של ההורה (בלי הורה פעיל אין הפסקות לגזור מהן)
+        const parent = programs.find(x => x.id === p.parentProgId);
+        return p.active && !!parent && parent.active;
+      }
+      return p.active;
+    });
+    progs.forEach(p => {
+      const pairs = getRelayEventPairs(p,relayId);
+      pairs.forEach((seg,idx)=>{
+        allEvents.push({min: seg.fireMin + offsetMin, state: seg.action==='ON'});
+        if(seg.segType==='child'){
+          // כל בלוק של תוכנית-בת עומד בפני עצמו
+          // אם יש endMin (confine=true) — נסגור אותו בזמן סיום ההפסקה
+          if(seg.endMin !== null){
+            allEvents.push({min: seg.endMin + offsetMin, state: seg.action!=='ON'});
+          }
+          return;
+        }
+        // אירוע "סיום" — רק לקטע האחרון (סוף ה-duration הכולל).
+        // קטעי מחזור ביניים: ה"סיום" שלהם הוא כבר ה"תחילה" של הקטע הבא (אותה דקה, action הפוך).
+        const isLast = idx===pairs.length-1;
+        if(seg.endMin !== null && isLast){
+          // קטע מחזור אמיתי (on/off) — בסיום נשארים באותו מצב שהקטע היה (לא הופכים).
+          // קטע רגיל, או קטע 'single' (השארית האחרונה של תוכנית-מחזור, שכן מקבלת כיבוי-אוטומטי-בתום-משך
+          // מהשרת) — הופכים, חזרה למצב הפוך (כיבוי אוטומטי).
+          const endState = (seg.cycleIdx!==undefined && seg.segType!=='single') ? (seg.action==='ON') : (seg.action!=='ON');
+          // אם זה כיבוי (endState===false) שבפועל מבוטל ע"י תוכנית אחרת שמחזיקה את הממסר —
+          // לא דוחפים את האירוע הזה בכלל, כך שהמצב "דולק" ממשיך עד שהבעלים האמיתי מכבה.
+          const suppressedBy = (!endState) ? isEndEventSuppressed(p, seg, relayId, scanDate, effMode) : null;
+          if (!suppressedBy) {
+            allEvents.push({min: seg.endMin + offsetMin, state: endState});
+          }
+        }
+      });
+    });
+  }
+  // הוסף אירועים ידניים — כולל ימים קודמים עם אירוע פתוח (ללא endMin)
+  for(let d = 30; d >= 0; d--){
+    const scanDate2 = new Date(date);
+    scanDate2.setDate(scanDate2.getDate() - d);
+    const scanKey2 = ilDateKey(scanDate2);
+    const offsetMin2 = -d * 1440;
+    manualEvents.filter(e => e.relayId === relayId && e.date === scanKey2).forEach(e => {
+      allEvents.push({ min: e.startMin + offsetMin2, state: true, manual: true, source: e.source });
+      if (e.endMin !== null) allEvents.push({ min: e.endMin + offsetMin2, state: false, manual: true, source: e.source });
+    });
+  }
+  allEvents.sort((a,b) => a.min - b.min);
+  _relayEventsCache[cacheKey] = allEvents;
+  return allEvents;
+}
+
+function getRelayStateAtTime(relayId,date,atMin,modeId){
+  const allEvents = _getRelayEvents(relayId, date, modeId);
+  let state = false;
+  for(const e of allEvents){ if(e.min <= atMin) state = e.state; }
+  return state;
+}
+// קיצור שם ממסר לכותרת ציר הזמן: עד 2 מילים + "..." אם השם ארוך יותר
+function shortRelayName(name){
+  if(!name) return '';
+  const words = name.trim().split(/\s+/);
+  if(words.length <= 2) return name;
+  return words.slice(0,2).join(' ') + '...';
+}
+function toggleMinimalView(){
+  minimalViewMode = !minimalViewMode;
+  const btn = document.getElementById('tl-minimal-toggle-btn');
+  if(btn) btn.style.background = minimalViewMode ? 'var(--accent)' : '';
+  const normalC = document.getElementById('tl-normal-container');
+  const minC = document.getElementById('tl-minimal-container');
+  if(normalC) normalC.style.display = minimalViewMode ? 'none' : '';
+  if(minC) minC.style.display = minimalViewMode ? '' : 'none';
+  // במצב-מינימלי בלבד: משחררים את הקפאת סרגל-הטאבים הראשי של האפליקציה (שהוא sticky קבוע ב-CSS),
+  // כדי שכותרת-שמות-הממסרים תוכל לתפוס בדיוק את אותו מקום (מיד אחרי פס-הזמנים) בלי התנגשות.
+  const tabsEl = document.querySelector('.tabs');
+  if(tabsEl) tabsEl.style.position = minimalViewMode ? 'static' : '';
+  renderTimeline();
+}
+function fmtEpochHM(ms){
+  const p = getIsraelParts(new Date(ms));
+  return `${String(p.hour).padStart(2,'0')}:${String(p.minute).padStart(2,'0')}`;
+}
+// ═══ תצוגה מינימלית — פונקציה נפרדת לגמרי, לא נוגעת בשום קוד/משתנה של התצוגה הרגילה ═══════
+// עקרונות (סוכמו עם המשתמש לפני היישום): קנה-מידה קבוע-אבסולוטי (40px/שעה, מינימום 20px, מקסימום
+// 220px) — חל גם על רווחים-ריקים, לא רק בלוקים אמיתיים. כל תוכנית/מחזור מקבל בלוק+קו-הפרדה משלו,
+// לעולם לא ממוזג עם תוכנית אחרת גם אם רציף. עמודות-ממסר בלי שום פעילות בכל הטווח המוצג — מוסתרות.
+function renderTimelineMinimal(){
+  const dates = getTlDates();
+  let modeSegments = [];
+  try { modeSegments = computeModeSegments(dates[0], dates.length); } catch(e) { modeSegments = []; }
+  const rangeStartMs = dates[0].getTime();
+  const rangeEndMs = dates[dates.length-1].getTime() + 86400000;
+
+  const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
+  relays.forEach(r => relaySegs[r.id] = []);
+
+  // סורקים גם יום אחד *לפני* תחילת-הטווח המוצג — כדי לתפוס תוכניות (למשל מחזוריות-כל-השבוע) שההשפעה
+  // שלהן ממשיכה לתוך היום הראשון המוצג. בלי זה, היום הראשון מציג רק מהרגע שבו תוכנית-שלו-עצמה
+  // מתחילה מחדש, ומפספס את ה"זנב" שממשיך מאתמול (בדיוק הבעיה שנפתרה בתצוגה הרגילה עם carriedOverEnds).
+  const dayBeforeRange = new Date(rangeStartMs - 86400000);
+  [dayBeforeRange, ...dates].forEach(dayDate => {
+    const dayStart = dayDate.getTime();
+    const dayEnd = dayStart + 86400000;
+    const relevantModes = new Set();
+    modeSegments.forEach(seg => { if (seg.startMs < dayEnd && seg.endMs > dayStart) relevantModes.add(seg.modeId); });
+    if (!relevantModes.size) relevantModes.add(activeModeId);
+
+    programs.filter(p => p.active && !p.parentProgId && progAppliesOnDate(p, dayDate)).forEach(p => {
+      const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+      if (!modeIds.some(mid => relevantModes.has(mid))) return;
+      p.relay.forEach(rId => {
+        if (!relaySegs[rId]) return;
+        getRelayEventPairs(p, rId).forEach(seg => {
+          // בלוק-פתוח-ללא-סוף (למשל childConfine:false) — לא מדלגים! מכסים עד סוף-הטווח כברירת-מחדל,
+          // ומסמנים openEnded כדי שהשטחת-החפיפות תעדיף קטע-תחום-ומדויק על פניו כשיש כזה, אבל עדיין
+          // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
+          const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
+          relaySegs[rId].push({
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            isOn: seg.action === 'ON',
+            kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
+            progId: p.id, label: p.name, openEnded: isOpenEnded, priority: !!p.priority
+          });
+        });
+      });
+      const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
+      if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
+        getRelayEventPairs(child, child.relay[0]).forEach(seg => {
+          const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
+          relaySegs[child.relay[0]].push({
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            isOn: seg.action === 'ON',
+            kind: seg.action === 'ON' ? 'on' : 'duration-end',
+            progId: child.id, label: child.name, openEnded: isOpenEnded, priority: !!child.priority
+          });
+        });
+      }
+    });
+    const dateKey = ilDateKey(dayDate);
+    manualEvents.filter(e => e.date === dateKey).forEach(e => {
+      if (!relaySegs[e.relayId] || e.endMin === null || e.endMin === undefined) return;
+      relaySegs[e.relayId].push({
+        startMs: dayStart + e.startMin*60000, endMs: dayStart + e.endMin*60000,
+        isOn: true, kind: 'on', progId: null, label: e.source || 'ידני'
+      });
+    });
+  });
+
+  // משטח קטעים חופפים לתת-קטעים לא-חופפים — קריטי כששתי תוכניות שונות (למשל שתי תוכניות-בת
+  // ממחזורים שונים) חולקות את אותו ממסר וזמניהן חופפים בזמן. בלי זה, מילוי-הפערים בהמשך הנחה
+  // בטעות שקטעים תמיד רצופים-לא-חופפים, וזה בלבל לגמרי את הזמנים המוצגים.
+  function flattenOverlaps(segs){
+    if (segs.length<=1) return segs;
+    const points = new Set();
+    segs.forEach(s => { points.add(s.startMs); points.add(s.endMs); });
+    const sorted = [...points].sort((a,b)=>a-b);
+    const result = [];
+    for (let i=0;i<sorted.length-1;i++){
+      const segStart = sorted[i], segEnd = sorted[i+1];
+      if (segEnd<=segStart) continue;
+      const mid = (segStart+segEnd)/2;
+      const covering = segs.filter(s => s.startMs<=mid && s.endMs>=segEnd);
+      if (!covering.length) continue;
+      // הכרעה בין קטעים-חופפים, תואמת את ההתנהגות **האמיתית** בשרת (checkRelayOwnerBlock נבדקת
+      // רק כש-event.action==='OFF' — הדלקה תמיד מצליחה ללא-תנאי, לעולם לא נחסמת, גם לא ע"י עדיפות!):
+      // 1) מעדיפים קטע תחום-ומדויק (לא openEnded) על פני ניחוש-פתוח.
+      // 2) אם יש קטע-הדלקה (isOn) מכסה — הוא **תמיד מנצח**, בלי קשר לעדיפות של אף אחד.
+      // 3) רק אם כולם כיבוי: עדיפות כן משנה (כיבוי-עם-עדיפות מנצח כיבוי-בלי-עדיפות).
+      // 4) בין הנותרים (אותה רמה): מי שמסתיים מאוחר יותר מנצח.
+      const bounded = covering.filter(s => !s.openEnded);
+      const pool0 = bounded.length ? bounded : covering;
+      const onOnes = pool0.filter(s => s.isOn);
+      const pool = onOnes.length ? onOnes : (() => {
+        const priorityOffs = pool0.filter(s => s.priority);
+        return priorityOffs.length ? priorityOffs : pool0;
+      })();
+      const chosen = pool.reduce((best, s) => (!best || s.endMs > best.endMs) ? s : best, null);
+      result.push({ ...chosen, startMs: segStart, endMs: segEnd });
+    }
+    return result;
+  }
+
+  const activeRelays = [];
+  relays.forEach(r => {
+    let segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
+    if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
+    segs.sort((a,b) => a.startMs - b.startMs);
+    segs = flattenOverlaps(segs);
+    // בודק את המצב-בפועל של הממסר ברגע נתון (כולל לוקבאק/רקע) — אותה פונקציה שהתצוגה הרגילה כבר
+    // משתמשת בה. "פער" (אין תוכנית מפורשת) לא בהכרח כבוי בפועל — למשל אחרי כיבוי-לפי-משך של תוכנית
+    // עם action=OFF, הממסר חוזר לדלוק (המצב-הקודם), גם בלי תוכנית מפורשת שמכסה את זה.
+    const stateAt = ms => {
+      const p = getIsraelParts(new Date(ms));
+      const dayDateForMs = new Date(p.year, p.month-1, p.day, 0,0,0,0);
+      const minOfDay = p.hour*60+p.minute+p.second/60;
+      const effMode = modeAtTime(modeSegments, ms);
+      try { return !!getRelayStateAtTime(r.id, dayDateForMs, minOfDay, effMode); } catch(e) { return false; }
+    };
+    const filled = [];
+    let cursor = rangeStartMs;
+    segs.forEach(s => {
+      const st = Math.max(s.startMs, rangeStartMs), en = Math.min(s.endMs, rangeEndMs);
+      if (st > cursor) filled.push({ startMs: cursor, endMs: st, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
+      // לקטע openEnded (ניחוש-בלבד, מ-childConfine:false וכדומה) מוודאים את isOn מול המצב-האמיתי —
+      // קטע תחום-ומדויק (isEndEvent/off-action רגילים) נשאר מהימן כפי שהוא, בלי לבדוק מחדש.
+      if (en > st) {
+        if (s.openEnded) {
+          // קטע-פתוח (מ-childConfine:false וכדומה) "מנחש" שהוא נשאר באותו מצב עד סוף-הטווח. אם
+          // בדיקת-המצב-האמיתי (stateAt) מגלה שהניחוש שגוי כאן — לא משאירים את זה מיוחס/לחיץ לתוכנית
+          // שהניחוש שלה נכשל; הופכים לפער אנונימי (בלי שם, בלי לחיצה), רק הצבע-הנכון נשאר.
+          const actualIsOn = stateAt((st+en)/2);
+          if (actualIsOn !== s.isOn) {
+            filled.push({ startMs: st, endMs: en, isOn: actualIsOn, kind: 'gap', progId: null, label: '' });
+          } else {
+            filled.push({ ...s, startMs: st, endMs: en });
+          }
+        } else {
+          filled.push({ ...s, startMs: st, endMs: en });
+        }
+      }
+      cursor = Math.max(cursor, en);
+    });
+    if (cursor < rangeEndMs) filled.push({ startMs: cursor, endMs: rangeEndMs, isOn: stateAt(cursor), kind: 'gap', progId: null, label: '' });
+    activeRelays.push({ relay: r, segs: filled });
+  });
+
+  const container = document.getElementById('tl-minimal-container');
+  if (!container) return;
+  if (!activeRelays.length) { container.innerHTML = '<div style="padding:24px;color:var(--muted);text-align:center">אין שום פעילות בטווח המוצג</div>'; return; }
+
+  const pxPerMin = TL_MIN_PX_PER_HOUR/60;
+  const clampPx = durMin => Math.min(TL_MIN_BLOCK_MAX_PX, Math.max(TL_MIN_BLOCK_MIN_PX, durMin*pxPerMin));
+  // מגביל רק למקסימום, בלי רצפת-מינימום — משמש לחישוב "הגובה הטבעי" ולמתיחה, כדי שהיחס בין בלוק-קצר
+  // לבלוק-ארוך יישמר גם אחרי מתיחה (אם קודם נעגל את שניהם לאותו מינימום ורק אז נמתח, הם יישארו זהים).
+  const clampPxNoFloor = durMin => Math.min(TL_MIN_BLOCK_MAX_PX, durMin*pxPerMin);
+  const TL_MIN_DAY_VIEWPORT_PX = 1400; // "מסך וחצי בערך" — תקרת-הגובה המשותפת לכל עמודות אותו יום
+
+  // מפצל קטע לפי גבולות-יום (חיתוך ויזואלי בלבד — אותו kind/isOn/progId/label בשני החלקים),
+  // וקובע לכל חלק לאיזה יום (אינדקס ב-dates) הוא שייך.
+  function splitByDays(segs){
+    const perDay = dates.map(() => []);
+    segs.forEach(s => {
+      let cur = s.startMs;
+      while (cur < s.endMs) {
+        const dIdx = Math.min(dates.length-1, Math.max(0, Math.floor((cur-rangeStartMs)/86400000)));
+        const dayBoundEnd = rangeStartMs + (dIdx+1)*86400000;
+        const pieceEnd = Math.min(s.endMs, dayBoundEnd);
+        perDay[dIdx].push({ ...s, startMs: cur, endMs: pieceEnd });
+        cur = pieceEnd;
+      }
+    });
+    return perDay;
+  }
+  const relayPerDay = activeRelays.map(({relay,segs}) => ({ relay, perDay: splitByDays(segs) }));
+
+  // ═══ דחיסה חכמה מבוססת-נתונים ═══════════════════════════════════════════════════
+  // במקום יחס-ליניארי-אחיד (שמנפח את גובה-היום כי גם 9 שעות "מתות" לגמרי מקבלות אותו יחס
+  // כמו זמן-מחזורים-תכוף) — לכל יום בונים "ציר-זמן-מכווץ" משותף: דקה שבה *שום* ממסר לא עושה
+  // כלום מקבלת דחיסה אגרסיבית; דקה שבה *יש* פעילות (בכל ממסר שהוא) מקבלת קנה-מידה מלא. זה עדיין
+  // ציר-זמן-אחד-משותף לכל העמודות (היישור נשמר), רק שהוא לא-ליניארי במקום ליניארי.
+  const TARGET_MAX_HEIGHT = TL_MIN_DAY_VIEWPORT_PX; // גובה-יעד לכל יום (כ-1.5 מסך)
+  const TEXT_MIN_HEIGHT_PX = 14; // מתחת לזה — קו בלי כיתוב-שעה (רק ריחוף/tooltip)
+  const IGNORE_UNDER_MIN = 7; // קטעים מתחת לזה מתעלמים-מהם בחישוב "הקטע-הקצר-האמיתי" (שאריות-מחזור)
+
+  function buildDayCumMap(daySegsAllRelays){
+    // busy[m] = true אם *איזשהו* קטע-אמיתי (לא פער) מכסה את הדקה הזו, בכל ממסר שהוא
+    const busy = new Array(1440).fill(false);
+    daySegsAllRelays.forEach(segs => segs.forEach(s => {
+      if (s.kind === 'gap') return;
+      const st = Math.max(0, Math.floor((s.startMs - s._dayStart)/60000));
+      const en = Math.min(1440, Math.ceil((s.endMs - s._dayStart)/60000));
+      for (let m = st; m < en; m++) busy[m] = true;
+    }));
+    const busyMin = busy.filter(Boolean).length, quietMin = 1440 - busyMin;
+    // הקטע-הקצר-האמיתי (מתעלמים מחריגים-זעירים) — קובע את היחס הדרוש כדי שלא תהיה חפיפה
+    let shortest = Infinity, shortestIgnoringOutliers = Infinity;
+    daySegsAllRelays.forEach(segs => segs.forEach(s => {
+      if (s.kind === 'gap') return;
+      const dur = (s.endMs-s.startMs)/60000;
+      if (dur > 0 && dur < shortest) shortest = dur;
+      if (dur >= IGNORE_UNDER_MIN && dur < shortestIgnoringOutliers) shortestIgnoringOutliers = dur;
+    }));
+    if (shortestIgnoringOutliers < Infinity) shortest = shortestIgnoringOutliers;
+    const idealBusyRatio = (shortest>0 && shortest<Infinity) ? TL_MIN_BLOCK_MIN_PX/shortest : TL_MIN_PX_PER_HOUR/60;
+    // תקציב: זמן-שקט מקבל יחס-קבוע-זעיר; השאר (התקציב שנשאר) מתחלק על זמן-עסוק. אם גם ה"אידיאלי"
+    // לא מספיק כדי לחרוג מהיעד — פשוט משתמשים בו (אין צורך לדחוס-בכוח יום שממילא לא-עמוס).
+    const QUIET_RATIO = 0.05;
+    const quietBudget = quietMin*QUIET_RATIO;
+    const busyBudget = Math.max(0, TARGET_MAX_HEIGHT - quietBudget);
+    const busyRatio = busyMin>0 ? Math.min(idealBusyRatio, busyBudget/busyMin) : idealBusyRatio;
+    // בונים מיפוי מצטבר: cum[m] = פיקסל מצטבר עד תחילת הדקה m
+    const cum = new Array(1441);
+    cum[0] = 0;
+    for (let m=0; m<1440; m++) cum[m+1] = cum[m] + (busy[m] ? busyRatio : QUIET_RATIO);
+    return { cum, totalHeight: cum[1440], busyRatio };
+  }
+  function mapMinToPx(cum, min){
+    const m0 = Math.floor(min), frac = min-m0;
+    const a = cum[Math.max(0,Math.min(1440,m0))];
+    const b = cum[Math.max(0,Math.min(1440,m0+1))];
+    return a + (b-a)*frac;
+  }
+
+  let html = '<div>';
+  // שורת-כותרות-הממסרים — במיכל-גלילה-אופקית נפרד משלה (overflow-y:hidden, לא visible — נמנעים
+  // מהמגבלה של overflow-x:auto+overflow-y:visible על אותו מיכל, שהדפדפן "מתקן" בשקט ל-auto+auto
+  // ושובר את ה-sticky). דביקה יחסית לדף, מיד אחרי פס-הזמנים (ראו updateStickyOffsets).
+  html += '<div id="tl-min-header-wrap" style="overflow-x:auto;overflow-y:hidden;position:sticky;top:80px;z-index:89;background-color:var(--surface2);border-bottom:2px solid var(--border);box-shadow:0 2px 6px rgba(0,0,0,0.35)" onscroll="document.getElementById(\'tl-min-content-wrap\').scrollLeft=this.scrollLeft">';
+  html += '<div id="tl-min-relay-header" style="display:flex;width:max-content;background-color:var(--surface2)">';
+  relayPerDay.forEach(({relay}) => {
+    html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);padding:6px;text-align:center;font-weight:700;font-size:12px;border-bottom:1px solid var(--border)">${relay.name}</div>`;
+  });
+  html += '</div></div>';
+
+  // מיכל-תוכן נפרד (הימים עצמם) — עם גלילה-אופקית משלו, מסונכרנת עם הכותרת דרך onscroll
+  html += '<div id="tl-min-content-wrap" style="overflow-x:auto" onscroll="document.getElementById(\'tl-min-header-wrap\').scrollLeft=this.scrollLeft"><div style="width:max-content">';
+
+  dates.forEach((dayDate, dIdx) => {
+    const hasAnything = relayPerDay.some(({perDay}) => perDay[dIdx].length);
+    if (!hasAnything) return; // אין שום פעילות בכל העמודות ביום הזה — לא מציגים שורת-יום ריקה
+    // אותה לוגיקת-סגנון בדיוק כמו בתצוגה הרגילה (שבת/חג/צום/פרשה) — שימוש-חוזר, לא כפילות-לוגיקה חדשה
+    const di = dayDate.getDay();
+    const calEntry = getCalEntry(dayDate);
+    const hebDate = calEntry ? fmtHebDate(calEntry['תאריך עברי'], true) : '';
+    const latDate = dayDate.toLocaleDateString('he-IL', {day:'2-digit', month:'2-digit'});
+    const chag = calEntry ? (calEntry['חג/אירוע']||'') : '';
+    const tzom = calEntry ? (calEntry['צום/שבת מיוחדת']||'') : '';
+    const parsha = calEntry ? (calEntry['פרשה']||'') : '';
+    const isShabbat = di === 6;
+    let badgeHtml = '';
+    if (chag) badgeHtml += `<span class="tl-day-badge holiday">${chag}</span> `;
+    else if (tzom) badgeHtml += `<span class="tl-day-badge fast">${tzom}</span> `;
+    else if (isShabbat && parsha) badgeHtml += `<span class="tl-day-badge shabbat">פ' ${parsha}</span>`;
+    const isSpecial = !!(chag||tzom);
+    const hdrClass = (isShabbat||chag) ? 'tl-day-header-shabbat' : isSpecial ? 'tl-day-header-special' : 'tl-day-header-normal';
+    const lblClass = (isShabbat||chag) ? 'tl-day-label-shabbat' : isSpecial ? 'tl-day-label-special' : 'tl-day-label-normal';
+    const subClass = (isShabbat||chag) ? 'tl-day-sub-shabbat' : isSpecial ? 'tl-day-sub-special' : 'tl-day-sub-normal';
+    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap">
+      <span class="${lblClass}">${DAYS_FULL[di]}</span>
+      <span class="${subClass}" style="font-weight:600">${latDate}</span>
+      ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
+      ${badgeHtml}
+    </div>`;
+
+    const dayStartMs = rangeStartMs + dIdx*86400000; // חצות של היום הזה בדיוק
+    // מוסיפים _dayStart לכל קטע (נדרש ע"י buildDayCumMap), ובונים את המיפוי-המצטבר הייעודי ליום הזה
+    const daySegsAllRelays = relayPerDay.map(({perDay}) => {
+      const segs = perDay[dIdx];
+      segs.forEach(s => { s._dayStart = dayStartMs; });
+      return segs;
+    });
+    const { cum, totalHeight } = buildDayCumMap(daySegsAllRelays);
+    const rowH = Math.round(totalHeight);
+    html += '<div style="display:flex">';
+    relayPerDay.forEach(({relay, perDay}) => {
+      const daySegs = perDay[dIdx];
+      // מיקום-מוחלט לפי המיפוי-המצטבר-הייעודי-ליום (לא ליניארי!) — זמן-עסוק מקבל קנה-מידה מלא,
+      // זמן-שקט-לגמרי-בכל-הממסרים מכווץ אגרסיבית. עדיין ציר-זמן-אחד-משותף לכל העמודות (יישור נשמר).
+      html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);height:${rowH}px;position:relative;overflow:visible">`;
+      daySegs.forEach((s, si) => {
+        const startMinOfDay = (s.startMs - dayStartMs)/60000;
+        const endMinOfDay = (s.endMs - dayStartMs)/60000;
+        const topF = mapMinToPx(cum, startMinOfDay), botF = mapMinToPx(cum, endMinOfDay);
+        const top = Math.round(topF);
+        const h = Math.max(3, Math.round(botF-topF)); // מינימום-חזותי זעיר (3px, רק כדי שהקו יהיה קליק-בילי) — לא 20px, כי עכשיו יש "קו-דק" כחלופה לבלוק-עם-כיתוב
+        const startStr = fmtEpochHM(s.startMs);
+        let endStr = fmtEpochHM(s.endMs);
+        if (endStr === '00:00' && s.endMs > s.startMs) endStr = '24:00'; // סוף-היום, לא התחלתו — מונע "00:00–00:00" מבלבל לקטע שנמשך עד חצות
+        const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
+        const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
+        const cursorStyle = clickable ? 'cursor:pointer' : '';
+        const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
+        const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
+        // מתחת לסף-הכיתוב: קו דק בלי טקסט (רק ריחוף/tooltip מראה את הזמן המדויק) — לא נעלם, לא נדחס-בכוח
+        const showText = h >= TEXT_MIN_HEIGHT_PX;
+        const content = showText ? startStr+'–'+endStr : '';
+        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  html += '</div></div>';
+  container.innerHTML = html;
+  setTimeout(updateStickyOffsets, 0);
+}
+function renderTimeline(){
+  if (minimalViewMode) { renderTimelineMinimal(); return; }
+  _relayEventsCache = {}; // reset per-render cache
+  _runOnceDateCache = {}; // reset per-render cache
+  initTlDates();
+  const dates=getTlDates();
+  // מדמה קדימה איזה מצב יהיה פעיל בכל רגע לאורך כל טווח התאריכים המוצג — ראו computeModeSegments.
+  // רשת-ביטחון: אם החישוב נכשל מכל סיבה (נתון לא-צפוי בתזמוני-המצב וכו') — נופלים חזרה להתנהגות
+  // הישנה (מקטע אחד = המצב הנוכחי, לכל הטווח) במקום שציר-הזמן כולו ייעלם/יקרוס בשקט.
+  let modeSegments;
+  try {
+    modeSegments = computeModeSegments(dates[0], dates.length);
+  } catch(e) {
+    console.error('❌ computeModeSegments נכשל:', e);
+    if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב מקטעי-מצב לציר הזמן: ${e.message} — חוזר להצגת המצב הנוכחי בלבד`);
+    modeSegments = [{ startMs: dates[0].getTime(), endMs: dates[0].getTime() + dates.length*86400000, modeId: activeModeId }];
+  }
+  // אבחון-מקטעי-מצב — הושבת אחרי שהשתמשנו בו לאיתור באג ה-3-שעות (ראה סיכום פרויקט).
+  // להפעלה מחדש: הסר את ה-/* */ מסביב לבלוק.
+  /*
+  if (!window._tlSegDiagDone) {
+    window._tlSegDiagDone = true;
+    try {
+      const interesting = modeSegments.filter(s => s.modeId !== activeModeId);
+      const summary = interesting.map(s => `[${new Date(s.startMs).toString()} - ${new Date(s.endMs).toString()} → מצב ${s.modeId}]`).join(' | ');
+      addLog('info', `🕵️ אבחון-מקטעי-מצב (activeModeId=${activeModeId}): ${summary || '(אין מקטעים שונים מהמצב הנוכחי)'}`);
+    } catch(e) { addLog('danger', `❌ שגיאה באבחון-מקטעי-מצב: ${e.message}`); }
+  }
+  */
+  const tbl=document.getElementById('tl-table');
+  let html='<thead><tr><th>זמן / יום</th>';
+  relays.forEach(r=>{
+    const shortName = shortRelayName(r.name);
+    html+=`<th style="padding:3px 2px;font-size:11px" title="${r.name} (ממסר ${r.id})"><span style="display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:76px">${shortName}</span><span style="font-size:10px;color:var(--muted);font-weight:400">${r.id}</span></th>`;
+  });
+  html+='</tr></thead><tbody>';
+  for(const dayDate of dates){
+   try{
+    const di=dayDate.getDay();
+    const daySegmentsForThisDay = modeSegments.filter(seg => seg.startMs < dayDate.getTime()+1440*60000 && seg.endMs > dayDate.getTime());
+    const blocks=getTimeBlocksForDate(dayDate, daySegmentsForThisDay);
+    const calEntry=getCalEntry(dayDate);
+    const hebDate=calEntry?fmtHebDate(calEntry['תאריך עברי'],true):'';
+    const latDate=dayDate.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'});
+    const chag=calEntry?(calEntry['חג/אירוע']||''):'';
+    const tzom=calEntry?(calEntry['צום/שבת מיוחדת']||''):'';
+    const parsha=calEntry?(calEntry['פרשה']||''):'';
+    const isShabbat=di===6;
+    let badgeHtml='';
+    if(chag)badgeHtml+=`<span class="tl-day-badge holiday">${chag}</span> `;
+    else if(tzom)badgeHtml+=`<span class="tl-day-badge fast">${tzom}</span> `;
+    else if(isShabbat&&parsha)badgeHtml+=`<span class="tl-day-badge shabbat">פ' ${parsha}</span>`;
+    const isSpecial = !!(chag||tzom);
+    const hdrClass = (isShabbat||chag) ? 'tl-day-header-shabbat' : isSpecial ? 'tl-day-header-special' : 'tl-day-header-normal';
+    const lblClass = (isShabbat||chag) ? 'tl-day-label-shabbat' : isSpecial ? 'tl-day-label-special' : 'tl-day-label-normal';
+    const subClass = (isShabbat||chag) ? 'tl-day-sub-shabbat' : isSpecial ? 'tl-day-sub-special' : 'tl-day-sub-normal';
+    const dayLabelHtml = `<span class="${lblClass}">${DAYS_FULL[di]}</span>
+        <span class="${subClass}" style="font-weight:600">${latDate}</span>
+        ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
+        ${badgeHtml}`;
+    let hdrCells = `<td style="padding:0;position:sticky;right:0;z-index:6">
+      <div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap">
+        ${dayLabelHtml}
+      </div></td>`;
+    relays.forEach(()=>{
+      hdrCells+=`<td style="padding:0"><div class="${hdrClass}" style="height:100%;min-height:28px"></div></td>`;
+    });
+    html+=`<tr class="tl-day-row">${hdrCells}</tr>`;
+    blocks.forEach(b=>{
+      html+='<tr>';
+      // המצב האפקטיבי (מדומה) שיהיה פעיל בפועל בזמן הבלוק הזה — לא בהכרח המצב הנוכחי!
+      const blockEffMode = modeAtTime(modeSegments, dayDate.getTime()+b.startMin*60000);
+      const modeChanged = blockEffMode !== 0; // השוואה מול נקודת-הייחוס הקבועה (מצב 0), לא activeModeId
+      // אבחון-בלוק — הושבת אחרי שאיתר את שורש באג ה-3-שעות (initTlDates/getTlDates, ראה סיכום פרויקט).
+      // להפעלה מחדש: הסר את ה-/* */ מסביב לבלוק.
+      /*
+      if (modeChanged && !window._tlBlockDiagDone) {
+        window._tlBlockDiagDone = true;
+        try {
+          const relevantSegs = modeSegments.filter(s => s.modeId === blockEffMode);
+          addLog('info', `🕵️ אבחון-בלוק: dayDate="${dayDate.toString()}" (getTime=${dayDate.getTime()}) | b.startMin=${b.startMin} | blockEffMode=${blockEffMode} | dayDate+startMin="${new Date(dayDate.getTime()+b.startMin*60000).toString()}" | מקטעים-תואמים=${relevantSegs.map(s=>`[${new Date(s.startMs).toString()} - ${new Date(s.endMs).toString()}]`).join(', ')}`);
+        } catch(e) { addLog('danger', `❌ שגיאה באבחון-בלוק: ${e.message}`); }
+      }
+      */
+      const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
+      const modeTagHtml = modeChanged ? `<div style="font-size:12px;color:#facc15;font-weight:800;margin-top:2px;letter-spacing:0.2px">🔀 ${modeName}</div>` : '';
+      // רקע צהוב-בהיר — רק על תא-העמודה-הימנית (השעה) של בלוק ששייך למצב אחר, לא על כל השורה
+      const modeTdStyle = modeChanged ? 'background:rgba(250,204,21,0.14);' : '';
+      if(!b.hasEvents||b.empty){
+        const lbl=b.empty?'כל היום':`${fmtMin(b.startMin)} – ${fmtMin(b.endMin)}`;
+        html+=`<td style="${modeTdStyle}"><div class="tl-time-label" style="opacity:0.5;font-size: 11px">${lbl}</div>${modeTagHtml}</td>`;
+        relays.forEach(r=>{
+          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
+          const bg=isOn?'background:rgba(52,211,153,0.07);':'';
+          html+=`<td style="background:${isOn?'rgba(34,197,94,0.30)':'#2a3142'};${bg}"><div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.6)':'rgba(148,163,184,0.4)'}">${isOn?'●':'·'}</div></td>`;
+        });
+      } else {
+        html+=`<td style="${modeTdStyle}"><div class="tl-time-label">${fmtMin(b.startMin)}<div class="tl-time-sub">– ${fmtMin(b.endMin)}</div></div>${modeTagHtml}</td>`;
+        relays.forEach(r=>{
+          // Collect fire/end events for this relay in this block — מחזורים = כמה זוגות לתוכנית אחת
+          const fireEvents=[];
+          const endEvents=[];
+          // תוכניות רגילות
+          programs.forEach(p=>{
+            // ציר-הזמן מציג את התוכניות ששייכות ל*מצב שיהיה פעיל בפועל בזמן הזה* (blockEffMode) —
+            // מדומה מראש לפי תזמוני-המצב הקיימים — לא בהכרח למצב הנוכחי הגלובלי.
+            const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+            if(!p.active||!modeIds.includes(blockEffMode)||!progAppliesOnDate(p,dayDate)||!p.relay.includes(r.id))return;
+            // הגנה נוספת: תוכנית-בת לא רלוונטית אם ההורה שלה לא פעיל (גם אם הבת עצמה עדיין מסומנת active
+            // ממצב ישן/לא-עקבי) — בלי הורה פעיל אין הפסקות שממנן נגזרים זמני הבת.
+            if(p.parentProgId){
+              const parent=programs.find(x=>x.id===p.parentProgId);
+              if(!parent||!parent.active) return;
+            }
+            getRelayEventPairs(p,r.id).forEach(seg=>{
+              if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
+                fireEvents.push({p, seg});
+              }
+              if(seg.endMin!==null&&Math.ceil(seg.endMin)>=b.startMin&&Math.ceil(seg.endMin)<b.endMin){
+                endEvents.push({p, seg});
+              }
+            });
+          });
+          // תוכניות שחוצות-מאתמול (למשל 23:45+7שע=06:45 למחר) — הקצה-שלהן מוצג כאן, בבלוק הנכון,
+          // גם שהתוכנית עצמה "שייכת" רשמית לאתמול ולא ל-progAppliesOnDate(p,dayDate) של היום הזה.
+          (blocks.carriedOverEnds||[]).forEach(cp=>{
+            if(cp.rId!==r.id) return;
+            const em=Math.ceil(cp.endMin);
+            if(em>=b.startMin && em<b.endMin) endEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null, action:cp.segAction, _carriedOver:true}});
+          });
+          // תוכניות runOnce שפעלו היום — הצג בצבע מיוחד
+          const todayStr = dayDate.toDateString();
+          if(todayStr === new Date().toDateString()){
+            Object.values(_firedRunOnceToday).forEach(p=>{
+              if(!p.relay.includes(r.id)) return;
+              getRelayEventPairs(p,r.id).forEach(seg=>{
+                if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
+                  fireEvents.push({p:{...p,_firedDone:true}, seg});
+                }
+              });
+            });
+          }
+          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
+          const bgStyle=isOn
+            ?'background:rgba(34,197,94,0.35);border-right:4px solid rgba(34,197,94,0.75);'
+            :'background:#2a3142;';
+          html+=`<td style="${bgStyle}"><div class="tl-cell-inner">`;
+          if(fireEvents.length===0&&endEvents.length===0){
+            html+=`<div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.8)':'rgba(148,163,184,0.35)'}">${isOn?'━━ דולק':'·'}</div>`;
+          }
+          // הצג אירועים ידניים לאותו בלוק
+          const dayDateKey = ilDateKey(dayDate);
+          manualEvents.filter(e => e.relayId===r.id && e.date===dayDateKey &&
+            e.startMin>=b.startMin && e.startMin<b.endMin).forEach(e=>{
+            const timeStr=fmtMin(e.startMin);
+            const endStr=e.endMin?fmtMin(e.endMin):'פתוח';
+            const isTimer=e.source&&e.source.includes('טיימר');
+            html+=`<div class="tl-prog-block t-manual" title="${e.source} · ${timeStr}${e.endMin?' – '+endStr:''}">
+              <span class="pb-num">${isTimer?'⏱':'👆'}</span>${e.source}
+            </div>`;
+          });
+          fireEvents.forEach(({p,seg})=>{
+            const fireMin=seg.fireMin;
+            // segType:'single' תמיד מוצג כבלוק רגיל עם משך משלו — גם אם יש לו cycleIdx (זה קורה בקטע ה"שארית"
+            // האחרון של תוכנית-מחזור, שצריך סימון-סיום נפרד משלו, בניגוד לזוגות on/off רגילים של מחזור)
+            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
+            const isChildSeg = seg.segType==='child';
+            const tc = p._firedDone ? 't-fired'
+              : (isCycleSeg||isChildSeg)
+              ? (seg.action==='ON'?'t-on':'t-off')
+              : (p.runOnce?'t-once':p.type==='zman'?'t-zman':p.action==='ON'?'t-on':'t-off');
+            const delayNote=(p.delay&&p.relay.indexOf(r.id)>0)?` +${Math.round(p.relay.indexOf(r.id)*p.delay)}שנ'`:'';
+            const durNote=(!isCycleSeg&&!isChildSeg&&p.durationOn&&(p.durationH||p.durationM))?` ⏱${p.durationH?p.durationH+'ש':''}${p.durationM?p.durationM+'ד':''}`:'';
+            const timeStr=fmtMin(Math.floor(fireMin))+(fireMin%1>0?`+${Math.round((fireMin%1)*60)}שנ'`:'');
+            const endStr=seg.endMin!==null?` – ${fmtMin(Math.floor(seg.endMin))}`:'';
+            const cycleNote=isCycleSeg?` · מחזור #${seg.cycleIdx+1} (${seg.segType==='on'?'פעולה':'הפסקה'})`:'';
+            const childNote=isChildSeg?` · תוכנית-בת (מחזור הפסקה ${seg.cycleIdx+1})`:'';
+            const cycleLabel=isCycleSeg
+              ?(seg.segType==='on'?`${seg.action==='ON'?'הדלקה':'כיבוי'} (מחזור ${seg.cycleIdx+1})`:`הפסקה (מחזור ${seg.cycleIdx+1})`)
+              :isChildSeg?`↳ ${p.name}`:p.name;
+            const tooltipTxt=`${p.name} · ${seg.action==='ON'?'הדלקה':'כיבוי'}: ${timeStr}${endStr}${delayNote}${durNote}${cycleNote}${childNote}${p.runOnce?' · חד פעמי — תרוץ פעם אחת ותתבטל':''}`;
+            html+=`<div class="tl-prog-block ${tc}" onclick="openAddProgram(${p.parentProgId||p.id});showTab('programs',null)" title="${p._firedDone?'✓ פעל היום — '+tooltipTxt:tooltipTxt}">
+              <span class="pb-num">${p._firedDone?'✓':'#'+p.seqId}</span>
+              <span style="font-size:10px;opacity:0.85">${timeStr}</span>
+            </div>`;
+          });
+          endEvents.forEach(({p,seg})=>{
+            const endMin=seg.endMin;
+            const isCycleSeg = seg.cycleIdx!==undefined && seg.segType!=='child' && seg.segType!=='single';
+            const isChildSeg = seg.segType==='child';
+            if(isCycleSeg) return; // מחזורים רגילים (on/off) כבר מוצגים כזוג-שלם דרך fireEvents — לא צריך גם צ'יפ-סיום
+            // seg.action (אם קיים) הוא הפעולה הספציפית של *הקטע הזה* — מדויק יותר מ-p.action (הפעולה
+            // הכללית של התוכנית), שלא נכון לקטעי-מחזור/קטעים-חוצי-חצות (שם "הפוך מ-seg.action" הוא
+            // הדבר הנכון, לא "הפוך מ-p.action" שנשאר קבוע לאורך כל התוכנית). זו הייתה הסיבה לתווית
+            // "כיבוי אוטו'" שגויה על סיום-הפסקת-מחזור שחוצה חצות (שאמורה להיות "הדלקה אוטו'").
+            const baseAction = seg.action || p.action;
+            const reverseAction=baseAction==='ON'?'כיבוי':'הדלקה';
+            const timeStr=fmtMin(Math.floor(endMin));
+            const suppressedBy = (reverseAction==='כיבוי') ? isEndEventSuppressed(p, seg, r.id, dayDate, blockEffMode) : null;
+            if (suppressedBy) {
+              const shortOwnerName = shortRelayName(suppressedBy.name); // קיצור ל-2 מילים, כמו בכותרות הממסרים
+              html+=`<div class="tl-prog-block" style="opacity:0.85;border:1px dashed rgba(250,204,21,0.7);background:rgba(250,204,21,0.08)" onclick="openAddProgram(${p.id});showTab('programs',null)" title="כיבוי אוטומטי ב-${timeStr} בוטל — הממסר בשליטת '${suppressedBy.name}' (${suppressedBy.priority?'עדיפות':'מסתיים מאוחר יותר'})">
+                <span class="pb-num">⛔</span>בוטל — ${shortOwnerName}
+              </div>`;
+            } else if (seg._carriedOver || isChildSeg) {
+              // תוכנית-בת (בכל מקרה) וגם קטע-מחזור שחוצה-חצות — אותו פורמט בדיוק כמו צ'יפ-רגיל
+              // (fireEvents), לא "סיום למשך": זה בפועל אותו סוג-מעבר (המשך-פעולה), רק בכיוון הפוך.
+              // עקביות מלאה עם התצוגה הרגילה — כל תוכנית עם מעבר-מצב מקבלת סימון, גם תוכנית-בת.
+              const revClass = reverseAction==='הדלקה' ? 't-on' : 't-off';
+              const noteTxt = seg._carriedOver ? ' · המשך ממחזור מאתמול' : '';
+              html+=`<div class="tl-prog-block ${revClass}" onclick="openAddProgram(${p.parentProgId||p.id});showTab('programs',null)" title="${p.name} · ${reverseAction}: ${timeStr}${noteTxt}">
+                <span class="pb-num">#${p.seqId}</span>
+                <span style="font-size:10px;opacity:0.85">${timeStr}</span>
+              </div>`;
+            } else {
+              const isTurningOn = reverseAction==='הדלקה';
+              const revClass = isTurningOn ? 't-on' : 't-off';
+              const revBorder = isTurningOn ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.5)';
+              html+=`<div class="tl-prog-block ${revClass}" style="opacity:0.7;border:1px dashed ${revBorder}" onclick="openAddProgram(${p.id});showTab('programs',null)" title="סיום למשך — ${reverseAction} אוטומטי ב-${timeStr}">
+                <span class="pb-num">⏱</span>${reverseAction} אוטו' (${timeStr})
+              </div>`;
+            }
+          });
+          html+=`</div></td>`;
+        });
+      }
+      html+='</tr>';
+    });
+   } catch(e) {
+     console.error(`❌ renderTimeline נכשל ליום ${dayDate.toDateString()}:`, e);
+     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בהצגת ציר-הזמן ליום ${dayDate.toLocaleDateString('he-IL')}: ${e.message}`);
+     html += `<tr><td colspan="${relays.length+1}" style="color:#ef4444;padding:8px">⚠️ שגיאה בהצגת היום הזה — ראה יומן</td></tr>`;
+   }
+  }
+  html+='</tbody>';
+  tbl.innerHTML=html;
+}
+
+// ── SCHEDULER ────────────────────────────────────────────
+const _firedToday = new Set();
+
+function schedulerTick(){
+  // כשיש חיבור לשרת — השרת הוא המתזמן הבלעדי (כל 5 שניות, עמיד-restart, עם כל לוגיקת
+  // העדיפות/ack/duration המלאה). הרצת תזמון עצמאי גם בדפדפן במקביל לא מוסיפה שום דבר ורק
+  // יוצרת אש כפול בלי תיאום בין השניים (זה המקור, בין השאר, לשורות "תוכנית #X" ביומן
+  // ולעיכובי-תזמון לא עקביים — ראה שיחה). תזמון עצמאי רץ רק כגיבוי-חלקי כשאין חיבור;
+  // לתשומת לב: גם אז sendRelay לא יכול לשלוח בפועל בלי חיבור, כך שזה בעיקר תיעוד מקומי
+  // (UI/יומן), לא שליטה אמיתית בממסר — שליטה אמיתית בממסר תמיד עוברת דרך השרת.
+  if (socket && socket.connected) return;
+  const now = new Date();
+  const _p4 = getIsraelParts(now);
+  const nowIL = new Date(_p4.year, _p4.month-1, _p4.day, _p4.hour, _p4.minute, _p4.second);
+  const nowMin = _p4.hour*60 + _p4.minute + _p4.second/60;
+  const todayKey = nowIL.toDateString();
+  const dow = nowIL.getDay();
+  const WINDOW_MIN = 35/60; // חלון סבילות של 35 שניות (מעט יותר מה-tick של 30 שניות)
+
+  programs.forEach(p=>{
+    if(!p.active || !isProgEffective(p)) return;
+    if(p.parentProgId) return; // תוכניות-בת מטופלות דרך ההורה בשרת
+    if(!p.days.includes(dow)) return;
+
+    // בדוק כל ממסר בנפרד — כל אחד יכול לקבל fireMin שונה (stagger)
+    p.relay.forEach((relayId, idx)=>{
+      const actualFireMin = getRelayFireMin(p, relayId); // delay בשניות × idx, ממוין לדקות
+      const fireKey = `${p.id}_${relayId}_${todayKey}`;
+      if(_firedToday.has(fireKey)) return;
+      if(nowMin < actualFireMin || nowMin > actualFireMin + WINDOW_MIN) return;
+      _firedToday.add(fireKey);
+
+      // בדיקת חסימת התנגשות — תיקון 1
+      const blockedBy = isBlockedByPriorityClient(p, actualFireMin);
+      if(blockedBy){
+        addLog('warning', `[תזמון] תוכנית #${p.seqId} "${p.name}" ממסר ${relayId} נחסמה — "${blockedBy}" פעילה עם עדיפות`);
+        return;
+      }
+
+      sendRelay(relayId, p.action==='ON');
+      addLog('info', `[תזמון] תוכנית #${p.seqId} "${p.name}" — ממסר ${relayId} ${p.action}`);
+      // duration OFF מטופל בשרת בלבד — תיקון 6
+    });
+
+    // חד פעמי — בטל את התוכנית אחרי שכל הממסרים הופעלו
+    // בדוק שכל הממסרים כבר נורו היום
+    if(p.runOnce){
+      const allFired = p.relay.every(rId => _firedToday.has(`${p.id}_${rId}_${todayKey}`));
+      if(allFired && !_firedToday.has(`${p.id}_runonce_${todayKey}`)){
+        _firedToday.add(`${p.id}_runonce_${todayKey}`);
+        markRunOnceFired(p);
+        p.active = false;
+        addLog('info', `[חד פעמי] תוכנית #${p.seqId} "${p.name}" בוטלה אוטומטית אחרי הפעלה`);
+        renderPrograms();renderRelays();
+        if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+        saveLS();
+        syncProgramsToServer();
+      }
+    }
+  });
+  _firedToday.forEach(k=>{ if(!k.endsWith(todayKey)) _firedToday.delete(k); });
+}
+setInterval(schedulerTick, 30000);
+schedulerTick();
+
+// ── USERS ──────────────────────────────────────────────────
+// רשימת משתמשים ציבורית (מגיעה מהשרת, ללא סיסמאות)
+let serverUsers = [];
+
+function renderUsers(){
+  const l=document.getElementById('user-list');
+  const isAdmin = currentUser?.role === 'admin';
+  if (!serverUsers.length) {
+    l.innerHTML='<div style="color:var(--muted);padding:16px">טוען משתמשים מהשרת...</div>';
+    return;
+  }
+  l.innerHTML=serverUsers.map((u,idx)=>`<div class="user-card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="user-avatar">${u.initials||u.name.substring(0,2)}</div>
+        <div>
+          <div class="user-name">${u.name}</div>
+          <div style="font-size: 13px;color:var(--muted)">${u.role==='admin'?'מנהל':'משתמש'}${u.allowedHours?' | '+u.allowedHours.from+':00\u2013'+u.allowedHours.to+':00':''}</div>
+        </div>
+      </div>
+      ${isAdmin?`<button onclick="editUser(${idx})" style="background:var(--surface3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;cursor:pointer;font-size: 14px">עריכה</button>`:''}
+    </div>
+    <div class="perm-chips" style="margin-top:8px">${relays.map(r=>`<span class="perm-chip ${u.relays.includes(r.id)?'granted':'denied'}">${r.name}</span>`).join('')}</div>
+    <div class="perm-chips" style="margin-top:4px">
+      ${u.canAddPrograms?'<span class="perm-chip granted">הוסף תוכנית</span>':'<span class="perm-chip denied">הוסף תוכנית</span>'}
+      ${u.canEditPrograms?'<span class="perm-chip granted">עריכה</span>':'<span class="perm-chip denied">עריכה</span>'}
+      ${u.canChangeMode?'<span class="perm-chip granted">החלף מצב</span>':'<span class="perm-chip denied">החלף מצב</span>'}
+      ${u.canViewLog?'<span class="perm-chip granted">יומן</span>':'<span class="perm-chip denied">יומן</span>'}
+      ${u.canViewIvr?'<span class="perm-chip granted">IVR</span>':'<span class="perm-chip denied">IVR</span>'}
+      ${u.canViewHaDevices?'<span class="perm-chip granted">הגדרות התקנים</span>':'<span class="perm-chip denied">הגדרות התקנים</span>'}
+      ${u.maxOnMinutes?`<span class="perm-chip denied">מקס\u2019 ${u.maxOnMinutes} דק'</span>`:''}
+    </div>
+  </div>`).join('')
+  + (isAdmin?'<div class="mode-add-card" onclick="editUser(-1)">+ הוסף משתמש</div>':'');
+}
+
+function editUser(idx) {
+  const u = idx >= 0 ? {...serverUsers[idx]} : {
+    name:'', initials:'', password:'', role:'user',
+    relays:[], canEditPrograms:false, canAddPrograms:false,
+    canDeletePrograms:false, canChangeMode:false, canViewLog:false,
+    maxOnMinutes:null, allowedHours:null
+  };
+  const overlay = document.createElement('div');
+  overlay.id = 'user-edit-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(8,12,20,0.92);z-index:8000;display:flex;align-items:center;justify-content:center';
+  const relayChecks = relays.map(r=>`<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="eu-relay-${r.id}" ${u.relays.includes(r.id)?'checked':''}><span style="font-size: 15px">${r.name}</span></label>`).join('');
+  const permChecks = [
+    ['eu-canAdd','canAddPrograms','הוסף תוכנית'],
+    ['eu-canEdit','canEditPrograms','עריכת תוכנית'],
+    ['eu-canDelete','canDeletePrograms','מחיקת תוכנית'],
+    ['eu-canMode','canChangeMode','החלף מצב'],
+    ['eu-canLog','canViewLog','צפייה ביומן'],
+    ['eu-canIvr','canViewIvr','כרטיסיית IVR'],
+    ['eu-canHaDevices','canViewHaDevices','הגדרות התקנים'],
+  ].map(([id,key,label])=>`<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="${id}" ${u[key]?'checked':''}><span style="font-size: 15px">${label}</span></label>`).join('');
+  overlay.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:400px;max-height:95vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;scrollbar-width:thin">
+    <div style="font-size: 18px;font-weight:700">${idx<0?'הוסף משתמש':'עריכת משתמש'}</div>
+    <input id="eu-name" placeholder="שם" value="${u.name}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+    <input id="eu-initials" placeholder="ראשי תיבות" value="${u.initials||''}" maxlength="2" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+    <input id="eu-password" placeholder="סיסמה" type="password" value="${u.password||''}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit;direction:ltr">
+    <select id="eu-role" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+      <option value="user" ${u.role!=='admin'?'selected':''}>משתמש</option>
+      <option value="admin" ${u.role==='admin'?'selected':''}>מנהל</option>
+    </select>
+    <div style="font-size: 15px;font-weight:600">ממסרים מותרים:</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">${relayChecks}</div>
+    <div style="font-size: 15px;font-weight:600">הרשאות:</div>
+    ${permChecks}
+    <div style="font-size: 15px;font-weight:600">שעות פעילות (ריק = ללא הגבלה):</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="eu-from" type="number" min="0" max="23" placeholder="מ" value="${u.allowedHours?.from??''}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;width:60px;font-family:inherit">
+      <span>עד</span>
+      <input id="eu-to" type="number" min="0" max="23" placeholder="עד" value="${u.allowedHours?.to??''}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;width:60px;font-family:inherit">
+    </div>
+    <div style="font-size: 15px;font-weight:600">מקסימום דקות הפעלה (ריק = ללא הגבלה):</div>
+    <input id="eu-maxmin" type="number" min="1" placeholder="דקות" value="${u.maxOnMinutes??''}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="saveUser(${idx})" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer;font-family:inherit">שמור</button>
+      ${idx>=0?`<button onclick="deleteUser(${idx})" style="background:#7f1d1d;color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-family:inherit">מחק</button>`:''}
+      <button onclick="document.getElementById('user-edit-overlay').remove()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;font-family:inherit">ביטול</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function saveUser(idx) {
+  const name = document.getElementById('eu-name').value.trim();
+  const password = document.getElementById('eu-password').value;
+  if (!name || !password) { toast('נא למלא שם וסיסמה'); return; }
+  const user = {
+    name, password,
+    initials: document.getElementById('eu-initials').value.trim() || name.substring(0,2),
+    role: document.getElementById('eu-role').value,
+    relays: relays.filter(r=>document.getElementById('eu-relay-'+r.id)?.checked).map(r=>r.id),
+    canAddPrograms: document.getElementById('eu-canAdd').checked,
+    canEditPrograms: document.getElementById('eu-canEdit').checked,
+    canDeletePrograms: document.getElementById('eu-canDelete').checked,
+    canChangeMode: document.getElementById('eu-canMode').checked,
+    canViewLog: document.getElementById('eu-canLog').checked,
+    canViewIvr: document.getElementById('eu-canIvr').checked,
+    canViewHaDevices: document.getElementById('eu-canHaDevices').checked,
+    maxOnMinutes: document.getElementById('eu-maxmin').value ? parseInt(document.getElementById('eu-maxmin').value) : null,
+    allowedHours: document.getElementById('eu-from').value && document.getElementById('eu-to').value
+      ? { from: parseInt(document.getElementById('eu-from').value), to: parseInt(document.getElementById('eu-to').value) }
+      : null,
+  };
+  const updated = [...serverUsers];
+  if (idx < 0) updated.push(user);
+  else updated[idx] = user;
+  serverUsers = updated;
+  socket.emit('save_users', serverUsers);
+  document.getElementById('user-edit-overlay')?.remove();
+  renderUsers();
+  toast('המשתמש נשמר \u2705');
+}
+
+function deleteUser(idx) {
+  if (!confirm('למחוק את "'+serverUsers[idx].name+'"?')) return;
+  serverUsers.splice(idx,1);
+  socket.emit('save_users', serverUsers);
+  document.getElementById('user-edit-overlay')?.remove();
+  renderUsers();
+  toast('המשתמש נמחק');
+}
+
+// ── IVR (ימות המשיח) ─────────────────────────────────────────
+// מבנה דו-שכבתי: ivrUsers הוא הרשימה המאוחדת שמגיעה מהשרת
+// (YEMOT_PHONE_MAP הפרטי ב-Railway + YEMOT_PERMISSIONS הציבורי ב-GitHub)
+let ivrUsers = [];
+
+function renderIvrUsers(){
+  const l = document.getElementById('ivr-user-list');
+  if(!l) return;
+  const q = (document.getElementById('ivr-search-input')?.value || '').trim().toLowerCase();
+  const qDigits = q.replace(/\D/g,'');
+  const filtered = !q ? ivrUsers : ivrUsers.filter(u =>
+    u.name.toLowerCase().includes(q) || (qDigits && u.phone.replace(/\D/g,'').includes(qDigits))
+  );
+  if(!ivrUsers.length){
+    l.innerHTML = '<div style="color:var(--muted);padding:16px">אין עדיין מתקשרים מוגדרים</div>';
+    return;
+  }
+  if(!filtered.length){
+    l.innerHTML = '<div style="color:var(--muted);padding:16px">לא נמצאו מתקשרים התואמים לחיפוש</div>';
+    return;
+  }
+  l.innerHTML = filtered.map((u)=>{
+    const idx = ivrUsers.indexOf(u);
+    return `<div class="user-card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="user-avatar">${(u.name||'?').substring(0,2)}</div>
+        <div>
+          <div class="user-name">${u.name} <span style="font-size: 12px;color:var(--muted);font-weight:400">(ID ${u.id})</span></div>
+          <div style="font-size: 13px;color:var(--muted);direction:ltr;text-align:right">${u.phone}</div>
+        </div>
+      </div>
+      <button onclick="editIvrUser(${idx})" style="background:var(--surface3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;cursor:pointer;font-size: 14px">עריכה</button>
+    </div>
+    <div class="perm-chips" style="margin-top:8px">
+      ${u.isAdmin
+        ? `<span class="perm-chip granted">🔑 אדמין — גישה מלאה</span>`
+        : relays.map(r=>`<span class="perm-chip ${u.allowedRelays.includes(r.id)?'granted':'denied'}">${r.name}</span>`).join('')}
+    </div>
+    ${!u.isAdmin?`<div class="perm-chips" style="margin-top:4px">
+      <span class="perm-chip ${u.allowedActions.includes('ON')?'granted':'denied'}">הדלקה${u.allowedActions.includes('ON')?(u.maxDurationMinOn?` (מקס\u2019 ${u.maxDurationMinOn} דק')`:' (ללא תקרת זמן)'):''}</span>
+      <span class="perm-chip ${u.allowedActions.includes('OFF')?'granted':'denied'}">כיבוי${u.allowedActions.includes('OFF')?(u.maxDurationMinOff?` (מקס\u2019 ${u.maxDurationMinOff} דק')`:' (ללא תקרת זמן)'):''}</span>
+    </div>`:''}
+  </div>`;
+  }).join('');
+  renderIvrCallLog();
+}
+
+// יומן שיחות IVR — מציג מתוך logEntries הכלליים רק רשומות שמקורן בשלוחת ימות
+// (השרת מתייג user:'IVR (ID x)' בכל קריאה ל-/yemot — ראה addServerLog ב-index.js)
+function renderIvrCallLog(){
+  const box = document.getElementById('ivr-call-log');
+  if(!box) return;
+  const entries = logEntries.filter(e => e.user && e.user.startsWith('IVR')).slice(0,30);
+  if(!entries.length){
+    box.innerHTML = '<span style="color:var(--muted)">אין עדיין שיחות מתועדות</span>';
+    return;
+  }
+  box.innerHTML = entries.map(e=>`<div style="padding:4px 0;border-bottom:1px solid var(--border)">
+      <span style="color:var(--muted)">${e.date} ${e.time}</span> — <span style="font-weight:600">${e.user}</span> — ${e.msg}
+    </div>`).join('');
+}
+
+function editIvrUser(idx){
+  const u = idx >= 0 ? {...ivrUsers[idx], allowedRelays:[...ivrUsers[idx].allowedRelays], allowedActions:[...ivrUsers[idx].allowedActions]} : {
+    id: ivrUsers.length ? Math.max(...ivrUsers.map(x=>x.id))+1 : 1,
+    name:'', phone:'', isAdmin:false, allowedRelays:[], allowedActions:['ON','OFF'], maxDurationMinOn:0, maxDurationMinOff:0
+  };
+  const overlay = document.createElement('div');
+  overlay.id = 'ivr-edit-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(8,12,20,0.92);z-index:8000;display:flex;align-items:center;justify-content:center';
+  const relayChecks = relays.map(r=>`<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="eiv-relay-${r.id}" ${u.allowedRelays.includes(r.id)?'checked':''}><span style="font-size: 15px">${r.name}</span></label>`).join('');
+  overlay.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:380px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+    <div style="font-size: 18px;font-weight:700">${idx<0?'הוסף מתקשר':'עריכת מתקשר'}</div>
+    <div style="font-size: 12px;color:var(--muted)">ID ${u.id} — מספר זה נשמר רק כאן וב-Railway (פרטי), לעולם לא ב-Git</div>
+    <input id="eiv-name" placeholder="שם תצוגה" value="${u.name}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+    <input id="eiv-phone" placeholder="מספר טלפון" value="${u.phone}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit;direction:ltr">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="eiv-admin" ${u.isAdmin?'checked':''} onchange="document.getElementById('eiv-nonadmin-block').style.display=this.checked?'none':'flex'">
+      <span style="font-size: 15px;font-weight:600">🔑 אדמין (גישה מלאה לכל הממסרים, ללא תקרת זמן)</span>
+    </label>
+    <div id="eiv-nonadmin-block" style="display:${u.isAdmin?'none':'flex'};flex-direction:column;gap:10px">
+      <div style="font-size: 15px;font-weight:600">ממסרים מותרים:</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${relayChecks}</div>
+      <div style="font-size: 15px;font-weight:600">פעולות מותרות:</div>
+      <div style="display:flex;gap:14px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="eiv-act-on" ${u.allowedActions.includes('ON')?'checked':''}><span>הדלקה</span></label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="eiv-act-off" ${u.allowedActions.includes('OFF')?'checked':''}><span>כיבוי</span></label>
+      </div>
+      <div style="font-size: 15px;font-weight:600">תקרת זמן להדלקה (דקות, 0 = ללא הגבלה — גם קבוע מותר):</div>
+      <input id="eiv-maxmin-on" type="number" min="0" placeholder="0" value="${u.maxDurationMinOn??0}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+      <div style="font-size: 15px;font-weight:600">תקרת זמן לכיבוי (דקות, 0 = ללא הגבלה — גם קבוע מותר):</div>
+      <input id="eiv-maxmin-off" type="number" min="0" placeholder="0" value="${u.maxDurationMinOff??0}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="saveIvrUser(${idx})" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer;font-family:inherit">שמור</button>
+      ${idx>=0?`<button onclick="deleteIvrUser(${idx})" style="background:#7f1d1d;color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-family:inherit">מחק</button>`:''}
+      <button onclick="document.getElementById('ivr-edit-overlay').remove()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;font-family:inherit">ביטול</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function saveIvrUser(idx){
+  const name = document.getElementById('eiv-name').value.trim();
+  const phone = document.getElementById('eiv-phone').value.trim();
+  if(!name || !phone){ toast('נא למלא שם וטלפון'); return; }
+  const isAdmin = document.getElementById('eiv-admin').checked;
+  const user = {
+    id: idx>=0 ? ivrUsers[idx].id : ivrUsers.length ? Math.max(...ivrUsers.map(x=>x.id))+1 : 1,
+    name, phone, isAdmin,
+    allowedRelays: isAdmin ? [] : relays.filter(r=>document.getElementById('eiv-relay-'+r.id)?.checked).map(r=>r.id),
+    allowedActions: isAdmin ? ['ON','OFF'] : [
+      ...(document.getElementById('eiv-act-on').checked ? ['ON'] : []),
+      ...(document.getElementById('eiv-act-off').checked ? ['OFF'] : []),
+    ],
+    maxDurationMinOn: isAdmin ? 0 : (parseInt(document.getElementById('eiv-maxmin-on').value) || 0),
+    maxDurationMinOff: isAdmin ? 0 : (parseInt(document.getElementById('eiv-maxmin-off').value) || 0),
+  };
+  const updated = [...ivrUsers];
+  if(idx<0) updated.push(user); else updated[idx]=user;
+  ivrUsers = updated;
+  socket.emit('save_ivr_users', ivrUsers);
+  document.getElementById('ivr-edit-overlay')?.remove();
+  renderIvrUsers();
+  toast('שומר... (כולל עדכון Railway — יקח כ-20-30 שניות)');
+}
+
+function deleteIvrUser(idx){
+  if(!confirm('למחוק את "'+ivrUsers[idx].name+'"?')) return;
+  ivrUsers.splice(idx,1);
+  socket.emit('save_ivr_users', ivrUsers);
+  document.getElementById('ivr-edit-overlay')?.remove();
+  renderIvrUsers();
+  toast('שומר מחיקה... (כולל עדכון Railway)');
+}
+
+// סנכרון רשימת תפוצה (WHITELIST) בימות — עובר על כל המתקשרים שמוגדרים כאן ומוסיף את מי שחסר
+function syncYemotWhitelist(){
+  toast('בודק ומסנכרן רשימת תפוצה בימות...');
+  socket.emit('sync_yemot_whitelist');
+}
+
+// בדיקת endpoint /yemot ישירות מהממשק — קריאה אמיתית, בלי לחייג בפועל
+function populateYemotTestSelectors(){
+  const callerSel = document.getElementById('yt-caller-select');
+  const relaySel = document.getElementById('yt-relay-select');
+  if (!callerSel || !relaySel) return;
+  callerSel.innerHTML = ivrUsers.length
+    ? ivrUsers.map(u => `<option value="${u.phone}">ID ${u.id} — ${u.name}${u.isAdmin ? ' (אדמין)' : ''}</option>`).join('')
+    : '<option value="">אין מתקשרים מוגדרים — הוסף אחד למעלה</option>';
+  relaySel.innerHTML = relays.map(r => `<option value="${r.id}">${r.id} — ${r.name}</option>`).join('');
+}
+
+async function runYemotTest(){
+  const phone = document.getElementById('yt-caller-select').value;
+  const relay = document.getElementById('yt-relay-select').value;
+  const action = document.getElementById('yt-action-select').value;
+  const duration = document.getElementById('yt-duration-input').value || '0';
+  const resEl = document.getElementById('yt-result');
+  if (!phone) { toast('אין מתקשר לבדיקה — הוסף מתקשר ב-IVR קודם'); return; }
+  resEl.textContent = 'שולח ל-/yemot...';
+  try {
+    const url = `/yemot?Relay=${encodeURIComponent(relay)}&Action=${encodeURIComponent(action)}&Duration=${encodeURIComponent(duration)}&ApiPhone=${encodeURIComponent(phone)}`;
+    const res = await fetch(url);
+    const text = await res.text();
+    const match = text.match(/id_list_message=t-([^&]*)/);
+    const spoken = match ? match[1] : null;
+    resEl.textContent = spoken
+      ? `🔊 מה שהמתקשר היה שומע:\n"${spoken}"\n\n— תגובה גולמית —\n${text}`
+      : `— תגובה גולמית (לא בפורמט הודעה רגיל) —\n${text}`;
+  } catch (e) {
+    resEl.textContent = '❌ שגיאה בשליחה: ' + e.message;
+  }
+}
+
+// עריכת TTS/ext.ini בשלוחת ימות המשיח — קוראת/כותבת בפועל מול השרת
+function loadYemotFile(){
+  const ext = document.getElementById('ivr-ext-input').value.trim();
+  const filename = document.getElementById('ivr-tts-file-input').value.trim();
+  if(!ext || !filename){ toast('נא למלא מספר שלוחה ושם קובץ'); return; }
+  toast('טוען מהשלוחה...');
+  socket.emit('get_yemot_file', { ext, filename });
+}
+
+function saveYemotFile(){
+  const ext = document.getElementById('ivr-ext-input').value.trim();
+  const filename = document.getElementById('ivr-tts-file-input').value.trim();
+  const content = document.getElementById('ivr-tts-content').value;
+  if(!ext || !filename){ toast('נא למלא מספר שלוחה ושם קובץ'); return; }
+  socket.emit('save_yemot_file', { ext, filename, content });
+}
+
+// תצוגה מקדימה / עדכון אוטומטי של תפריט "ממסר ← פעולה ← משך זמן" (000/001/002.tts + ext.ini)
+// בנוי משמות הממסרים הקיימים כרגע במערכת — בלי לדעת את קידודי ימות בעצמך
+function previewYemotAutoUpdate(){
+  toast('בונה תצוגה מקדימה...');
+  socket.emit('get_yemot_autoupdate_preview');
+}
+
+function runYemotAutoUpdate(){
+  const ext = document.getElementById('ivr-ext-input').value.trim();
+  if(!ext){ toast('נא למלא מספר שלוחה'); return; }
+  if(!confirm(`לעדכן אוטומטית את הקבצים 000.tts / 001.tts / 002.tts / ext.ini בשלוחה ${ext}? פעולה זו תחליף כל תוכן קיים בקבצים האלה.`)) return;
+  socket.emit('run_yemot_autoupdate', { ext });
+}
+
+// ── QUICK ACTIONS ─────────────────────────────────────────
+function allOn(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.relays?.length){toast('אינך מורשה לשלוט בממסרים');return;}
+  relays.forEach(r=>sendRelay(r.id,true));toast('כל הממסרים הודלקו');
+}
+function allOff(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.relays?.length){toast('אינך מורשה לשלוט בממסרים');return;}
+  relays.forEach(r=>sendRelay(r.id,false));toast('כל הממסרים כובו');
+}
+function shabbatMode(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.relays?.length){toast('אינך מורשה לשלוט בממסרים');return;}
+  relays.forEach(r=>sendRelay(r.id,false));sendRelay(3,true);toast('מצב שבת — רק תאורה פעילה');
+}
+function morningMode(){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.relays?.length){toast('אינך מורשה לשלוט בממסרים');return;}
+  sendRelay(1,true);setTimeout(()=>sendRelay(2,true),500);toast('בוקר טוב — דוד ומזגן הודלקו');
+}
+function quickTimer(id){
+  const r=relays.find(x=>x.id===id);
+  const mins=prompt(`טיימר עבור ${r?.name||'ממסר '+id} — כמה דקות?`,'30');
+  if(!mins)return;
+  const m=parseInt(mins);
+  if(!m||m<=0)return;
+  // הטיימר רץ **בשרת** (לא setTimeout מקומי!) — כדי שסגירת/רענון הדפדפן, או המחשב/טלפון שנרדם,
+  // לא ימחקו את הכיבוי-המתוזמן וישאירו את הממסר דלוק לצמיתות בלי רשת-ביטחון. אותו מנגנון בדיוק
+  // כמו טיימרי-IVR — שורד גם Stop→Start של ה-Add-on עצמו.
+  if(!socket||!socket.connected){toast('אין חיבור לשרת — לא ניתן להפעיל טיימר');return;}
+  socket.emit('quick_timer',{relayId:id,minutes:m,userName:currentUser?.name||null});
+  toast(`טיימר ${m} דקות — ${r?.name||''}`);
+}
+
+// ── LOG ───────────────────────────────────────────────────
+function addLog(type,msg){
+  const now=new Date();
+  const entry={
+    type,msg,
+    user: currentUser?.name || 'מערכת',
+    time:now.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),
+    date:now.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'})
+  };
+  logEntries.unshift(entry);
+  if(logEntries.length>300)logEntries.pop();
+  syncLogToServer(entry);
+  renderLog();saveLS();
+}
+function renderLog(){
+  const box=document.getElementById('log-box');
+  const visible = currentUser?.canViewLog===false ? [] :
+    currentUser?.role==='admin' ? logEntries :
+    logEntries.filter(e=> !e.user || e.user===currentUser?.name || e.user==='מערכת');
+  box.innerHTML=visible.length
+    ?visible.map(e=>`<div class="log-entry ${e.type}">
+      <span class="ts">${e.time}</span>
+      <span class="log-date">${e.date}</span>
+      ${e.user&&e.user!=='מערכת'?`<span style="font-size: 12px;color:var(--accent);background:rgba(100,140,255,0.1);border-radius:4px;padding:1px 5px">${e.user}</span>`:''}
+      <span class="action">${e.msg}</span>
+    </div>`).join('')
+    :'<div class="log-entry"><span class="ts">—</span><span class="action">ממתין לפעולות...</span></div>';
+}
+function clearLog(){if(!confirm('לנקות את היומן?'))return;logEntries.length=0;renderLog();saveLS();toast('היומן נוקה');}
+function toggleLogExpand(){
+  const box = document.getElementById('log-box');
+  const btn = document.getElementById('log-expand-btn');
+  const expanded = box.classList.toggle('expanded');
+  btn.textContent = expanded ? '↕ צמצם' : '↕ הצג הכל';
+}
+function exportLog(){
+  const txt=logEntries.map(e=>`[${e.date} ${e.time}] ${e.type.toUpperCase()}: ${e.msg}`).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));a.download='smarthome_log.txt';a.click();
+  toast('יומן יוצא');
+}
+function copyLogToClipboard(){
+  if(!logEntries.length){toast('היומן ריק — אין מה להעתיק');return;}
+  const txt=logEntries.map(e=>`[${e.date} ${e.time}] ${e.type.toUpperCase()}: ${e.msg}`).join('\n');
+  const done=()=>toast('היומן הועתק ללוח 📋');
+  const fail=()=>{
+    // נפילה לאחור: textarea זמני + execCommand('copy') — לדפדפנים/הקשרים ללא clipboard API
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok=document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(ok) done(); else toast('העתקה נכשלה — נסה לייצא במקום');
+    }catch(e){ toast('העתקה נכשלה — נסה לייצא במקום'); }
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done).catch(fail);
+  } else {
+    fail();
+  }
+}
+
+// ── TABS ──────────────────────────────────────────────────
+// ── CALENDAR DATA HELPERS ─────────────────────────────────
+function getCalData() {
+  return (typeof HOLIDAY_CALENDAR !== 'undefined') ? HOLIDAY_CALENDAR : [];
+}
+
+// Parse "DD/MM/YYYY" → {d,m,y}
+function parseLatin(str) {
+  const [d,m,y] = str.split('/').map(Number);
+  return {d,m,y};
+}
+
+// Format Hebrew date: remove ה' prefix, clean up escaped quotes
+// Input: "י\"ב טבת ה'תשפ\"ו"  → "יב טבת תשפ"ו"
+function fmtHebDate(raw, includeYear=true) {
+  if (!raw) return '';
+  // unescape \" → "
+  let s = raw.replace(/\\"/g, '"');
+  // remove ה' at start of year part (e.g. ה'תשפ"ו → תשפ"ו)
+  s = s.replace(/ה'(תש[א-ת"]+)/, '$1');
+  if (!includeYear) {
+    // strip the year (last word after last space before תש...)
+    s = s.replace(/\s+תש[א-ת"]+$/, '').trim();
+  }
+  return s.trim();
+}
+
+// Get calendar entry for a JS Date
+function getCalEntry(date) {
+  if (!_calIndexCache) {
+    _calIndexCache = {};
+    getCalData().forEach(e => { _calIndexCache[e['תאריך לועזי']] = e; });
+  }
+  const dd = String(date.getDate()).padStart(2,'0');
+  const mm = String(date.getMonth()+1).padStart(2,'0');
+  const yyyy = date.getFullYear();
+  const key = `${dd}/${mm}/${yyyy}`;
+  return _calIndexCache[key] || null;
+}
+
+// Get calendar entry by DD/MM (ignore year) — for annual matching
+function getCalEntryAnnual(dd, mm) {
+  const cal = getCalData();
+  const key = `${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}`;
+  return cal.find(e => e['תאריך לועזי'].startsWith(key+'/')) || null;
+}
+
+// Check if today matches a program's calendar filter
 function getHebrewDayNumber(entry){
   if(!entry || !entry['תאריך עברי']) return null;
   const dayPart = entry['תאריך עברי'].split(' ')[0];
   return HEB_DAY_MAP[dayPart] ?? null;
 }
-function isAssurMelachaEntry(entry) {
-  if (!entry) return false;
-  if (entry['יום'] === 'שבת') return true;
-  return ASSUR_MELACHA_HOLIDAYS.has(entry['חג/אירוע']);
-}
-function getZmanim(date) {
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const yyyy = date.getFullYear();
-  const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
-  if (!entry) return {};
-  const tomorrow = new Date(date);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tEntry = _calendarIndex[`${String(tomorrow.getDate()).padStart(2, '0')}/${String(tomorrow.getMonth() + 1).padStart(2, '0')}/${tomorrow.getFullYear()}`];
-  // הדלקת נרות: היום הוא ערב של יום אסור-מלאכה (מחר אסור-מלאכה).
-  // הבדלה/צאת שבת: היום עצמו אסור-מלאכה, ומחר כבר לא (סוף הרצף — לא באמצע חג דו-יומי).
-  const candlesOk = isAssurMelachaEntry(tEntry);
-  const havdalahOk = isAssurMelachaEntry(entry) && !isAssurMelachaEntry(tEntry);
-  // חצות = בדיוק אמצע הזמן בין נץ החמה לשקיעה (לא קיים כשדה בקובץ הלוח, מחושב)
-  const sunriseMin = timeStrToMinutes(entry['נץ החמה']);
-  const sunsetMin = timeStrToMinutes(entry['שקיעה']);
-  const chatzotStr = (sunriseMin !== null && sunsetMin !== null)
-    ? `${String(Math.floor(Math.round((sunriseMin + sunsetMin) / 2) / 60)).padStart(2, '0')}:${String(Math.round((sunriseMin + sunsetMin) / 2) % 60).padStart(2, '0')}`
-    : null;
-  // הדלקת נרות: אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום (לא זמן-השקיעה עצמו!)
-  const candlesStr = (candlesOk && sunsetMin !== null)
-    ? `${String(Math.floor((sunsetMin - 22 + 1440) % 1440 / 60)).padStart(2, '0')}:${String((sunsetMin - 22 + 1440) % 1440 % 60).padStart(2, '0')}`
-    : null;
-  return {
-    sunrise: entry['נץ החמה'], sunset: entry['שקיעה'],
-    candles: candlesStr,
-    havdalah: havdalahOk ? entry['מוצאי שבת'] : null,
-    tzeit: entry['צאת הכוכבים'],
-    alotHaShachar: entry['עלות השחר'], minchaGedola: entry['מנחה גדולה'], rabeinuTam: entry['רבינו תם'],
-    chatzot: chatzotStr,
-  };
-}
-function zmanimKeyForZman(zman) {
-  return { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam' }[zman] || zman;
-}
-function timeStrToMinutes(t) { if (!t) return null; const [h,m]=t.split(':').map(Number); return h*60+m; }
-function getProgMinutes(p, zmanim) {
-  if (p.type === 'time') { const [h,m]=p.time.split(':').map(Number); return h*60+m; }
-  const base = timeStrToMinutes(zmanim[zmanimKeyForZman(p.zman)]);
-  if (base === null) return -1;
-  return base + (p.offsetDir==='-'?-1:1)*(p.offsetVal||0);
-}
-function getRelayFireMin(p, baseMin, relayId) {
-  const ri=(p.relay||[]).indexOf(relayId); const idx=ri<0?0:ri;
-  return baseMin + idx*(p.delay||0)/60;
-}
-function getRelayEndMin(p, fireMin) {
-  if (!p.durationOn || (!(p.durationH||p.durationM))) return null;
-  return fireMin + (p.durationH||0)*60 + (p.durationM||0);
-}
-function getRelayEventPairs(p, baseMin, relayId) {
-  const start=getRelayFireMin(p,baseMin,relayId);
-  const totalEnd=getRelayEndMin(p,start);
-  if (totalEnd===null) return [{fireMin:start,endMin:null,action:p.action,segType:'single'}];
-  if (!p.cycleOn||!p.cycleOnMin||!p.cycleOffMin) return [{fireMin:start,endMin:totalEnd,action:p.action,segType:'single'}];
-  const onMin=p.cycleOnMin,offMin=p.cycleOffMin,cycleLen=onMin+offMin;
-  const totalMin=totalEnd-start,fullCycles=Math.floor(totalMin/cycleLen);
-  const pairs=[];
-  for(let i=0;i<fullCycles;i++){const s=start+i*cycleLen;pairs.push({fireMin:s,endMin:s+onMin,action:p.action,segType:'on',cycleIdx:i});pairs.push({fireMin:s+onMin,endMin:s+cycleLen,action:p.action==='ON'?'OFF':'ON',segType:'off',cycleIdx:i});}
-  // שארית חלקית אחרי המחזורים המלאים — לא לזרוק אותה! בלי זה, כל משך שלא מתחלק בול במחזור נעלם
-  // בשקט (למשל 4/2 למשך 10 דק' — המחזור השני מעולם לא ירה בפועל).
-  // חשוב: אם השארית היא ON-בלבד (אין אחריה OFF, כי היא מסתיימת עם סוף התוכנית עצמו) — היא חייבת
-  // segType:'single' (לא 'on'), כי רק 'single' מקבל כיבוי-אוטומטי-בתום-משך; 'on'/'off' לעולם לא נסגרים
-  // לבד (הם נסגרים ע"י הקטע הבא בתור, וכאן אין קטע הבא).
-  const remainder = totalMin - fullCycles*cycleLen;
-  if (remainder > 0) {
-    const s = start + fullCycles*cycleLen;
-    const onPart = Math.min(remainder, onMin);
-    if (remainder > onMin) {
-      pairs.push({fireMin:s,endMin:s+onPart,action:p.action,segType:'on',cycleIdx:fullCycles});
-      pairs.push({fireMin:s+onPart,endMin:s+remainder,action:p.action==='ON'?'OFF':'ON',segType:'off',cycleIdx:fullCycles});
-    } else {
-      pairs.push({fireMin:s,endMin:s+onPart,action:p.action,segType:'single',cycleIdx:fullCycles});
-    }
+function matchesCalFilterForDate(p, date) {
+  if (!p.calType || p.calType === 'none') return true;
+  const entry = getCalEntry(date);
+  if (!entry) return true; // no data for this date → don't block
+  const [ed,em,ey] = entry['תאריך לועזי'].split('/').map(Number);
+  if (p.calType === 'annual') {
+    return ed === p.calDay && em === p.calMonth;
+  } else if (p.calType === 'once') {
+    return ed === p.calDay && em === p.calMonth && ey === p.calYear;
+  } else if (p.calType === 'rosh_chodesh_aleph') {
+    return getHebrewDayNumber(entry) === 1;
+  } else if (p.calType === 'rosh_chodesh_lamed') {
+    return getHebrewDayNumber(entry) === 30;
   }
-  if(!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action,segType:'single'}];
-  return pairs;
+  return true;
 }
-const CHILD_BUFFER_MIN=0.5;
-function getChildEventPairs(child,parent,parentBaseMin){
-  if(!parent) return [];
-  const parentRelay=(parent.relay||[])[0];
-  const offSegs=getRelayEventPairs(parent,parentBaseMin,parentRelay).filter(s=>s.segType==='off');
-  if(!offSegs.length) return [];
-  const offsetMin=child.childOffsetMin??child.offsetMin??0;
-  const timing=child.childTiming??child.timing??'before';
-  const confine=child.childConfine??child.confine??false;
-  return offSegs.map((seg,idx)=>{
-    const breakStart=seg.fireMin,breakEnd=seg.endMin;
-    const fireMin=timing==='before'?(breakStart-offsetMin):(breakStart+offsetMin);
-    let endMin=null;
-    if(confine&&breakEnd!==null) endMin=Math.max(fireMin,breakEnd-CHILD_BUFFER_MIN);
-    return {fireMin,endMin,action:child.action,segType:'child',cycleIdx:idx,breakStart,breakEnd};
+function matchesCalFilter(p) {
+  return matchesCalFilterForDate(p, new Date());
+}
+
+// Search calendar entries
+let _calMatches = [];
+function searchCalendar(q) {
+  const cal = getCalData();
+  const res = document.getElementById('cal-results');
+  if (!q || q.length < 2) { res.style.display='none'; _calMatches=[]; return; }
+  const matches = cal.filter(e => {
+    const heb = fmtHebDate(e['תאריך עברי']);
+    const chag = e['חג/אירוע'] || '';
+    const tzom = e['צום/שבת מיוחדת'] || '';
+    return heb.includes(q) || chag.includes(q) || tzom.includes(q) || e['תאריך לועזי'].includes(q);
+  }).slice(0,40);
+
+  if (!matches.length) { res.innerHTML='<div style="padding:8px 12px;font-size: 13px;color:var(--muted)">לא נמצאו תוצאות</div>'; res.style.display='block'; _calMatches=[]; return; }
+
+  const calType = document.getElementById('prog-cal-type').value;
+  _calMatches = matches.map(e => {
+    const heb = fmtHebDate(e['תאריך עברי'], calType==='once');
+    const [dd,mm,yyyy] = e['תאריך לועזי'].split('/').map(Number);
+    const special = e['חג/אירוע'] || e['צום/שבת מיוחדת'] || '';
+    return {dd,mm,yyyy,heb,special,calType};
   });
+  res.style.display='block';
+  res.innerHTML = _calMatches.map((m,i) => {
+    return `<div onmousedown="selectCalIdx(${i})"
+      style="padding:7px 12px;cursor:pointer;font-size: 13px;border-bottom:1px solid var(--border);transition:background 0.15s"
+      onmouseover="this.style.background='var(--surface3)'" onmouseout="this.style.background=''">
+      <span style="color:var(--text);font-weight:600">${m.heb}</span>
+      <span style="color:var(--muted);margin-right:6px">${String(m.dd).padStart(2,'0')}/${String(m.mm).padStart(2,'0')}/${m.yyyy}</span>
+      ${m.special ? `<span style="color:var(--warn);font-size: 12px">${m.special}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+function selectCalIdx(i) {
+  const m = _calMatches[i];
+  if (!m) return;
+  selectCalEntry(m.dd, m.mm, m.yyyy, m.heb, m.special, m.calType);
 }
 
-function computeTodayEvents(nowIL,zmanim,dow,todayKey){
-  const events=[];
-  const progsById={};
-  schedulerPrograms.forEach(p=>progsById[p.id]=p);
-  for(const p of schedulerPrograms){
-    const runOnceStillOwedToday=p.runOnce&&_firedRunOnceToday.has(p.id)&&_firedRunOnceToday.get(p.id)._todayKey===todayKey;
-    if(!p.active&&!runOnceStillOwedToday) continue;
-    if(p.parentProgId) continue;
-    const modeIds=p.modeIds??(p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
-    if(!modeIds.includes(schedulerActiveModeId)) continue;
-    if(p.days?.length&&!p.days.includes(dow)) continue;
-    if(p.calType&&p.calType!=='none'){
-      const dd=nowIL.getDate(),mm=nowIL.getMonth()+1,yyyy=nowIL.getFullYear();
-      if(p.calType==='annual'){if(dd!==p.calDay||mm!==p.calMonth)continue;}
-      else if(p.calType==='once'){if(dd!==p.calDay||mm!==p.calMonth||yyyy!==p.calYear)continue;}
-      else if(p.calType==='rosh_chodesh_aleph'){
-        const entry=_calendarIndex[`${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy}`];
-        if(getHebrewDayNumber(entry)!==1) continue;
-      }
-      else if(p.calType==='rosh_chodesh_lamed'){
-        const entry=_calendarIndex[`${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy}`];
-        if(getHebrewDayNumber(entry)!==30) continue;
-      }
-    }
-    const baseMin=getProgMinutes(p,zmanim);
-    if(baseMin<0) continue;
-    (p.relay||[]).forEach(relayId=>{
-      const pairs=getRelayEventPairs(p,baseMin,relayId);
-      pairs.forEach((seg,idx)=>{
-        events.push({progId:p.id,name:p.name,relayId,fireSec:Math.round(seg.fireMin*60),endSec:seg.endMin!==null?Math.round(seg.endMin*60):null,action:seg.action,segType:seg.segType,cycleIdx:seg.cycleIdx,isLastSeg:idx===pairs.length-1,runOnce:p.runOnce,isPriority:!!p.priority});
-        if(seg.endMin!==null&&seg.segType==='single'){
-          events.push({progId:p.id,name:p.name,relayId,fireSec:Math.round(seg.endMin*60),endSec:null,action:seg.action==='ON'?'OFF':'ON',segType:seg.segType,cycleIdx:seg.cycleIdx,isLastSeg:idx===pairs.length-1,runOnce:false,isPriority:!!p.priority,isEndEvent:true,runOnceCleanup:!!p.runOnce,startFireSec:Math.round(seg.fireMin*60)});
-        }
-      });
-      if(p.childProgId){
-        const child=progsById[p.childProgId];
-        if(child&&child.active){
-          const childPairs=getChildEventPairs(child,p,baseMin);
-          childPairs.forEach(seg=>{
-            events.push({progId:child.id,name:child.name,relayId:(child.relay||[])[0],fireSec:Math.round(seg.fireMin*60),endSec:seg.endMin!==null?Math.round(seg.endMin*60):null,action:seg.action,segType:'child',cycleIdx:seg.cycleIdx,requireAck:!!(child.childRequireAck??child.requireAck),ackRelayId:relayId,ackExpected:seg.action==='ON'?'OFF':'ON',isPriority:!!child.priority});
-            if(seg.endMin!==null){events.push({progId:child.id,name:child.name,relayId:(child.relay||[])[0],fireSec:Math.round(seg.endMin*60),endSec:null,action:seg.action==='ON'?'OFF':'ON',segType:'child',cycleIdx:seg.cycleIdx,isEndEvent:true,runOnce:false,isPriority:!!child.priority,startFireSec:Math.round(seg.fireMin*60)});}
-          });
-        }
-      }
-    });
+let _calSel = null;
+function selectCalEntry(dd,mm,yyyy,heb,special,calType) {
+  _calSel = {dd,mm,yyyy,heb,special,calType};
+  const showYear = calType==='once';
+  const label = showYear ? `${heb} (${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy})` : `${heb} · כל שנה`;
+  document.getElementById('cal-selected-text').textContent = label + (special ? ` — ${special}` : '');
+  document.getElementById('cal-selected').style.display='flex';
+  document.getElementById('cal-results').style.display='none';
+  document.getElementById('prog-cal-search').value='';
+}
+function clearCalSelection() {
+  _calSel = null;
+  document.getElementById('cal-selected').style.display='none';
+  document.getElementById('prog-cal-type').value='none';
+  document.getElementById('prog-cal-search').style.display='none';
+}
+function updateCalSection() {
+  const t = document.getElementById('prog-cal-type').value;
+  const srch = document.getElementById('prog-cal-search');
+  const isRoshChodesh = t==='rosh_chodesh_aleph' || t==='rosh_chodesh_lamed';
+  if (t==='none') { clearCalSelection(); return; }
+  srch.style.display = isRoshChodesh ? 'none' : '';
+  // ראש-חודש הוא כלל קבוע (יום א/ל בחודש) — אין תאריך ספציפי לחפש/לבחור, בניגוד ל-annual/once
+  _calSel = null;
+  document.getElementById('cal-selected').style.display='none';
+}
+
+// ── SHOWtab ───────────────────────────────────────────────
+function showTab(name,btn){
+  // בדיקת הרשאות לפני כל פעולה
+  if(name==='ivr' && currentUser?.role!=='admin' && !currentUser?.canViewIvr){
+    toast('⛔ אין הרשאה לכרטיסיית IVR'); return;
   }
-  return events;
-}
+  if(name==='ha_devices' && currentUser?.role!=='admin' && !currentUser?.canViewHaDevices){
+    toast('⛔ אין הרשאה להגדרות התקנים'); return;
+  }
+  if(name==='log' && currentUser?.role!=='admin' && !currentUser?.canViewLog){
+    toast('⛔ אין הרשאה לצפייה ביומן'); return;
+  }
 
-function getNowSecIL(){const n=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));return n.getHours()*3600+n.getMinutes()*60+n.getSeconds();}
-
-function checkAckAndFireChild(event,todayKey){
-  const expected=event.ackExpected;
-  const pending=_pendingPublish[event.ackRelayId];
-  if(pending){
-    pending
-      .then(()=>checkAckAndFireChildNow(event,todayKey,expected))
-      .catch(()=>checkAckAndFireChildNow(event,todayKey,expected));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  const panel=document.getElementById('tab-'+name);
+  if(panel)panel.classList.add('active');
+  if(btn){
+    btn.classList.add('active');
   } else {
-    checkAckAndFireChildNow(event,todayKey,expected);
-  }
-}
-
-function checkAckAndFireChildNow(event,todayKey,expected){
-  const actual=relayState[event.ackRelayId];
-  if(actual===expected){fireEvent(event,todayKey);return;}
-  setTimeout(()=>{
-    if(event.endSec!==null&&getNowSecIL()>event.endSec) return;
-    if(relayState[event.ackRelayId]===expected) fireEvent(event,todayKey);
-  },60000);
-}
-
-function checkRelayOwnerBlock(event,nowSec){
-  const owner=relayOwner[event.relayId];
-  if(!owner) return false;
-  if(owner.progId===event.progId) return false;
-  if(owner.endSec!==null&&owner.endSec<=nowSec){delete relayOwner[event.relayId];return false;}
-  if(event.isPriority) return false;
-  if(owner.priority){if(owner.endSec===null)return false;return{blockedBy:owner.name};}
-  if(owner.endSec===null) return false;
-  if(owner.endSec>event.fireSec) return{blockedBy:owner.name};
-  return false;
-}
-
-// גרסה מבודדת לסימולציה — אותה לוגיקה בדיוק כמו checkRelayOwnerBlock, אבל על מפת-בעלות מבודדת
-// (לא נוגעת ב-relayOwner האמיתי), כדי שהסימולציה לא תשפיע על המצב האמיתי בשום צורה.
-function checkRelayOwnerBlockSim(simOwner,event,nowSec){
-  const owner=simOwner[event.relayId];
-  if(!owner) return false;
-  if(owner.progId===event.progId) return false;
-  if(owner.endSec!==null&&owner.endSec<=nowSec){delete simOwner[event.relayId];return false;}
-  if(event.isPriority) return false;
-  if(owner.priority){if(owner.endSec===null)return false;return{blockedBy:owner.name};}
-  if(owner.endSec===null) return false;
-  if(owner.endSec>event.fireSec) return{blockedBy:owner.name};
-  return false;
-}
-
-// ═══ סימולציית-תזמון לצורך בדיקה ═══════════════════════════════════════════════
-// מריצה "יבש" (בלי לשלוח שום פקודה אמיתית, בלי לגעת במצב-האמת) את כל התוכניות הפעילות
-// על פני טווח-תאריכים נבחר — כולל מחזורים, תוכניות-בת, אירועים-חוצי-חצות, וחסימות-בעלות-ממסר —
-// ומחזירה רשימה כרונולוגית של "מה היה קורה ומתי". בדיוק הכלי שהיה חסר לנו כדי לבדוק חציית-חצות
-// ומחזורים בלי לחכות לזמן האמיתי.
-function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
-  const [fy,fm,fd] = fromDateStr.split('-').map(Number);
-  const [ty,tm,td] = toDateStr.split('-').map(Number);
-  const fromDate = new Date(fy, fm-1, fd, 0,0,0,0);
-  const toDateExclusive = new Date(ty, tm-1, td+1, 0,0,0,0); // עד סוף היום האחרון (לא כולל)
-  if (isNaN(fromDate.getTime())||isNaN(toDateExclusive.getTime())) throw new Error('תאריך לא תקין');
-  if (toDateExclusive <= fromDate) throw new Error('טווח לא תקין ("עד" לפני "מ")');
-  const rangeSec = (toDateExclusive.getTime() - fromDate.getTime())/1000;
-  if (rangeSec > 32*86400) throw new Error('טווח ארוך מדי (מקסימום 31 ימים)');
-  const rangeDays = Math.ceil(rangeSec/86400);
-
-  // מדמים activeModeId שונה (אופציונלי) בלי לגעת בערך האמיתי בזמן החישוב
-  const savedMode = schedulerActiveModeId;
-  if (simModeId !== undefined && simModeId !== null) schedulerActiveModeId = simModeId;
-
-  const allEvents = [];
-  try {
-    // סורקים גם יום אחד לפני הטווח, כדי לתפוס אירועים-חוצי-חצות שנכנסים לתוך הטווח
-    for (let d = -1; d <= rangeDays; d++) {
-      const scanDate = new Date(fromDate.getTime() + d*86400000);
-      const dow = scanDate.getDay();
-      const dateKey = scanDate.toDateString();
-      const zmanim = getZmanim(scanDate);
-      const events = computeTodayEvents(scanDate, zmanim, dow, dateKey);
-      events.forEach(ev => {
-        const secSinceStart = d*86400 + ev.fireSec;
-        if (secSinceStart < 0 || secSinceStart >= rangeSec) return;
-        const endSecSinceStart = ev.endSec !== null ? d*86400 + ev.endSec : null;
-        allEvents.push({ ...ev, secSinceStart, endSecSinceStart, sourceDayKey: dateKey, scanDate: new Date(scanDate) });
-      });
-    }
-  } finally {
-    schedulerActiveModeId = savedMode; // תמיד משחזרים, גם אם קרתה שגיאה
-  }
-  allEvents.sort((a,b) => a.secSinceStart - b.secSinceStart);
-
-  const simOwner = {};
-  const report = [];
-  const seenKeys = new Set();
-  const HEB_DOW = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
-  // בונים את מחרוזת-התצוגה ישירות מהמספרים המוכרים כבר (יום, שעה, דקה, שנייה) — בלי לעבור דרך
-  // new Date(epoch).toLocaleString(...) עם timeZone, כי זה מניח בטעות שה-epoch כבר "לא-מתוקן" (כלומר
-  // בנוי לפי אזור-הזמן של מכונת-השרת עצמה, לא בהכרח ישראל) ומתקן אותו פעם נוספת — הזזה כפולה בדיוק
-  // כמו הבאג שכבר תפסנו בצד-הלקוח. scanDate (הבנוי מ-y,m-1,d מספריים) כבר "נכון" בעצמו לכל מטרה כאן.
-  const fmtTime = (dayDate, secWithinDay) => {
-    const h = Math.floor(secWithinDay/3600), mi = Math.floor((secWithinDay%3600)/60), s = Math.floor(secWithinDay%60);
-    const dow = HEB_DOW[dayDate.getDay()];
-    const dd = String(dayDate.getDate()).padStart(2,'0'), mm = String(dayDate.getMonth()+1).padStart(2,'0');
-    return `${dow}, ${dd}.${mm}, ${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  };
-
-  for (const ev of allEvents) {
-    const key = `${ev.progId}_${ev.relayId}_${ev.segType}_${ev.cycleIdx??'x'}_${ev.fireSec}_${ev.isEndEvent?'end':'start'}_${ev.sourceDayKey}`;
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-    const relayName = schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`;
-    const simEvent = { relayId: ev.relayId, progId: ev.progId, isPriority: !!ev.isPriority, fireSec: ev.secSinceStart, endSec: ev.endSecSinceStart };
-    let note = ev.isEndEvent ? 'סיום-לפי-משך' : ev.segType==='child' ? 'תוכנית-בת' : (ev.segType==='on'||ev.segType==='off') ? `מחזור #${ev.cycleIdx}` : '';
-    const _dayAdvance = Math.floor(ev.fireSec/86400);
-    const _dispDate = _dayAdvance>0 ? new Date(ev.scanDate.getTime()+_dayAdvance*86400000) : ev.scanDate;
-    const _secWithinDay = ev.fireSec - _dayAdvance*86400;
-    if (ev.action === 'OFF') {
-      const blocked = checkRelayOwnerBlockSim(simOwner, simEvent, ev.secSinceStart);
-      if (blocked) {
-        report.push({ time: fmtTime(_dispDate,_secWithinDay), prog: ev.name, relay: relayName, action: 'OFF', blocked: true, note: `בוטל — ממסר בשליטת "${blocked.blockedBy}"` });
-        continue;
-      }
-      if (simOwner[ev.relayId]) delete simOwner[ev.relayId];
-    }
-    report.push({ time: fmtTime(_dispDate,_secWithinDay), prog: ev.name, relay: relayName, action: ev.action, blocked: false, note });
-    if (ev.action === 'ON') {
-      simOwner[ev.relayId] = { progId: ev.progId, name: ev.name, priority: !!ev.isPriority, endSec: ev.endSecSinceStart };
-    }
-  }
-  return report;
-}
-
-function fireEvent(event,todayKey){
-  const{relayId,action,name}=event;
-  if(!event.isEndEvent) _actuallyFired.add(`${event.progId}_${relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_start_${todayKey}`);
-  const pub = publishRelay(relayId,action).then(()=>{
-    io.emit('scheduler_fired',{progName:name,relayId,action});
-    if(action==='ON'){
-      const existing=relayOwner[relayId];
-      const candidate={progId:event.progId,name,priority:!!event.isPriority,endSec:event.endSec};
-      const existingExpired=existing&&existing.endSec!==null&&existing.endSec<=getNowSecIL();
-      const existingIsStronger=existing&&!existingExpired&&existing.progId!==candidate.progId&&existing.endSec!==null&&((existing.priority&&!candidate.priority)||(!existing.priority&&!candidate.priority&&candidate.endSec!==null&&existing.endSec>candidate.endSec));
-      if(!existingIsStronger) relayOwner[relayId]=candidate;
-    } else if(relayOwner[relayId]){delete relayOwner[relayId];} // כל כיבוי שמגיע לכאן כבר עבר את checkRelayOwnerBlock (או שזו תוכנית הכיבוי של עצמה) — הממסר כבוי בפועל, אז אין יותר "בעלים", ללא קשר לאיזו תוכנית ביצעה את הכיבוי
-    if(event.isEndEvent) addServerLog({type:'info',msg:`[למשך] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
-    else addServerLog({type:'info',msg:`[תזמון] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
-  }).catch(err=>console.error(`❌ שגיאה ממסר ${relayId}:`,err.message));
-  _pendingPublish[relayId] = pub;
-  return pub;
-}
-
-async function schedulerTick(){
-  if(!schedulerPrograms.length) return;
-  const now=new Date();
-  const nowIL=new Date(now.toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));
-  const nowSec=nowIL.getHours()*3600+nowIL.getMinutes()*60+nowIL.getSeconds();
-  const todayKey=nowIL.toDateString();
-  const dow=nowIL.getDay();
-  _firedToday.forEach(k=>{if(!k.endsWith(todayKey))_firedToday.delete(k);});
-  // תיקון קריטי: לא למחוק _actuallyFired ברגע ש-02:00 עבר! תוכנית שה"התחלה" שלה הייתה אתמול, אבל
-  // ה"סיום-לפי-משך" שלה חוצה הרבה יותר מ-2 שעות לתוך היום הבא (למשל 22:59+8.5שע=07:29 למחרת) —
-  // הייתה "שוכחת" שהיא בכלל התחילה, ברגע שהשעון עבר 02:00, ולעולם לא מכבה את עצמה. שומרים גם את
-  // מפתחות-אתמול (לא רק היום), ומוחקים רק דברים ישנים משני ימים.
-  const _yIL_prune=new Date(nowIL);_yIL_prune.setDate(_yIL_prune.getDate()-1);
-  const _yesterdayKeyForPrune=_yIL_prune.toDateString();
-  _actuallyFired.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_actuallyFired.delete(k);});
-  if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey)_firedRunOnceToday.delete(id);});
-  const zmanim=getZmanim(nowIL);
-  const events=computeTodayEvents(nowIL,zmanim,dow,todayKey);
-  const WINDOW_SEC=8;
-  for(const event of events){
-    if(event.fireSec<0||event.fireSec>=86400) continue;
-    if(event.fireSec>nowSec||event.fireSec<nowSec-WINDOW_SEC) continue;
-    const fireKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_${event.isEndEvent?'end':'start'}_${todayKey}`;
-    if(_firedToday.has(fireKey)) continue;
-    if(event.isEndEvent&&event.startFireSec!==undefined){
-      const startKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.startFireSec}_start_${todayKey}`;
-      if(!_actuallyFired.has(startKey)) continue;
-    }
-    if(event.action==='OFF'){
-      const heldByOther=checkRelayOwnerBlock(event,nowSec);
-      if(heldByOther){_firedToday.add(fireKey);addServerLog({type:'info',msg:`[תזמון] "${event.name}" — כיבוי בוטל, ממסר ${event.relayId} בשליטת "${heldByOther.blockedBy}"`,user:'מערכת'});continue;}
-    }
-    _firedToday.add(fireKey);
-    if(event.runOnce&&(event.segType==='single'||event.segType==='on')){
-      const p=schedulerPrograms.find(x=>x.id===event.progId);
-      if(p&&p.active){p.active=false;_firedRunOnceToday.set(p.id,{...p,_todayKey:todayKey});io.emit('program_updated',{id:p.id,active:false});saveConfigLocal();}
-    }
-    if(event.isEndEvent){fireEvent(event,todayKey);if(event.runOnceCleanup)_firedRunOnceToday.delete(event.progId);continue;}
-    if(event.segType==='child'&&event.requireAck) checkAckAndFireChild(event,todayKey);
-    else fireEvent(event,todayKey);
-  }
-  // אירועים שחצו חצות מאתמול — כולל **גם** מחזורים רגילים (ON/OFF של cycleOn), לא רק את
-  // הכיבוי-הסופי-לפי-משך (isEndEvent). התיקון הקודם כאן טיפל רק ב-isEndEvent, ולכן תוכנית-מחזור
-  // שהמשכה חוצה חצות (למשל 21:59+8.5שע) הייתה "קופאת" בדיוק בחצות ולעולם לא חוזרת לפעול —
-  // כל מחזור-ON שהיה אמור לירות אחרי חצות פשוט לא נבדק בכלל, כי הוא לא isEndEvent.
-  // תיקון קריטי נוסף: הבדיקה הזו רצה תמיד (לא רק אם nowSec<7200/02:00) — תוכנית שחוצה הרבה יותר
-  // מ-2 שעות לתוך היום הבא (למשל 22:59+8.5שע=07:29 למחרת) לא הייתה נבדקת בכלל, כי עד שמגיעים
-  // לזמן-הכיבוי-האמיתי שלה, הבדיקה כבר הפסיקה לרוץ (עברו 2 השעות). זו הייתה הסיבה האמיתית
-  // ש"מזגן הורים" (22:59 שישי + 8.5 שעות) מעולם לא כבה, והמשיך "לחסום" את התוכנית של אחה"צ שבת.
-  {
-    const yIL=new Date(nowIL);yIL.setDate(yIL.getDate()-1);
-    const yKey=yIL.toDateString(),yDow=yIL.getDay(),yZman=getZmanim(yIL);
-    const yEvts=computeTodayEvents(yIL,yZman,yDow,yKey);
-    for(const event of yEvts){
-      if(event.fireSec<=86400) continue; // רק אירועים שבאמת חוצים לתוך היום החדש
-      const adj=event.fireSec-86400;
-      if(adj>nowSec||adj<nowSec-WINDOW_SEC) continue;
-      const fireKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_${event.isEndEvent?'end':'start'}_${yKey}`;
-      if(_firedToday.has(fireKey)) continue;
-      if(event.isEndEvent&&event.startFireSec!==undefined){
-        const startKey=`${event.progId}_${event.relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.startFireSec}_start_${yKey}`;
-        if(!_actuallyFired.has(startKey)) continue;
-      }
-      if(event.action==='OFF'){
-        const heldByOther=checkRelayOwnerBlock(event,nowSec);
-        if(heldByOther){_firedToday.add(fireKey);addServerLog({type:'info',msg:`[תזמון] "${event.name}" — כיבוי בוטל, ממסר ${event.relayId} בשליטת "${heldByOther.blockedBy}"`,user:'מערכת'});continue;}
-      }
-      _firedToday.add(fireKey);
-      if(event.isEndEvent){fireEvent(event,yKey);if(event.runOnceCleanup)_firedRunOnceToday.delete(event.progId);continue;}
-      if(event.segType==='child'&&event.requireAck) checkAckAndFireChild(event,yKey);
-      else fireEvent(event,yKey);
-    }
-  }
-}
-
-async function processIvrPendingTimers(){
-  const todayKeyIL=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'});
-  if(ivrTodayEvents.some(e=>e.dateKey!==todayKeyIL)){ivrTodayEvents=ivrTodayEvents.filter(e=>e.dateKey===todayKeyIL);saveConfigLocal();}
-  if(!ivrPendingTimers.length) return;
-  const now=Date.now();
-  const due=ivrPendingTimers.filter(t=>t.dueAt<=now);
-  if(!due.length) return;
-  ivrPendingTimers=ivrPendingTimers.filter(t=>t.dueAt>now);
-  for(const t of due){
-    try{await publishRelay(t.relayId,t.revertAction,`IVR — סיום משך, ID ${t.callerId}`);addServerLog({type:'info',msg:`📞 [IVR — סיום משך] ${t.label} → ${t.revertAction}`,user:'מערכת'});}
-    catch(err){console.error('❌ שגיאה IVR timer:',err.message);}
-  }
-  saveConfigLocal();
-}
-
-// ── תזמוני מצב אוטומטיים ───────────────────────────────
-const _firedScheduledModes = new Set(); // מונע ירי כפול באותו tick
-
-function commitAutoModeSwitch(newModeId, label) {
-  if (newModeId === schedulerActiveModeId) return;
-  try {
-    const impact = computeModeSwitchImpactGlobal(newModeId);
-    schedulerActiveModeId = newModeId;
-    saveConfigLocal();
-    // כבה ממסרים ממצב קודם
-    (impact.staleRelays || []).forEach(r => {
-      publishRelay(r.relayId, 'OFF').then(() => {
-        if (relayOwner[r.relayId]) delete relayOwner[r.relayId];
-        // חובה לשדר scheduler_fired — זהו האירוע היחיד שגורם לדפדפן לעדכן את מצב הממסר בזמן אמת (ראה fireEvent). בלעדיו הממשק נשאר "תקוע" עד רענון ידני.
-        io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב (${r.ownerProgName || 'תוכנית קודמת'})`, relayId: r.relayId, action: 'OFF' });
-      }).catch(() => {});
-    });
-    // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
-    const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
-    (impact.missedPrograms || []).forEach(m => {
-      publishRelay(m.relayId, 'ON').then(() => {
-        relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
-        // אותו תיקון: לשדר scheduler_fired כדי שהדפדפן יראה מיד שהממסר עלה בעקבות ההשלמה
-        io.emit('scheduler_fired', { progName: m.progName, relayId: m.relayId, action: 'ON' });
-        // קריטי: לרשום את זה כ"ירה באמת" — אחרת הכיבוי-לפי-משך העתידי של התוכנית הזו יידלג בשקט
-        // (schedulerTick בודק _actuallyFired לפני שהוא מרשה לאירוע-הסיום לירות, וההפעלה הזו לא עברה דרך fireEvent הרגיל)
-        if (m.fireSec !== undefined) _actuallyFired.add(`${m.progId}_${m.relayId}_${m.segType}_${m.cycleIdx??'x'}_${m.fireSec}_start_${_catchupTodayKey}`);
-        // תוכנית runOnce שהופעלה כהשלמה — כיבוי הדגל כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
-        if (m.runOnce) {
-          const p = schedulerPrograms.find(x => x.id === m.progId);
-          if (p && p.active) {
-            p.active = false;
-            _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
-            io.emit('program_updated', { id: p.id, active: false });
-            saveConfigLocal();
-          }
-        }
-      }).catch(() => {});
-    });
-    io.emit('mode_changed', { newModeId, label });
-    addServerLog({ type: 'info', msg: `🕐 [תזמון מצב] עבר למצב ${newModeId} — ${label}`, user: 'מערכת' });
-  } catch(e) {
-    console.error('❌ שגיאה ב-commitAutoModeSwitch:', e.message);
-  }
-}
-
-// גרסה גלובלית של computeModeSwitchImpact (לא בתוך io.on)
-function computeModeSwitchImpactGlobal(newModeId) {
-  const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const nowSec = getNowSecIL();
-  const todayKey = nowIL.toDateString();
-  const staleRelays = [];
-  for (const relayIdStr of Object.keys(relayOwner)) {
-    const relayId = parseInt(relayIdStr, 10);
-    const owner = relayOwner[relayId];
-    const p = schedulerPrograms.find(x => String(x.id) === String(owner.progId));
-    const modeIds = p ? (p.modeIds ?? (p.modeId !== null ? [p.modeId] : [0])) : [];
-    if (!modeIds.includes(newModeId)) staleRelays.push({ relayId, relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`, ownerProgName: owner.name });
-  }
-  const savedMode = schedulerActiveModeId;
-  schedulerActiveModeId = newModeId;
-  const dow = nowIL.getDay();
-  const zmanim = getZmanim(nowIL);
-  let newModeEvents = [];
-  try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
-  finally { schedulerActiveModeId = savedMode; }
-
-  // מפה של טווחי-בעלות של תוכניות עדיפות לכל ממסר — ראו הסבר מלא בגרסה הידנית של הפונקציה הזו למעלה
-  const priorityIntervalsByRelayG = {};
-  for (const ev of newModeEvents) {
-    if (ev.action !== 'ON' || ev.isEndEvent || !ev.isPriority) continue;
-    (priorityIntervalsByRelayG[ev.relayId] ||= []).push({ progId: ev.progId, start: ev.fireSec, end: ev.endSec });
-  }
-  const isBlockedByPriorityG = ev => {
-    const arr = priorityIntervalsByRelayG[ev.relayId];
-    return !!arr && arr.some(iv => iv.progId !== ev.progId && iv.start <= ev.fireSec && (iv.end === null || iv.end > ev.fireSec));
-  };
-
-  // בנה מפה של אירוע כיבוי אחרון שירה לפני עכשיו, לכל ממסר
-  const lastOffFiredByRelayG = {};
-  for (const ev of newModeEvents) {
-    if (ev.action !== 'OFF' || ev.fireSec > nowSec) continue;
-    if (!ev.isPriority && isBlockedByPriorityG(ev)) continue;
-    const cur = lastOffFiredByRelayG[ev.relayId];
-    if (!cur || ev.fireSec > cur.fireSec) lastOffFiredByRelayG[ev.relayId] = ev;
-  }
-
-  // מצא תוכניות שפספסו — מועמד אחד לכל ממסר
-  const missedCandidatesByRelay = {};
-  for (const ev of newModeEvents) {
-    if (ev.action !== 'ON' || ev.isEndEvent) continue;
-    if (ev.fireSec > nowSec) continue;
-    if (nowSec - ev.fireSec <= 8) continue;
-    if (ev.endSec !== null && ev.endSec <= nowSec) continue;
-    // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
-    const lastOff = lastOffFiredByRelayG[ev.relayId];
-    if (lastOff && lastOff.fireSec > ev.fireSec) continue;
-    // סנן runOnce שכבר ירה היום
-    if (ev.runOnce && _firedRunOnceToday.has(ev.progId)) continue;
-    const cur = missedCandidatesByRelay[ev.relayId];
-    if (!cur) { missedCandidatesByRelay[ev.relayId] = ev; continue; }
-    const curWins = (cur.isPriority && !ev.isPriority) ? true : (!cur.isPriority && ev.isPriority) ? false : (cur.endSec === null) ? true : (ev.endSec === null) ? false : (cur.endSec >= ev.endSec);
-    if (!curWins) missedCandidatesByRelay[ev.relayId] = ev;
-  }
-
-  // הרחב — כל הממסרים של כל תוכנית שפספסה (לא רק הממסר הראשון)
-  const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
-  const missedPrograms = [];
-  for (const ev of newModeEvents) {
-    if (ev.action !== 'ON' || ev.isEndEvent) continue;
-    if (!missedProgIds.has(ev.progId)) continue;
-    if (ev.fireSec > nowSec) continue;
-    if (ev.endSec !== null && ev.endSec <= nowSec) continue;
-    const lastOff = lastOffFiredByRelayG[ev.relayId];
-    if (lastOff && lastOff.fireSec > ev.fireSec) continue;
-    // בדוק שהממסר הספציפי הזה לא כבוי כבר
-    if (missedCandidatesByRelay[ev.relayId]?.progId !== ev.progId) continue;
-    missedPrograms.push({
-      relayId: ev.relayId,
-      relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
-      progId: ev.progId, progName: ev.name, isPriority: !!ev.isPriority, endSec: ev.endSec,
-      fireSec: ev.fireSec, segType: ev.segType, cycleIdx: ev.cycleIdx, runOnce: !!ev.runOnce,
+    document.querySelectorAll('.tab').forEach(t=>{
+      if(t.getAttribute('onclick')&&t.getAttribute('onclick').includes("'"+name+"'"))t.classList.add('active');
     });
   }
-
-  return { staleRelays, missedPrograms };
+  if(name==='timeline')renderTimeline();
+  if(name==='users')renderUsers();
+  if(name==='modes')renderModes();
+  if(name==='ivr')renderIvrUsers();
+  if(name==='ha_devices')renderHaActive();
 }
 
-function processScheduledModes() {
-  if (!scheduledModes.length) return;
-  try {
-    const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-    const nowSec = getNowSecIL();
-    const dow = nowIL.getDay();
-    const todayKey = nowIL.toDateString();
-    const zmanim = getZmanim(nowIL);
-    const WINDOW_SEC = 15;
+// ── HOME ASSISTANT DEVICES ────────────────────────────────
+let haAvailableDevices = []; // רשימה שהגיעה מהשרת
+let haSelectedIds = new Set(); // entity_id-ים שנסמנו כרגע לבחירה
+let haActiveDevices = []; // התקנים שכבר נוספו (מגיע מהשרת)
 
-    // נקה fired set יומי
-    _firedScheduledModes.forEach(k => { if (!k.endsWith(todayKey)) _firedScheduledModes.delete(k); });
+// טעינת הגדרות HA שנשמרו
+function applyHaSettings(settings) {
+  if (settings.haUrl) document.getElementById('ha-url-input').value = settings.haUrl;
+  if (settings.hasToken) document.getElementById('ha-token-input').placeholder = '••••••••••• (נשמר)';
+}
 
-    for (const sm of scheduledModes) {
-      if (!sm.active) continue;
-      if (sm.days?.length && !sm.days.includes(dow)) continue;
+function saveHaSettings() {
+  const token = document.getElementById('ha-token-input').value.trim();
+  const url = document.getElementById('ha-url-input').value.trim();
+  if (!url) { toast('נא להזין כתובת HA'); return; }
+  socket.emit('save_ha_settings', { token: token || undefined, url });
+}
 
-      // בדיקת תאריך
-      if (sm.calType && sm.calType !== 'none') {
-        const dd = String(nowIL.getDate()).padStart(2,'0');
-        const mm = String(nowIL.getMonth()+1).padStart(2,'0');
-        const yyyy = nowIL.getFullYear();
-        const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
-        if (!entry) continue;
-        const calDate = entry['תאריך עברי'] || '';
-        if (sm.calType === 'annual') {
-          if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
-        } else if (sm.calType === 'once') {
-          if (calDate !== sm.calLabel || yyyy !== sm.calYear) continue;
-        } else if (sm.calType === 'rosh_chodesh_aleph') {
-          if (getHebrewDayNumber(entry) !== 1) continue;
-        } else if (sm.calType === 'rosh_chodesh_lamed') {
-          if (getHebrewDayNumber(entry) !== 30) continue;
-        }
-      }
+function fetchHaDevices() {
+  const statusEl = document.getElementById('ha-fetch-status');
+  statusEl.textContent = '⏳ מחפש התקנים...';
+  socket.emit('fetch_ha_devices');
+}
 
-      // חשב זמן הפעלה
-      let fireSec = -1;
-      if (sm.type === 'time') {
-        const [h,m] = (sm.time||'00:00').split(':').map(Number);
-        fireSec = h*3600 + m*60;
-      } else if (sm.type === 'zman') {
-        const zmKey = { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',mincha:'minchaGedola' }[sm.zman] || sm.zman;
-        const base = zmanim[zmKey];
-        if (!base) continue;
-        const [h,m] = base.split(':').map(Number);
-        const baseSec = h*3600 + m*60;
-        const offset = (sm.offsetVal||0) * 60;
-        fireSec = sm.offsetDir === '-' ? baseSec - offset : baseSec + offset;
-      }
-      if (fireSec < 0) continue;
-      if (fireSec > nowSec || fireSec < nowSec - WINDOW_SEC) continue;
+function renderHaAvailable() {
+  const search = document.getElementById('ha-search')?.value?.toLowerCase() || '';
+  const list = document.getElementById('ha-available-list');
+  const existingIds = new Set(haActiveDevices.map(d => d.entity_id));
+  const filtered = haAvailableDevices.filter(d =>
+    !search ||
+    d.entity_id.toLowerCase().includes(search) ||
+    d.friendly_name.toLowerCase().includes(search)
+  );
 
-      const fireKey = `sm_${sm.id}_${todayKey}`;
-      if (_firedScheduledModes.has(fireKey)) continue;
-      _firedScheduledModes.add(fireKey);
+  list.innerHTML = filtered.map(dev => {
+    const isActive = existingIds.has(dev.entity_id);
+    const isSelected = haSelectedIds.has(dev.entity_id);
+    const activeRelay = haActiveDevices.find(d => d.entity_id === dev.entity_id);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface);border:1px solid ${isActive?'rgba(52,211,153,0.3)':'var(--border)'};border-radius:8px;cursor:pointer" onclick="toggleHaDevice('${dev.entity_id}')">
+      <input type="checkbox" ${isSelected||isActive?'checked':''} onclick="event.stopPropagation();toggleHaDevice('${dev.entity_id}')" style="cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;color:var(--text)">${dev.friendly_name}</div>
+        <div style="font-size:12px;color:var(--muted)">${dev.entity_id}</div>
+      </div>
+      <div style="font-size:12px;padding:2px 8px;border-radius:10px;background:var(--surface2);color:var(--text2)">${dev.domain}</div>
+      ${isActive ? `<div style="font-size:12px;color:var(--accent2);white-space:nowrap">✅ ממסר ${activeRelay?.relayId}</div>` : ''}
+      <div style="font-size:12px;padding:2px 8px;border-radius:10px;${dev.state==='on'?'background:rgba(52,211,153,0.15);color:var(--accent2)':'background:var(--surface2);color:var(--muted)'}">${dev.state==='on'?'דלוק':'כבוי'}</div>
+    </div>`;
+  }).join('');
+}
 
-      // שמור מצב קודם אם יש duration
-      if (sm.durationOn) {
-        _previousModeId = schedulerActiveModeId;
-        const durationSec = ((sm.durationH||0)*3600 + (sm.durationM||0)*60);
+function toggleHaDevice(entityId) {
+  if (haSelectedIds.has(entityId)) haSelectedIds.delete(entityId);
+  else haSelectedIds.add(entityId);
+  renderHaAvailable();
+}
 
-        // הגדר טיימר לחזרה
-        if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
-        const prevMode = _previousModeId;
-        const modeJustSetTo = sm.toModeId;
-        // חשיפה ללקוח: "יש כרגע טיימר-חזרה ממתין" — נדרש כדי שציר-הזמן בממשק ידע לדמות נכון
-        // את המצב הצפוי, גם אם הדף נטען *אחרי* שהטיימר כבר החל לרוץ.
-        _pendingRevertInfo = { revertToMode: prevMode, revertAtEpochMs: Date.now() + durationSec * 1000 };
-        io.emit('pending_mode_revert', _pendingRevertInfo);
-        _activeScheduledModeTimer = setTimeout(() => {
-          _activeScheduledModeTimer = null;
-          _pendingRevertInfo = null;
-          io.emit('pending_mode_revert', null);
-          // הגנה מפני race condition: אם תזמון מצב אחר כבר החליף את המצב הפעיל בינתיים (למשל שני תזמונים
-          // שחלים כמעט באותו רגע), אסור לטיימר החזרה "העיוור" הזה לדרוס את המצב הנוכחי בחזרה — רק אם
-          // עדיין נמצאים באותו מצב שאליו עברנו במקור, מותר לחזור.
-          if (schedulerActiveModeId !== modeJustSetTo) {
-            addServerLog({ type: 'info', msg: `🕐 חזרה אוטומטית למצב ${prevMode} בוטלה — תזמון אחר כבר החליף את המצב בינתיים (נשארים במצב ${schedulerActiveModeId})`, user: 'מערכת' });
-            return;
-          }
-          commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
-        }, durationSec * 1000);
-      }
+function selectAllHaDevices() {
+  haAvailableDevices.forEach(d => haSelectedIds.add(d.entity_id));
+  renderHaAvailable();
+}
 
-      commitAutoModeSwitch(sm.toModeId, sm.name || `תזמון מצב ${sm.id}`);
-    }
-  } catch(e) {
-    console.error('❌ שגיאה ב-processScheduledModes:', e.message);
+function clearHaSelection() {
+  haSelectedIds.clear();
+  renderHaAvailable();
+}
+
+function saveHaDevices() {
+  const selected = haAvailableDevices.filter(d => haSelectedIds.has(d.entity_id));
+  if (!selected.length) { toast('לא נבחרו התקנים'); return; }
+  socket.emit('save_ha_devices', selected);
+}
+
+function renderHaActive() {
+  const el = document.getElementById('ha-active-list');
+  if (!haActiveDevices.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--muted)">לא נוספו עדיין התקנים — לחץ "רענן" להצגת ההתקנים הזמינים ב-HA</div>';
+    return;
   }
+  el.innerHTML = haActiveDevices.map(dev => {
+    const gId = dev.relayId;
+    const st = relays.find(r => r.id === gId);
+    const isOn = st?.state;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border:1px solid ${isOn?'rgba(52,211,153,0.25)':'var(--border)'};border-radius:10px">
+      <div style="width:8px;height:8px;border-radius:50%;background:${isOn?'var(--on-color)':'var(--muted)'}"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:700;color:var(--text)">${dev.friendly_name}</div>
+        <div style="font-size:12px;color:var(--muted)">${dev.entity_id} · ממסר #${dev.relayId}</div>
+      </div>
+      <div style="font-size:13px;padding:3px 10px;border-radius:10px;${isOn?'background:rgba(52,211,153,0.15);color:var(--accent2)':'background:var(--surface2);color:var(--muted)'}">${isOn?'דלוק':'כבוי'}</div>
+      <button onclick="sendRelay(${gId},'${isOn?'OFF':'ON'}')" style="background:${isOn?'rgba(239,68,68,0.1)':'rgba(52,211,153,0.1)'};border:1px solid ${isOn?'rgba(239,68,68,0.3)':'rgba(52,211,153,0.3)'};color:${isOn?'var(--danger)':'var(--accent2)'};border-radius:7px;padding:4px 12px;font-family:inherit;cursor:pointer;font-size:13px">${isOn?'כבה':'הדלק'}</button>
+      <button onclick="removeHaDevice('${dev.entity_id}')" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 8px;font-family:inherit;cursor:pointer;font-size:13px" title="הסר">✕</button>
+    </div>`;
+  }).join('');
 }
 
-setInterval(schedulerTick, 5000);
-setInterval(processIvrPendingTimers, 5000);
-setInterval(processScheduledModes, 10000);
-schedulerTick();
-processIvrPendingTimers();
-
-// ── ימות המשיח ──────────────────────────────────────────
-function ymResponse(text){
-  const clean=text.replace(/[:]/g," , ").replace(/\.{2,}/g," , ").replace(/\.(?!\d)/g," , ").replace(/[*#_>"]/g,"").replace(/\n/g," , ").replace(/\s+/g," ").trim();
-  return `id_list_message=t-${clean}`;
+function removeHaDevice(entityId) {
+  if (!confirm('להסיר התקן זה מהרשימה?')) return;
+  const updated = haActiveDevices.filter(d => d.entity_id !== entityId);
+  socket.emit('save_ha_devices', updated);
 }
 
-const IVR_ACK_TIMEOUT_MS = 3000;
+function refreshHaStates() {
+  socket.emit('refresh_ha_states');
+  toast('מעדכן מצבים...');
+}
 
-app.get('/yemot', async (req, res) => {
-  const relayDigits=req.query.Relay||'',actionDigit=req.query.Action||'',durationStr=req.query.Duration||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
-  if(hangup) return res.send('');
-  if(relayDigits&&actionDigit&&callerPhone){
-    const callerId=yemotPhoneMap[callerPhone];
-    if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
-    const perm=yemotPermissions[callerId]||{};
-    const relayId=parseInt(relayDigits,10),relayName=schedulerRelayNames[relayId];
-    const action=actionDigit==='1'?'ON':actionDigit==='2'?'OFF':null;
-    const durationMin=parseInt(durationStr,10);
-    if(!relayName||!action||isNaN(durationMin)||durationMin<0) return res.send('id_list_message=t-קלט לא תקין, נסה שוב&go_to_folder=hangup&');
-    if(!perm.isAdmin){
-      const maxDur=action==='ON'?(perm.maxDurationMinOn??0):(perm.maxDurationMinOff??0);
-      if(!(perm.allowedRelays||[]).includes(relayId)||!(perm.allowedActions||[]).includes(action)||(maxDur!==0&&(durationMin===0||durationMin>maxDur)))
-        return res.send('id_list_message=t-אינך מורשה, נסה שוב&go_to_folder=hangup&');
-    }
-    try{
-      const isOn=action==='ON';
-      const ackPromise=waitForRelayAck(relayId,IVR_ACK_TIMEOUT_MS);
-      await publishRelay(relayId,action,`IVR — ID ${callerId}`);
-      const ackReceived=await ackPromise;
-      if(durationMin>0){
-        const timerId=`ivr_${Date.now()}_${Math.round(Math.random()*1e6)}`;
-        const startedAt=Date.now(),dueAt=startedAt+durationMin*60000;
-        ivrPendingTimers.push({id:timerId,relayId,revertAction:isOn?'OFF':'ON',startedAt,dueAt,label:`${relayName} (IVR — ID ${callerId})`,callerId});
-        ivrTodayEvents.push({id:timerId,relayId,callerId,startedAt,dueAt,dateKey:new Date(startedAt).toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'})});
-        saveConfigLocal();io.emit('ivr_today_events',ivrTodayEvents);
-      }
-      const msg=!ackReceived?`${relayName}: הפקודה נשלחה, ממתין לאישור`
-        :durationMin>0?`${relayName}: ${isOn?'הודלק':'כובה'} בהצלחה, יחזור אוטומטית בעוד ${durationMin} דקות`
-        :`${relayName}: ${isOn?'הודלק':'כובה'} בהצלחה`;
-      return res.send(ymResponse(msg));
-    }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
-  }
-  return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
-});
+// ── TOAST ─────────────────────────────────────────────────
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.className='toast show';
+  clearTimeout(t._tid);t._tid=setTimeout(()=>t.classList.remove('show'),2600);
+}
 
-app.get('/dashboard', (req, res) => res.redirect('/smart_home_v3.html'));
+// ── עריכת פעולות מהירות ──────────────────────────────────
+function getQuickActionConfig(key) {
+  return (serverConfig && serverConfig.quickActions && serverConfig.quickActions[key]) || null;
+}
 
-app.get('/status', (req, res) => {
-  res.json({
-    status: 'ok',
-    mqtt: mqttConnected ? 'מחובר' : 'מנותק',
-    uptime: Math.floor(process.uptime()) + ' שניות',
-    states: relayState,
-    haDevices: haDevices.length,
-    controllers: CONTROLLERS.map(c => ({ id: c.id, name: c.name, online: controllerOnline[c.id] || false })),
+function editQuickAction(key) {
+  const label = key === 'shabbat' ? 'מצב שבת' : 'בוקר טוב';
+  const cfg = getQuickActionConfig(key) || {};
+  // cfg.relays: { "1": "ON", "2": "OFF", "3": null } — null = ללא שינוי
+  const overlayId = `qa-overlay-${key}`;
+  let existing = document.getElementById(overlayId);
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = overlayId;
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+  const relayRows = relays.map(r => {
+    const cur = cfg.relays ? cfg.relays[String(r.id)] : null;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span style="flex:1;font-size:14px">${r.name} (${r.id})</span>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="ON" ${cur==='ON'?'checked':''}> הדלק</label>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="OFF" ${cur==='OFF'?'checked':''}> כבה</label>
+      <label style="font-size:13px"><input type="radio" name="qa-${key}-${r.id}" value="none" ${!cur?'checked':''}> ללא שינוי</label>
+    </div>`;
+  }).join('');
+
+  overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:420px;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+    <div style="font-size:17px;font-weight:700">✏️ עריכת "${label}"</div>
+    <div style="font-size:13px;color:var(--muted)">הגדר לכל ממסר מה יקרה בלחיצה על הכפתור</div>
+    <div>${relayRows}</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="saveQuickAction('${key}','${overlayId}')" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px;font-family:inherit;font-size:14px;cursor:pointer">💾 שמור</button>
+      <button onclick="document.getElementById('${overlayId}').remove()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:inherit;cursor:pointer">ביטול</button>
+    </div>
+  </div>`;
+
+  document.body.appendChild(overlay);
+}
+
+function saveQuickAction(key, overlayId) {
+  const relaysCfg = {};
+  relays.forEach(r => {
+    const checked = document.querySelector(`input[name="qa-${key}-${r.id}"]:checked`);
+    const val = checked ? checked.value : 'none';
+    if (val !== 'none') relaysCfg[String(r.id)] = val;
   });
-});
+  if (!serverConfig) serverConfig = {};
+  if (!serverConfig.quickActions) serverConfig.quickActions = {};
+  serverConfig.quickActions[key] = { relays: relaysCfg };
+  // שלח לשרת דרך sync_programs
+  syncProgramsToServer();
+  document.getElementById(overlayId)?.remove();
+  toast(`✅ "${key === 'shabbat' ? 'מצב שבת' : 'בוקר טוב'}" עודכן`);
+}
 
-const PORT = process.env.PORT || 3000;
+// עדכון פונקציות פעולה מהירה לשימוש בהגדרות
+function shabbatMode() {
+  const cfg = getQuickActionConfig('shabbat');
+  if (cfg && cfg.relays) {
+    Object.entries(cfg.relays).forEach(([id, state]) => sendRelay(parseInt(id), state === 'ON'));
+    toast('מצב שבת הופעל');
+  } else {
+    // ברירת מחדל
+    relays.forEach(r => sendRelay(r.id, false)); sendRelay(3, true);
+    toast('מצב שבת — רק תאורה פעילה');
+  }
+}
 
-// טיפול בשגיאות לא מתוכננות — מונע קריסה שקטה
-process.on('uncaughtException', (err) => {
-  console.error(`💥 uncaughtException: ${err.message}`);
-  console.error(err.stack);
-});
+function morningMode() {
+  const cfg = getQuickActionConfig('morning');
+  if (cfg && cfg.relays) {
+    Object.entries(cfg.relays).forEach(([id, state]) => sendRelay(parseInt(id), state === 'ON'));
+    toast('בוקר טוב הופעל');
+  } else {
+    sendRelay(1, true); setTimeout(() => sendRelay(2, true), 500);
+    toast('בוקר טוב — דוד ומזגן הודלקו');
+  }
+}
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error(`💥 unhandledRejection: ${reason}`);
-});
+// ── ניהול מצבים מתוזמנים ─────────────────────────────────
+const ZMAN_OPTIONS_SM = [
+  { val: 'time', label: 'שעה קבועה' },
+  { val: 'sunset', label: 'שקיעה' },
+  { val: 'sunrise', label: 'זריחה' },
+  { val: 'candles', label: 'הדלקת נרות' },
+  { val: 'havdalah', label: 'צאת שבת' },
+  { val: 'tzeit', label: 'צאת הכוכבים' },
+  { val: 'dawn', label: 'עלות השחר' },
+];
 
-(async () => {
-  loadConfigLocal();
-  rebuildHaRelayNames();
-  connectMQTT();
-  server.listen(PORT, () => {
-    console.log(`\n🏠 שרת בית חכם (גרסה מקומית) פועל על פורט ${PORT}\n`);
+function openScheduledModesModal() {
+  let overlay = document.getElementById('sm-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'sm-modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+    overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:680px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:17px;font-weight:700">🕐 ניהול מצבים מתוזמנים</div>
+        <button onclick="document.getElementById('sm-modal-overlay').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted)">✕</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:10px">
+        ⚠️ במעבר אוטומטי: כל הממסרים הדלוקים ממצב קודם יכובו, ותוכניות שהיו צריכות לדלוק כרגע במצב החדש יופעלו אוטומטית. לשליטה מדויקת יותר — בצע מעבר ידנית.
+      </div>
+      <div id="sm-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      <button onclick="addScheduledMode()" style="background:var(--accent2);color:#fff;border:none;border-radius:8px;padding:10px;font-family:inherit;font-size:14px;cursor:pointer;margin-top:4px">+ הוסף תזמון מצב</button>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="saveScheduledModes()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-family:inherit;font-size:14px;cursor:pointer">💾 שמור הכל</button>
+        <button onclick="document.getElementById('sm-modal-overlay').remove()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:inherit;cursor:pointer">סגור</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  }
+  socket.emit('get_scheduled_modes');
+  renderScheduledModes();
+}
+
+function renderScheduledModes() {
+  const list = document.getElementById('sm-list');
+  if (!list) return;
+  if (!_scheduledModes.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--muted);text-align:center;padding:20px">אין תזמוני מצב — לחץ "+ הוסף"</div>';
+    return;
+  }
+  list.innerHTML = _scheduledModes.map((sm, idx) => buildSmRow(sm, idx)).join('');
+}
+
+function buildSmRow(sm, idx) {
+  const modeOpts = modes.map(m => `<option value="${m.id}" ${sm.toModeId===m.id?'selected':''}>${m.name}</option>`).join('');
+  const zmanOpts = ZMAN_OPTIONS_SM.map(z => `<option value="${z.val}" ${(sm.zman||sm.type)===z.val?'selected':''}>${z.label}</option>`).join('');
+  const isTime = (sm.type||'time') === 'time';
+  const daysHtml = ['א','ב','ג','ד','ה','ו','ש'].map((d,i) =>
+    `<label style="font-size:12px"><input type="checkbox" data-sm="${idx}" data-day="${i}" ${(sm.days||[]).includes(i)?'checked':''}> ${d}</label>`
+  ).join('');
+  const calType = sm.calType || 'none';
+
+  return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px" id="sm-row-${idx}">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input type="checkbox" ${sm.active?'checked':''} onchange="_scheduledModes[${idx}].active=this.checked" title="פעיל">
+      <span style="font-size:13px;color:var(--muted)">עבור למצב:</span>
+      <select onchange="_scheduledModes[${idx}].toModeId=parseInt(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${modeOpts}</select>
+      <button onclick="removeScheduledMode(${idx})" style="margin-right:auto;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:6px;padding:3px 8px;cursor:pointer;font-family:inherit">🗑</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">זמן:</span>
+      <select onchange="_scheduledModes[${idx}].type=this.value==='time'?'time':'zman';_scheduledModes[${idx}].zman=this.value!=='time'?this.value:null;renderScheduledModes()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${zmanOpts}</select>
+      ${isTime
+        ? `<input type="time" value="${sm.time||'00:00'}" onchange="_scheduledModes[${idx}].time=this.value" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`
+        : `<select onchange="_scheduledModes[${idx}].offsetDir=this.value" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">
+            <option value="+" ${sm.offsetDir!=='-'?'selected':''}>+</option>
+            <option value="-" ${sm.offsetDir==='-'?'selected':''}>-</option>
+           </select>
+           <input type="number" min="0" max="120" value="${sm.offsetVal||0}" onchange="_scheduledModes[${idx}].offsetVal=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> דקות`
+      }
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">ימים:</span>${daysHtml}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">תאריך:</span>
+      <select onchange="_scheduledModes[${idx}].calType=this.value;renderScheduledModes()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">
+        <option value="none" ${calType==='none'?'selected':''}>ללא</option>
+        <option value="annual" ${calType==='annual'?'selected':''}>שנתי (תאריך עברי)</option>
+        <option value="once" ${calType==='once'?'selected':''}>חד-פעמי</option>
+        <option value="rosh_chodesh_aleph" ${calType==='rosh_chodesh_aleph'?'selected':''}>ראש חודש א' (יום א בחודש)</option>
+        <option value="rosh_chodesh_lamed" ${calType==='rosh_chodesh_lamed'?'selected':''}>ראש חודש ל' (יום ל, רק בחודשים מלאים)</option>
+      </select>
+      ${(calType!=='none'&&calType!=='rosh_chodesh_aleph'&&calType!=='rosh_chodesh_lamed')?`<input type="text" placeholder="חפש תאריך עברי..." value="${sm.calLabel||''}" oninput="searchCalendarSm(this.value,${idx})" style="width:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text)">
+      ${sm.calLabel?`<span style="font-size:12px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);border-radius:6px;padding:2px 8px;color:var(--accent2)">${sm.calLabel} <button onclick="_scheduledModes[${idx}].calLabel='';_scheduledModes[${idx}].calDay=null;_scheduledModes[${idx}].calMonth=null;renderScheduledModes()" style="background:none;border:none;cursor:pointer;color:var(--muted)">✕</button></span>`:''}
+      ${calType==='once'?`<input type="number" placeholder="שנה" value="${sm.calYear||''}" onchange="_scheduledModes[${idx}].calYear=parseInt(this.value)" style="width:70px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`:''}
+      <div id="sm-cal-results-${idx}" style="position:absolute;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:8px;max-height:150px;overflow-y:auto;display:none;min-width:200px"></div>`:''}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" ${sm.durationOn?'checked':''} onchange="_scheduledModes[${idx}].durationOn=this.checked;renderScheduledModes()"> למשך
+      </label>
+      ${sm.durationOn?`<input type="number" min="0" max="23" value="${sm.durationH||0}" onchange="_scheduledModes[${idx}].durationH=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> שעות
+      <input type="number" min="0" max="59" value="${sm.durationM||0}" onchange="_scheduledModes[${idx}].durationM=parseInt(this.value)||0" style="width:50px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)"> דקות
+      <span style="font-size:12px;color:var(--muted)">(אחר כך יחזור למצב הקודם)</span>`:''}
+    </div>
+  </div>`;
+}
+
+function addScheduledMode() {
+  const newId = (_scheduledModes.length ? Math.max(..._scheduledModes.map(s=>s.id)) : 0) + 1;
+  _scheduledModes.push({
+    id: newId, name: `תזמון ${newId}`, toModeId: modes[0]?.id || 0,
+    type: 'time', time: '00:00', zman: null, offsetDir: '+', offsetVal: 0,
+    days: [0,1,2,3,4,5,6], calType: 'none', calLabel: '', calDay: null, calMonth: null, calYear: null,
+    durationOn: false, durationH: 0, durationM: 0, active: true,
   });
-})();
+  renderScheduledModes();
+}
 
-// אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
-// היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 8;
+function removeScheduledMode(idx) {
+  if (!confirm('למחוק תזמון זה?')) return;
+  _scheduledModes.splice(idx, 1);
+  renderScheduledModes();
+}
+
+function saveScheduledModes() {
+  // אסוף ימים מה-checkboxes
+  _scheduledModes.forEach((sm, idx) => {
+    const days = [];
+    document.querySelectorAll(`input[data-sm="${idx}"][data-day]`).forEach(cb => {
+      if (cb.checked) days.push(parseInt(cb.getAttribute('data-day')));
+    });
+    sm.days = days;
+  });
+
+  // בדוק קונפליקטים — שני תזמונים לאותו יום+שעה
+  const conflicts = [];
+  for (let i = 0; i < _scheduledModes.length; i++) {
+    for (let j = i+1; j < _scheduledModes.length; j++) {
+      const a = _scheduledModes[i], b = _scheduledModes[j];
+      if (!a.active || !b.active) continue;
+      // מערך ימים ריק = "כל יום" (בדיוק כמו שהמתזמן עצמו מפרש את זה) — לא "אף יום", אחרת קונפליקט
+      // בין שני תזמונים ש"כל יום" לא היה מתגלה לעולם.
+      const daysA = (a.days && a.days.length) ? a.days : [0,1,2,3,4,5,6];
+      const daysB = (b.days && b.days.length) ? b.days : [0,1,2,3,4,5,6];
+      const sharedDays = daysA.filter(d => daysB.includes(d));
+      if (!sharedDays.length) continue;
+      const timeA = a.type==='time' ? a.time : `${a.zman}${a.offsetDir}${a.offsetVal}`;
+      const timeB = b.type==='time' ? b.time : `${b.zman}${b.offsetDir}${b.offsetVal}`;
+      if (timeA === timeB) conflicts.push(`תזמון ${a.id} ותזמון ${b.id} מופעלים באותו זמן`);
+    }
+  }
+  if (conflicts.length) {
+    alert('⚠️ קונפליקטים נמצאו — יש לתקן לפני שמירה:\n' + conflicts.join('\n'));
+    return;
+  }
+
+  socket.emit('save_scheduled_modes', _scheduledModes);
+}
+
+function searchCalendarSm(query, idx) {
+  const results = document.getElementById(`sm-cal-results-${idx}`);
+  if (!results) return;
+  if (!query || query.length < 2) { results.style.display='none'; return; }
+  const found = [];
+  const seen = new Set();
+  for (const entry of HOLIDAY_CALENDAR) {
+    const heb = entry['תאריך עברי'] || '';
+    if (heb.includes(query) && !seen.has(heb)) {
+      seen.add(heb);
+      const parts = heb.split(' ');
+      found.push({ label: heb, day: parts[0], month: parts.slice(1).join(' ') });
+      if (found.length >= 8) break;
+    }
+  }
+  if (!found.length) { results.style.display='none'; return; }
+  results.style.display = 'block';
+  results.innerHTML = found.map(f =>
+    `<div onclick="selectCalendarSm(${idx},'${f.label}','${f.day}','${f.month}')" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">${f.label}</div>`
+  ).join('');
+}
+
+function selectCalendarSm(idx, label, day, month) {
+  _scheduledModes[idx].calLabel = label;
+  _scheduledModes[idx].calDay = day;
+  _scheduledModes[idx].calMonth = month;
+  const results = document.getElementById(`sm-cal-results-${idx}`);
+  if (results) results.style.display = 'none';
+  renderScheduledModes();
+}
+
+// שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
+// בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
+BUILD_BOTTOM_MARK = 52;
+updateBuildVersionIndicator();
+</script>
+<div class="conflict-modal-overlay" id="conflict-modal-overlay">
+  <div class="conflict-modal">
+    <h3>⚠️ התנגשויות עדיפות זוהו בייבוא</h3>
+    <div id="conflict-modal-body"></div>
+    <button class="cf-ok-btn" onclick="closeConflictModal()">הבנתי, אטפל בזה</button>
+  </div>
+</div>
+<div class="conflict-modal-overlay" id="mode-switch-modal-overlay">
+  <div class="conflict-modal" style="border-color:#3b6fa0">
+    <h3 style="color:#60a5fa">🔀 בדיקת השפעת מעבר מצב</h3>
+    <div id="mode-switch-modal-body"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="cf-ok-btn" style="background:#2E5C8A" onclick="applyModeSwitchChoice(false)">אישור הבחירות שסומנו</button>
+      <button class="cf-ok-btn" style="background:#555" onclick="applyModeSwitchChoice(true)">השתמש בברירת המחדל (כבה הכל, אל תפעיל כלום)</button>
+    </div>
+  </div>
+</div>
+<div class="conflict-modal-overlay" id="sim-modal-overlay" style="display:none">
+  <div class="conflict-modal" style="border-color:#7c5cbf;max-width:900px;width:95%">
+    <h3 style="color:#a78bfa">🧪 סימולציית תזמון</h3>
+    <p style="color:var(--muted);font-size:13px;margin:4px 0 12px">
+      מריץ בשרת, על כל התוכניות הפעילות האמיתיות שלך, מה היה קורה בטווח שתבחר — כולל מחזורים,
+      תוכניות-בת, אירועים-שחוצי-חצות, וחסימות-בעלות-ממסר. <b>לא שולח שום פקודה אמיתית</b> ולא נוגע במצב הקיים.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">מ-תאריך
+        <input type="date" id="sim-from-date" class="form-input" style="width:150px">
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">עד-תאריך
+        <input type="date" id="sim-to-date" class="form-input" style="width:150px">
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">מצב לדימוי (אופציונלי)
+        <select id="sim-mode-select" class="form-select" style="width:150px"></select>
+      </label>
+      <button class="cf-ok-btn" style="background:#7c5cbf;align-self:flex-end" onclick="runScheduleSimulation()">▶ הרץ סימולציה</button>
+    </div>
+    <div id="sim-results" style="max-height:60vh;overflow-y:auto;font-size:13px"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="cf-ok-btn" style="background:#555" onclick="closeSimModal()">סגור</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
