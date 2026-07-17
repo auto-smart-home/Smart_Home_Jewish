@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AI (תיקון: תצוגה-מינימלית לא בדקה עדיפות (priority) בכלל בהכרעה בין קטעים-חופפים, תמיד העדיפה 'דולק' - תוקן להתאים לחוקי checkRelayOwnerBlock האמיתיים בשרת) -->
+<!-- BUILD_MARKER: v2026-07-13-A (תיקון-דחוף: איפוס-מלא-מפורש בטופס-עריכת-תוכנית (מונע דליפת-שדות משארית קודמת) + תיקון-נוסף בתצוגה-מינימלית: הדלקה תמיד מנצחת ללא-תנאי (לא נחסמת ע'י עדיפות), עדיפות רלוונטית רק בין כיבוי-מול-כיבוי) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 49;
+const BUILD_TOP_MARK = 50;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -2619,6 +2619,38 @@ function openAddProgram(editId){
   const childSel=document.getElementById('child-relay-select');
   childSel.innerHTML=relays.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
 
+  // ═══ איפוס-מלא-מפורש של *כל* שדה, תמיד, לפני כל דבר אחר ═══════════════════════════
+  // קריטי: זה חייב לרוץ תמיד (גם בעריכה, גם בתוכנית-חדשה) — כדי שאף שדה לא יוכל "לדלוף" משארית
+  // של עריכה קודמת (תוכנית אחרת, תוכנית-בת וכו') אם איזשהו נתיב-מילוי בהמשך הפונקציה מפספס שדה.
+  document.getElementById('prog-name-input').value='';
+  document.getElementById('prog-action-select').value='ON';
+  document.getElementById('prog-type-select').value='time';
+  document.getElementById('prog-time-input').value='07:00';
+  document.getElementById('prog-zman-select').value='sunset';
+  document.getElementById('prog-offset-dir').value='+';
+  document.getElementById('prog-offset-val').value=0;
+  document.getElementById('prog-runonce').checked=false;
+  document.getElementById('prog-priority').checked=false;
+  document.getElementById('prog-active').checked=true;
+  document.getElementById('prog-delay').value=0;
+  document.getElementById('prog-duration-on').checked=false;
+  document.getElementById('prog-duration-h').value=0;
+  document.getElementById('prog-duration-m').value=30;
+  document.getElementById('prog-cycle-on').checked=false;
+  document.getElementById('prog-cycle-on-min').value=20;
+  document.getElementById('prog-cycle-off-min').value=10;
+  document.getElementById('prog-child-on').checked=false;
+  document.getElementById('child-action-select').value='ON';
+  document.getElementById('child-timing').value='before';
+  document.getElementById('child-offset-min').value=2;
+  document.getElementById('child-require-ack').checked=false;
+  document.getElementById('child-confine').checked=true;
+  _calSel = null;
+  document.getElementById('prog-cal-type').value='none';
+  document.getElementById('prog-cal-search').style.display='none';
+  document.getElementById('cal-selected').style.display='none';
+  // ══════════════════════════════════════════════════════════════════════════════════
+
   if(editId){
     const p=programs.find(x=>x.id===editId);
     if(!p)return;
@@ -2652,15 +2684,8 @@ function openAddProgram(editId){
       document.getElementById('child-offset-min').value=existingChild.childOffsetMin??2;
       document.getElementById('child-require-ack').checked=!!existingChild.childRequireAck;
       document.getElementById('child-confine').checked=existingChild.childConfine!==false;
-    } else {
-      document.getElementById('child-action-select').value='ON';
-      document.getElementById('child-timing').value='before';
-      document.getElementById('child-offset-min').value=2;
-      document.getElementById('child-require-ack').checked=false;
-      document.getElementById('child-confine').checked=true;
     }
     // Calendar
-    _calSel = null;
     document.getElementById('prog-cal-type').value = p.calType||'none';
     updateCalSection();
     if (p.calType && p.calType!=='none' && p.calDay) {
@@ -2677,24 +2702,6 @@ function openAddProgram(editId){
     });
     updateProgForm();
   } else {
-    _calSel = null;
-    document.getElementById('prog-cal-type').value='none';
-    document.getElementById('prog-cal-search').style.display='none';
-    document.getElementById('cal-selected').style.display='none';
-    document.getElementById('prog-duration-on').checked=false;
-    document.getElementById('prog-duration-h').value=0;
-    document.getElementById('prog-duration-m').value=30;
-    document.getElementById('prog-cycle-on').checked=false;
-    document.getElementById('prog-cycle-on-min').value=20;
-    document.getElementById('prog-cycle-off-min').value=10;
-    document.getElementById('prog-child-on').checked=false;
-    document.getElementById('child-action-select').value='ON';
-    document.getElementById('child-timing').value='before';
-    document.getElementById('child-offset-min').value=2;
-    document.getElementById('child-require-ack').checked=false;
-    document.getElementById('child-confine').checked=true;
-    document.getElementById('prog-runonce').checked=false;
-    document.getElementById('prog-priority').checked=false;
     document.querySelectorAll('#prog-mode-select input[type=checkbox]').forEach(cb => {
       cb.checked = parseInt(cb.value) === activeModeId;
     });
@@ -3522,14 +3529,19 @@ function renderTimelineMinimal(){
       const mid = (segStart+segEnd)/2;
       const covering = segs.filter(s => s.startMs<=mid && s.endMs>=segEnd);
       if (!covering.length) continue;
-      // הכרעה בין קטעים-חופפים, תואמת את חוקי-העדיפות האמיתיים (checkRelayOwnerBlock בשרת):
-      // 1) עדיפות מנצחת תמיד, בלי קשר לדולק/כבוי או לזמנים.
-      // 2) בין קטעים באותה רמת-עדיפות: מעדיפים תחום-ומדויק (לא openEnded) על פני ניחוש-פתוח.
-      // 3) בין הנותרים: מי שמסתיים מאוחר יותר "מנצח" (תואם את כלל "מי-שמתוכנן-להסתיים-מאוחר-זוכה").
-      const priorityOnes = covering.filter(s => s.priority);
-      const poolByPriority = priorityOnes.length ? priorityOnes : covering;
-      const bounded = poolByPriority.filter(s => !s.openEnded);
-      const pool = bounded.length ? bounded : poolByPriority;
+      // הכרעה בין קטעים-חופפים, תואמת את ההתנהגות **האמיתית** בשרת (checkRelayOwnerBlock נבדקת
+      // רק כש-event.action==='OFF' — הדלקה תמיד מצליחה ללא-תנאי, לעולם לא נחסמת, גם לא ע"י עדיפות!):
+      // 1) מעדיפים קטע תחום-ומדויק (לא openEnded) על פני ניחוש-פתוח.
+      // 2) אם יש קטע-הדלקה (isOn) מכסה — הוא **תמיד מנצח**, בלי קשר לעדיפות של אף אחד.
+      // 3) רק אם כולם כיבוי: עדיפות כן משנה (כיבוי-עם-עדיפות מנצח כיבוי-בלי-עדיפות).
+      // 4) בין הנותרים (אותה רמה): מי שמסתיים מאוחר יותר מנצח.
+      const bounded = covering.filter(s => !s.openEnded);
+      const pool0 = bounded.length ? bounded : covering;
+      const onOnes = pool0.filter(s => s.isOn);
+      const pool = onOnes.length ? onOnes : (() => {
+        const priorityOffs = pool0.filter(s => s.priority);
+        return priorityOffs.length ? priorityOffs : pool0;
+      })();
       const chosen = pool.reduce((best, s) => (!best || s.endMs > best.endMs) ? s : best, null);
       result.push({ ...chosen, startMs: segStart, endMs: segEnd });
     }
@@ -5022,7 +5034,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 49;
+BUILD_BOTTOM_MARK = 50;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
