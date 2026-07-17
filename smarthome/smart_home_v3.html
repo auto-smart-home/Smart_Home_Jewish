@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-12-AG (תיקון: מתעלמים מקטעים-חריגים-זעירים (מתחת 7 דק', שאריות-מחזור) בחישוב-היחס - גובה-יום ירד מ-7200 ל-3600px, חפיפה-קלה רק לחריגים הנדירים) -->
+<!-- BUILD_MARKER: v2026-07-12-AI (תיקון: תצוגה-מינימלית לא בדקה עדיפות (priority) בכלל בהכרעה בין קטעים-חופפים, תמיד העדיפה 'דולק' - תוקן להתאים לחוקי checkRelayOwnerBlock האמיתיים בשרת) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 47;
+const BUILD_TOP_MARK = 49;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3480,7 +3480,7 @@ function renderTimelineMinimal(){
             startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
-            progId: p.id, label: p.name, openEnded: isOpenEnded
+            progId: p.id, label: p.name, openEnded: isOpenEnded, priority: !!p.priority
           });
         });
       });
@@ -3492,7 +3492,7 @@ function renderTimelineMinimal(){
             startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : 'duration-end',
-            progId: child.id, label: child.name, openEnded: isOpenEnded
+            progId: child.id, label: child.name, openEnded: isOpenEnded, priority: !!child.priority
           });
         });
       }
@@ -3522,11 +3522,15 @@ function renderTimelineMinimal(){
       const mid = (segStart+segEnd)/2;
       const covering = segs.filter(s => s.startMs<=mid && s.endMs>=segEnd);
       if (!covering.length) continue;
-      // מעדיפים קטע תחום-ומדויק (לא openEnded) על פני קטע-פתוח-בניחוש — אם יש כמה תחומים-מדויקים,
-      // מעדיפים דולק. רק אם כל מה שמכסה כאן הוא openEnded, משתמשים באחד מהם (הכי טוב שיש).
-      const bounded = covering.filter(s => !s.openEnded);
-      const pool = bounded.length ? bounded : covering;
-      const chosen = pool.find(s => s.isOn) || pool[0];
+      // הכרעה בין קטעים-חופפים, תואמת את חוקי-העדיפות האמיתיים (checkRelayOwnerBlock בשרת):
+      // 1) עדיפות מנצחת תמיד, בלי קשר לדולק/כבוי או לזמנים.
+      // 2) בין קטעים באותה רמת-עדיפות: מעדיפים תחום-ומדויק (לא openEnded) על פני ניחוש-פתוח.
+      // 3) בין הנותרים: מי שמסתיים מאוחר יותר "מנצח" (תואם את כלל "מי-שמתוכנן-להסתיים-מאוחר-זוכה").
+      const priorityOnes = covering.filter(s => s.priority);
+      const poolByPriority = priorityOnes.length ? priorityOnes : covering;
+      const bounded = poolByPriority.filter(s => !s.openEnded);
+      const pool = bounded.length ? bounded : poolByPriority;
+      const chosen = pool.reduce((best, s) => (!best || s.endMs > best.endMs) ? s : best, null);
       result.push({ ...chosen, startMs: segStart, endMs: segEnd });
     }
     return result;
@@ -3585,7 +3589,7 @@ function renderTimelineMinimal(){
   // מגביל רק למקסימום, בלי רצפת-מינימום — משמש לחישוב "הגובה הטבעי" ולמתיחה, כדי שהיחס בין בלוק-קצר
   // לבלוק-ארוך יישמר גם אחרי מתיחה (אם קודם נעגל את שניהם לאותו מינימום ורק אז נמתח, הם יישארו זהים).
   const clampPxNoFloor = durMin => Math.min(TL_MIN_BLOCK_MAX_PX, durMin*pxPerMin);
-  const TL_MIN_DAY_VIEWPORT_PX = 700; // "מסך אחד בערך" — תקרת-הגובה המשותפת לכל עמודות אותו יום
+  const TL_MIN_DAY_VIEWPORT_PX = 1400; // "מסך וחצי בערך" — תקרת-הגובה המשותפת לכל עמודות אותו יום
 
   // מפצל קטע לפי גבולות-יום (חיתוך ויזואלי בלבד — אותו kind/isOn/progId/label בשני החלקים),
   // וקובע לכל חלק לאיזה יום (אינדקס ב-dates) הוא שייך.
@@ -3605,31 +3609,53 @@ function renderTimelineMinimal(){
   }
   const relayPerDay = activeRelays.map(({relay,segs}) => ({ relay, perDay: splitByDays(segs) }));
 
-  // יחס-פיקסלים-לדקה **אחד קבוע** (לא תלוי-יום) — יום הוא תמיד 1440 דקות בדיוק, בלי קשר לתוכן, אז
-  // "היום העמוס קובע את היחס" בעצם מתמצה ל"האם 1440 דקות בברירת-המחדל נכנסות ביעד" — וזה קבוע.
-  // הגורם החשוב באמת: מיקום **מוחלט** של כל בלוק לפי זמן-ביום (לא ערימה של גבהים-בזה-אחר-זה) —
-  // זה היחיד שמבטיח שאותה שעה נופלת באותו פיקסל בדיוק בכל עמודה, ושאין "ריק" (המיכל תמיד בגובה
-  // 1440×יחס בדיוק, וכל בלוק ממוקם לפי המקום-האמיתי-בזמן שלו, לא לפי "מה שכבר נערם לפניו").
-  // מוצאים את העמודה-הכי-עמוסה (הכי הרבה קטעים, על פני כל הטווח) — וממנה, לפי הקטע-הקצר-ביותר
-  // *שלה עצמה*, נגזר יחס-פיקסלים-לדקה שמבטיח שגם הקטע הקצר הזה יקבל לפחות את גובה-המינימום —
-  // כלומר שהעמודה הזו לא תחפוף בתוך עצמה. היחס הזה חל על *כל* העמודות (מיקום-מוחלט לפי-זמן —
-  // לא ערימה — מבטיח שאותה שעה תמיד באותו פיקסל, בלי "ריק", ובלי חפיפה בעמודה-הכי-קשה).
-  let busiestSegs = null, busiestCount = -1;
-  activeRelays.forEach(({segs}) => { if (segs.length > busiestCount) { busiestCount = segs.length; busiestSegs = segs; } });
-  // מתעלמים מקטעים-זעירים-חריגים (מתחת ל-7 דקות — לרוב שאריות-מחזור בודדות, לא הדפוס האמיתי) בחישוב
-  // הקטע-הקצר-לצורך-היחס — אחרת חריג נדיר-אחד-בודד מנפח את גובה-היום לאבסורד עבור כולם. אם *כל*
-  // הקטעים חריגים-זעירים (מקרה-קיצון נדיר), חוזרים לקטע-הכי-קצר-בפועל כרשת-ביטחון.
-  const IGNORE_UNDER_MIN = 7;
-  let shortestDurMin = Infinity, shortestIgnoringOutliers = Infinity;
-  if (busiestSegs) busiestSegs.forEach(s => {
-    const dur = (s.endMs-s.startMs)/60000;
-    if (dur > 0 && dur < shortestDurMin) shortestDurMin = dur;
-    if (dur >= IGNORE_UNDER_MIN && dur < shortestIgnoringOutliers) shortestIgnoringOutliers = dur;
-  });
-  if (shortestIgnoringOutliers < Infinity) shortestDurMin = shortestIgnoringOutliers;
-  const neededRatio = (shortestDurMin > 0 && shortestDurMin < Infinity) ? TL_MIN_BLOCK_MIN_PX/shortestDurMin : 0;
-  const GLOBAL_RATIO = Math.max(TL_MIN_PX_PER_HOUR/60, neededRatio);
-  const GLOBAL_ROW_HEIGHT = Math.round(1440*GLOBAL_RATIO);
+  // ═══ דחיסה חכמה מבוססת-נתונים ═══════════════════════════════════════════════════
+  // במקום יחס-ליניארי-אחיד (שמנפח את גובה-היום כי גם 9 שעות "מתות" לגמרי מקבלות אותו יחס
+  // כמו זמן-מחזורים-תכוף) — לכל יום בונים "ציר-זמן-מכווץ" משותף: דקה שבה *שום* ממסר לא עושה
+  // כלום מקבלת דחיסה אגרסיבית; דקה שבה *יש* פעילות (בכל ממסר שהוא) מקבלת קנה-מידה מלא. זה עדיין
+  // ציר-זמן-אחד-משותף לכל העמודות (היישור נשמר), רק שהוא לא-ליניארי במקום ליניארי.
+  const TARGET_MAX_HEIGHT = TL_MIN_DAY_VIEWPORT_PX; // גובה-יעד לכל יום (כ-1.5 מסך)
+  const TEXT_MIN_HEIGHT_PX = 14; // מתחת לזה — קו בלי כיתוב-שעה (רק ריחוף/tooltip)
+  const IGNORE_UNDER_MIN = 7; // קטעים מתחת לזה מתעלמים-מהם בחישוב "הקטע-הקצר-האמיתי" (שאריות-מחזור)
+
+  function buildDayCumMap(daySegsAllRelays){
+    // busy[m] = true אם *איזשהו* קטע-אמיתי (לא פער) מכסה את הדקה הזו, בכל ממסר שהוא
+    const busy = new Array(1440).fill(false);
+    daySegsAllRelays.forEach(segs => segs.forEach(s => {
+      if (s.kind === 'gap') return;
+      const st = Math.max(0, Math.floor((s.startMs - s._dayStart)/60000));
+      const en = Math.min(1440, Math.ceil((s.endMs - s._dayStart)/60000));
+      for (let m = st; m < en; m++) busy[m] = true;
+    }));
+    const busyMin = busy.filter(Boolean).length, quietMin = 1440 - busyMin;
+    // הקטע-הקצר-האמיתי (מתעלמים מחריגים-זעירים) — קובע את היחס הדרוש כדי שלא תהיה חפיפה
+    let shortest = Infinity, shortestIgnoringOutliers = Infinity;
+    daySegsAllRelays.forEach(segs => segs.forEach(s => {
+      if (s.kind === 'gap') return;
+      const dur = (s.endMs-s.startMs)/60000;
+      if (dur > 0 && dur < shortest) shortest = dur;
+      if (dur >= IGNORE_UNDER_MIN && dur < shortestIgnoringOutliers) shortestIgnoringOutliers = dur;
+    }));
+    if (shortestIgnoringOutliers < Infinity) shortest = shortestIgnoringOutliers;
+    const idealBusyRatio = (shortest>0 && shortest<Infinity) ? TL_MIN_BLOCK_MIN_PX/shortest : TL_MIN_PX_PER_HOUR/60;
+    // תקציב: זמן-שקט מקבל יחס-קבוע-זעיר; השאר (התקציב שנשאר) מתחלק על זמן-עסוק. אם גם ה"אידיאלי"
+    // לא מספיק כדי לחרוג מהיעד — פשוט משתמשים בו (אין צורך לדחוס-בכוח יום שממילא לא-עמוס).
+    const QUIET_RATIO = 0.05;
+    const quietBudget = quietMin*QUIET_RATIO;
+    const busyBudget = Math.max(0, TARGET_MAX_HEIGHT - quietBudget);
+    const busyRatio = busyMin>0 ? Math.min(idealBusyRatio, busyBudget/busyMin) : idealBusyRatio;
+    // בונים מיפוי מצטבר: cum[m] = פיקסל מצטבר עד תחילת הדקה m
+    const cum = new Array(1441);
+    cum[0] = 0;
+    for (let m=0; m<1440; m++) cum[m+1] = cum[m] + (busy[m] ? busyRatio : QUIET_RATIO);
+    return { cum, totalHeight: cum[1440], busyRatio };
+  }
+  function mapMinToPx(cum, min){
+    const m0 = Math.floor(min), frac = min-m0;
+    const a = cum[Math.max(0,Math.min(1440,m0))];
+    const b = cum[Math.max(0,Math.min(1440,m0+1))];
+    return a + (b-a)*frac;
+  }
 
   let html = '<div>';
   // שורת-כותרות-הממסרים — במיכל-גלילה-אופקית נפרד משלה (overflow-y:hidden, לא visible — נמנעים
@@ -3672,19 +3698,27 @@ function renderTimelineMinimal(){
       ${badgeHtml}
     </div>`;
 
-    const rowH = GLOBAL_ROW_HEIGHT;
     const dayStartMs = rangeStartMs + dIdx*86400000; // חצות של היום הזה בדיוק
+    // מוסיפים _dayStart לכל קטע (נדרש ע"י buildDayCumMap), ובונים את המיפוי-המצטבר הייעודי ליום הזה
+    const daySegsAllRelays = relayPerDay.map(({perDay}) => {
+      const segs = perDay[dIdx];
+      segs.forEach(s => { s._dayStart = dayStartMs; });
+      return segs;
+    });
+    const { cum, totalHeight } = buildDayCumMap(daySegsAllRelays);
+    const rowH = Math.round(totalHeight);
     html += '<div style="display:flex">';
     relayPerDay.forEach(({relay, perDay}) => {
       const daySegs = perDay[dIdx];
-      // מיקום-מוחלט (לא ערימה!) לפי הזמן-האמיתי-ביום — זה היחיד שמבטיח ששעה X נופלת באותו פיקסל
-      // בדיוק בכל עמודה, ושאין "שטח ריק" (המיכל תמיד בגובה 1440×GLOBAL_RATIO בדיוק, בלי תלות בתוכן).
+      // מיקום-מוחלט לפי המיפוי-המצטבר-הייעודי-ליום (לא ליניארי!) — זמן-עסוק מקבל קנה-מידה מלא,
+      // זמן-שקט-לגמרי-בכל-הממסרים מכווץ אגרסיבית. עדיין ציר-זמן-אחד-משותף לכל העמודות (יישור נשמר).
       html += `<div style="min-width:150px;flex-shrink:0;border-left:1px solid var(--border);height:${rowH}px;position:relative;overflow:visible">`;
       daySegs.forEach((s, si) => {
         const startMinOfDay = (s.startMs - dayStartMs)/60000;
-        const durMin = (s.endMs - s.startMs)/60000;
-        const top = Math.round(startMinOfDay*GLOBAL_RATIO);
-        const h = Math.max(TL_MIN_BLOCK_MIN_PX, Math.round(durMin*GLOBAL_RATIO));
+        const endMinOfDay = (s.endMs - dayStartMs)/60000;
+        const topF = mapMinToPx(cum, startMinOfDay), botF = mapMinToPx(cum, endMinOfDay);
+        const top = Math.round(topF);
+        const h = Math.max(3, Math.round(botF-topF)); // מינימום-חזותי זעיר (3px, רק כדי שהקו יהיה קליק-בילי) — לא 20px, כי עכשיו יש "קו-דק" כחלופה לבלוק-עם-כיתוב
         const startStr = fmtEpochHM(s.startMs);
         let endStr = fmtEpochHM(s.endMs);
         if (endStr === '00:00' && s.endMs > s.startMs) endStr = '24:00'; // סוף-היום, לא התחלתו — מונע "00:00–00:00" מבלבל לקטע שנמשך עד חצות
@@ -3693,7 +3727,10 @@ function renderTimelineMinimal(){
         const cursorStyle = clickable ? 'cursor:pointer' : '';
         const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
         const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
-        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${h>=16?startStr+'–'+endStr:''}</div>`;
+        // מתחת לסף-הכיתוב: קו דק בלי טקסט (רק ריחוף/tooltip מראה את הזמן המדויק) — לא נעלם, לא נדחס-בכוח
+        const showText = h >= TEXT_MIN_HEIGHT_PX;
+        const content = showText ? startStr+'–'+endStr : '';
+        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
       });
       html += '</div>';
     });
@@ -4985,7 +5022,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 47;
+BUILD_BOTTOM_MARK = 49;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
