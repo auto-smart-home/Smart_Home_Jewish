@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-D (תיקון: תצוגה-מינימלית סבלה מאותה בעיית-סינון-גס-ליום שכבר תוקנה בציר-הרגיל - חולצה לפונקציה גלובלית משותפת (progModeActiveAtMs), ויושמה גם על הבת בנפרד ממצב-ההורה) -->
+<!-- BUILD_MARKER: v2026-07-13-E (תיקון-שורש עמוק: קטע-בת confine:false לא נסגר אף פעם, מה שגרם ל'תקוע דולק' לאורך שבוע שלם בתוכניות של יום-בודד (days:[X]) - עכשיו נסגר בסוף-הפעילות-הכוללת-של-ההורה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 53;
+const BUILD_TOP_MARK = 54;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3402,6 +3402,15 @@ function _getRelayEvents(relayId, date, modeId) {
           // אם יש endMin (confine=true) — נסגור אותו בזמן סיום ההפסקה
           if(seg.endMin !== null){
             allEvents.push({min: seg.endMin + offsetMin, state: seg.action!=='ON'});
+          } else if(idx===pairs.length-1 && p.parentProgId){
+            // confine:false, קטע-אחרון — סוגרים בסוף-הפעילות-הכוללת-של-ההורה. בלי זה, הקטע נשאר
+            // "פתוח לנצח" עד ההפעלה-הבאה של התוכנית — שיכולה להיות שבוע שלם קדימה בתוכנית של יום-
+            // בודד (כמו days:[5], "ליל שבת" בלבד) — וגורם למצג-שווא של "דולק רציף" לכל אורך השבוע.
+            const parent = programs.find(x=>x.id===p.parentProgId);
+            if(parent && parent.relay && parent.relay[0]!==undefined){
+              const parentEnd = getRelayEndMin(parent, parent.relay[0]);
+              if(parentEnd !== null) allEvents.push({min: parentEnd + offsetMin, state: seg.action!=='ON'});
+            }
           }
           return;
         }
@@ -5061,7 +5070,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 53;
+BUILD_BOTTOM_MARK = 54;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
