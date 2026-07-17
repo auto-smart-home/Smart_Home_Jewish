@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-C (השלמת-התיקון-הדחוף: אותה בדיקה-מדויקת-לפי-זמן הוחלה גם על תוכניות-מאתמול-חוצות-חצות (carriedOverEnds) - חשוב לשבת עם תזמוני-מצב) -->
+<!-- BUILD_MARKER: v2026-07-13-D (תיקון: תצוגה-מינימלית סבלה מאותה בעיית-סינון-גס-ליום שכבר תוקנה בציר-הרגיל - חולצה לפונקציה גלובלית משותפת (progModeActiveAtMs), ויושמה גם על הבת בנפרד ממצב-ההורה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -971,7 +971,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 52;
+const BUILD_TOP_MARK = 53;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1787,6 +1787,18 @@ function computeModeSegments(fromDate, rangeDays){
 function modeAtTime(segments, ms){
   for(const seg of segments){ if(ms>=seg.startMs && ms<seg.endMs) return seg.modeId; }
   return activeModeId;
+}
+// בדיקה מדויקת-לפי-זמן: תוכנית "רלוונטית ליום" בכללי, אבל **קטע ספציפי שלה** רלוונטי רק אם המצב-
+// שלה בפועל פעיל **בדיוק ברגע שהקטע קורה** (לא רק "רלוונטי איפשהו ביום"). בלי זה, תוכנית-מצב-0
+// "דולפת" לתוך חלון-זמן של מצב-אחר (למשל אחרי תזמון-מצב ל"חוץ לבית"). משמשת גם ציר-הזמן הרגיל
+// וגם המינימלי — שימוש-חוזר, לא כפילות-לוגיקה.
+function progModeActiveAtMs(p, atMs, daySegments){
+  const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
+  if(!daySegments || !daySegments.length) return modeIds.includes(activeModeId);
+  let m = null;
+  try { m = modeAtTime(daySegments, atMs); } catch(e) { m = null; }
+  if(m===null) return modeIds.includes(activeModeId);
+  return modeIds.includes(m);
 }
 
 function updateZmanimBarExtras(){
@@ -3103,17 +3115,8 @@ function getTimeBlocksForDate(date, daySegments){
     const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
     return modeIds.some(mid=>relevantModes.has(mid));
   });
-  // בדיקה מדויקת-לפי-זמן: תוכנית "רלוונטית ליום" (dayProgs) בכללי, אבל **קטע ספציפי שלה** נכלל רק
-  // אם המצב-שלה בפועל פעיל **בדיוק ברגע שהקטע הזה קורה** (לא רק "רלוונטי איפשהו ביום"). בלי זה,
-  // תוכנית-מצב-0 "דולפת" גם לתוך חלון-הזמן שבו תזמון-מצב כבר העביר למצב אחר (למשל "חוץ לבית").
-  function progSegActiveAt(p, atMs){
-    const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
-    if(!daySegments || !daySegments.length) return modeIds.includes(activeModeId);
-    let m = null;
-    try { m = modeAtTime(daySegments, atMs); } catch(e) { m = null; }
-    if(m===null) return modeIds.includes(activeModeId);
-    return modeIds.includes(m);
-  }
+  // הערה: הבדיקה-המדויקת-לפי-זמן (progModeActiveAtMs) הועברה לפונקציה גלובלית משותפת עם התצוגה
+  // המינימלית (ראו למעלה, ליד modeAtTime) — לא כפילות-לוגיקה נפרדת כאן יותר.
   const dateKey=ilDateKey(date);
   const dayManual=manualEvents.filter(e=>e.date===dateKey); // ← אירועים ידניים/IVR של היום הזה
 
@@ -3134,7 +3137,7 @@ function getTimeBlocksForDate(date, daySegments){
           // בדיקה מדויקת-לפי-זמן: המצב-של-התוכנית-הזו חייב להיות פעיל בפועל ברגע-הכיבוי (אחרי
           // חציית-החצות, בתוך היום הנוכחי) — לא רק "רלוונטי איפשהו ביום" (אותה בעיה כמו למעלה,
           // חשובה במיוחד לתוכניות-שבת-חוצות-חצות עם תזמון-מצב).
-          if(!progSegActiveAt(p, dayStart+endMinToday*60000)) return;
+          if(!progModeActiveAtMs(p, dayStart+endMinToday*60000, daySegments)) return;
           carriedOverEnds.push({p, rId, endMin: endMinToday, segAction: seg.action});
         }
       });
@@ -3164,7 +3167,7 @@ function getTimeBlocksForDate(date, daySegments){
     p.relay.forEach((rId)=>{
       getRelayEventPairs(p,rId).forEach(seg=>{
         const fireM=Math.floor(seg.fireMin);
-        if(!progSegActiveAt(p, dayStart+fireM*60000)) return; // המצב-של-התוכנית-הזו לא פעיל ברגע הזה בפועל
+        if(!progModeActiveAtMs(p, dayStart+fireM*60000, daySegments)) return; // המצב-של-התוכנית-הזו לא פעיל ברגע הזה בפועל
         if(fireM>=0&&fireM<=1440) mins.add(fireM);
         if(seg.endMin!==null){
           // עיגול כלפי מעלה (לא מטה!) — אחרת שני ממסרים באותה תוכנית עם delay, שמסתיימים בתוך אותה
@@ -3190,7 +3193,7 @@ function getTimeBlocksForDate(date, daySegments){
     const s=sorted[i],e=sorted[i+1];
     const hasProg=dayProgs.some(p=>p.relay.some(rId=>
       getRelayEventPairs(p,rId).some(seg=>{
-        if(!progSegActiveAt(p, dayStart+Math.floor(seg.fireMin)*60000)) return false;
+        if(!progModeActiveAtMs(p, dayStart+Math.floor(seg.fireMin)*60000, daySegments)) return false;
         const m=Math.floor(seg.fireMin);
         if(m>=s&&m<e)return true;
         return seg.endMin!==null&&Math.ceil(seg.endMin)>=s&&Math.ceil(seg.endMin)<e;
@@ -3494,10 +3497,14 @@ function renderTimelineMinimal(){
 
     programs.filter(p => p.active && !p.parentProgId && progAppliesOnDate(p, dayDate)).forEach(p => {
       const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
-      if (!modeIds.some(mid => relevantModes.has(mid))) return;
+      if (!modeIds.some(mid => relevantModes.has(mid))) return; // סינון-גס-מהיר (יעילות) — הבדיקה המדויקת היא לכל קטע בנפרד, מיד למטה
       p.relay.forEach(rId => {
         if (!relaySegs[rId]) return;
         getRelayEventPairs(p, rId).forEach(seg => {
+          // בדיקה מדויקת-לפי-זמן: הקטע הזה נכלל רק אם המצב-של-התוכנית-בפועל פעיל **בדיוק ברגע-
+          // ההדלקה** שלו (לא רק "רלוונטי איפשהו ביום") — אחרת תוכנית-מצב-0 דולפת לתוך חלון-זמן
+          // של מצב-אחר (בדיוק כמו שתוקן בציר-הזמן הרגיל).
+          if (!progModeActiveAtMs(p, dayStart + seg.fireMin*60000, modeSegments)) return;
           // בלוק-פתוח-ללא-סוף (למשל childConfine:false) — לא מדלגים! מכסים עד סוף-הטווח כברירת-מחדל,
           // ומסמנים openEnded כדי שהשטחת-החפיפות תעדיף קטע-תחום-ומדויק על פניו כשיש כזה, אבל עדיין
           // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
@@ -3513,6 +3520,7 @@ function renderTimelineMinimal(){
       const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
       if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
         getRelayEventPairs(child, child.relay[0]).forEach(seg => {
+          if (!progModeActiveAtMs(child, dayStart + seg.fireMin*60000, modeSegments)) return;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[child.relay[0]].push({
             startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
@@ -5053,7 +5061,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 52;
+BUILD_BOTTOM_MARK = 53;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
