@@ -1009,9 +1009,13 @@ function getZmanim(date) {
   const chatzotStr = (sunriseMin !== null && sunsetMin !== null)
     ? `${String(Math.floor(Math.round((sunriseMin + sunsetMin) / 2) / 60)).padStart(2, '0')}:${String(Math.round((sunriseMin + sunsetMin) / 2) % 60).padStart(2, '0')}`
     : null;
+  // הדלקת נרות: אין שדה ייעודי בקובץ הלוח — קבוע 22 דקות לפני השקיעה של אותו יום (לא זמן-השקיעה עצמו!)
+  const candlesStr = (candlesOk && sunsetMin !== null)
+    ? `${String(Math.floor((sunsetMin - 22 + 1440) % 1440 / 60)).padStart(2, '0')}:${String((sunsetMin - 22 + 1440) % 1440 % 60).padStart(2, '0')}`
+    : null;
   return {
     sunrise: entry['נץ החמה'], sunset: entry['שקיעה'],
-    candles: candlesOk ? entry['שקיעה'] : null,
+    candles: candlesStr,
     havdalah: havdalahOk ? entry['מוצאי שבת'] : null,
     tzeit: entry['צאת הכוכבים'],
     alotHaShachar: entry['עלות השחר'], minchaGedola: entry['מנחה גדולה'], rabeinuTam: entry['רבינו תם'],
