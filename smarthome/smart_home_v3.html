@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-H (תיקון: findNextModeTransitionAwayMs עכשיו בודקת גם חזרה-אוטומטית-אחרי-משך (durationOn) של רשומת-תזמון-מצב יחידה, לא רק רשומה-נפרדת עם toModeId אחר) -->
+<!-- BUILD_MARKER: v2026-07-13-I (תיקון-שורש: findNextModeTransitionAwayMs פספסה תזמון-שהופעל 'אתמול' (למשל שישי) כשfromMs כבר על המחר (קטע-בת שחצה חצות) - עכשיו סורקת גם יומיים אחורה, לא רק קדימה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 57;
+const BUILD_TOP_MARK = 58;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1676,7 +1676,10 @@ function getZmanMinutesForDateSM(zmanVal, dayDate){
 function findNextModeTransitionAwayMs(fromMs, excludeModeIds, maxDaysForward){
   let best = null;
   const fromDate0 = new Date(fromMs);
-  for(let d=0; d<=(maxDaysForward||14); d++){
+  // מתחילים יומיים *לפני* fromMs, לא רק ממנו — כי קטע-בת עשוי לחצות חצות (fromMs כבר נופל על המחר
+  // בזמן-מוחלט), ואז רשומת-תזמון שהופעלה "אתמול" (למשל יום שישי) עם חזרה-אוטומטית-אחרי-משך עדיין
+  // רלוונטית (הרגע-בו-היא-חוזרת יכול עדיין להיות אחרי fromMs, גם אם רגע-ההפעלה-שלה לפניו).
+  for(let d=-2; d<=(maxDaysForward||14); d++){
     const dayDate = new Date(fromDate0); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
     const di = dayDate.getDay();
     (_scheduledModes||[]).forEach(sm=>{
@@ -5136,7 +5139,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 57;
+BUILD_BOTTOM_MARK = 58;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
