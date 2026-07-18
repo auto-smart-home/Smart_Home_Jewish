@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-A (תיקון-שורש בתצוגה-המינימלית: קטע-פתוח (openEnded, childConfine:false) נמתח עד rangeEndMs בלי-תלות-במעבר-מצב - תוכנית-ממצב-ישן 'דלפה' חזותית לתוך חלון-זמן-של-מצב-חדש. נוספה capOpenEndedMs שעוצרת בסוף מקטע-המצב הרלוונטי) -->
+<!-- BUILD_MARKER: v2026-07-19-B (תיקון-שורש נוסף בתצוגה-המינימלית: כששני-אחים-שונים (למשל confine:false + confine:true) חולקים ממסר, אימות-stateAt של קטע-פתוח נכשל כי getRelayStateAtTime מניחה ציר-אירועים-רציף-אחד, לא כמה-תביעות-עצמאיות. נוספה skipVerificationEntirely כשיש 2+ תוכניות-שונות על אותו ממסר) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 62;
+const BUILD_TOP_MARK = 63;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3694,7 +3694,11 @@ function renderTimelineMinimal(){
         return priorityOffs.length ? priorityOffs : pool0;
       })();
       const chosen = pool.reduce((best, s) => (!best || s.endMs > best.endMs) ? s : best, null);
-      result.push({ ...chosen, startMs: segStart, endMs: segEnd });
+      // hadCompetition: הייתה כאן יותר מתביעה-אחת על הזמן-הזה (למשל אח confine:true על אותו ממסר) —
+      // ואז ההכרעה כבר בוצעה נכון (לפי הכללים למעלה), ואין צורך/כדאי לאמת שוב מול stateAt בהמשך —
+      // stateAt (getRelayStateAtTime) מניחה "ציר-אירועים-רציף-אחד", לא "כמה תביעות-עצמאיות-על-אותו
+      // ממסר", ועלולה לתת תשובה שגויה (למשל: כיבוי-של-אח-שכן לא אומר שהאח-השני-פסק-לתבוע "דלוק").
+      result.push({ ...chosen, startMs: segStart, endMs: segEnd, hadCompetition: covering.length>1 });
     }
     return result;
   }
@@ -3703,6 +3707,13 @@ function renderTimelineMinimal(){
   relays.forEach(r => {
     let segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
     if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
+    // אם על הממסר-הזה יש קטעים-פתוחים (openEnded) מ**יותר-מתוכנית-אחת** (למשל שני-אחים שונים חולקים
+    // ממסר) — stateAt (getRelayStateAtTime) לא יודעת להתמודד עם "כמה תביעות-עצמאיות-על-אותו-ממסר"
+    // בעיקרון (היא מניחה ציר-אירועים-רציף-אחד) — מדלגים על אימות-מולה לגמרי לכל קטעי ה-openEnded
+    // כאן, לא רק בנקודות-הספציפיות-שבהן הם חופפים-ברגע-הבדיקה (כי קטע-אח-שכבר-הסתיים באותה-נקודה
+    // עדיין "שייך לאותה סיטואציית-שיתוף", גם אם ברגע הזה הוא לא-חופף-טכנית).
+    const openEndedProgIds = new Set(segs.map(s=>s.progId));
+    const skipVerificationEntirely = openEndedProgIds.size > 1;
     segs.sort((a,b) => a.startMs - b.startMs);
     segs = flattenOverlaps(segs);
     // בודק את המצב-בפועל של הממסר ברגע נתון (כולל לוקבאק/רקע) — אותה פונקציה שהתצוגה הרגילה כבר
@@ -3723,10 +3734,11 @@ function renderTimelineMinimal(){
       // לקטע openEnded (ניחוש-בלבד, מ-childConfine:false וכדומה) מוודאים את isOn מול המצב-האמיתי —
       // קטע תחום-ומדויק (isEndEvent/off-action רגילים) נשאר מהימן כפי שהוא, בלי לבדוק מחדש.
       if (en > st) {
-        if (s.openEnded) {
-          // קטע-פתוח (מ-childConfine:false וכדומה) "מנחש" שהוא נשאר באותו מצב עד סוף-הטווח. אם
-          // בדיקת-המצב-האמיתי (stateAt) מגלה שהניחוש שגוי כאן — לא משאירים את זה מיוחס/לחיץ לתוכנית
-          // שהניחוש שלה נכשל; הופכים לפער אנונימי (בלי שם, בלי לחיצה), רק הצבע-הנכון נשאר.
+        if (s.openEnded && !s.hadCompetition && !skipVerificationEntirely) {
+          // קטע-פתוח (מ-childConfine:false וכדומה) "מנחש" שהוא נשאר באותו מצב עד סוף-הטווח, **בלי**
+          // שהייתה כאן הכרעה-מול-קטע-מתחרה-אחר (אחרת ההכרעה כבר נכונה, ואין טעם לאמת שוב מול stateAt
+          // — ראו הסבר ב-hadCompetition למעלה). אם בדיקת-המצב-האמיתי מגלה שהניחוש-הבלתי-מתחרה הזה
+          // שגוי — לא משאירים את זה מיוחס/לחיץ לתוכנית שהניחוש שלה נכשל; הופכים לפער אנונימי.
           const actualIsOn = stateAt((st+en)/2);
           if (actualIsOn !== s.isOn) {
             filled.push({ startMs: st, endMs: en, isOn: actualIsOn, kind: 'gap', progId: null, label: '' });
@@ -5185,7 +5197,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 62;
+BUILD_BOTTOM_MARK = 63;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
