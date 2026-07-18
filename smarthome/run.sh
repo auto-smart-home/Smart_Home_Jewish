@@ -18,13 +18,50 @@ export YEMOT_API_TOKEN
 export YEMOT_API_LINK_URL
 export PORT=3000
 
-# עדכון אוטומטי מ-GitHub בכל הפעלה
+# ── עדכון אוטומטי מ-GitHub בכל הפעלה — עמיד-בפני-כשל-רשת ──────────────────────
+# בעיה שהתגלתה בפועל: מיד אחרי הפסקת-חשמל, ה-add-on עולה (boot: auto עובד נכון), אבל
+# האינטרנט-בפועל (הראוטר) עוד לא התחבר-מחדש כשה-wget רץ. wget -O כותב *ישירות* לקובץ-
+# היעד תוך-כדי ההורדה — אם ההורדה נכשלת-באמצע, היא משאירה קובץ-חלקי/ריק *במקום* הגרסה-
+# הטובה-שהייתה-שם, והשרת ממשיך לרוץ על הקובץ השבור הזה (כי set -e לא נתפס, בגלל ה-||).
+# התיקון: מורידים לקובץ-זמני, מוודאים שההורדה הצליחה *וגם* שהקובץ סביר-בגודלו (לא-ריק/
+# חלקי), ורק-אז מחליפים את הקובץ-האמיתי. אם זה נכשל אחרי כמה נסיונות — משאירים את מה
+# שכבר יש בדיסק (עדיף גרסה-ישנה-אבל-תקינה על פני גרסה-חדשה-אבל-שבורה), וממשיכים להפעיל.
+download_with_retry() {
+  target="$1"
+  url="$2"
+  min_size="$3"
+  tmp="${target}.tmp"
+  attempt=1
+  max_attempts=5
+  while [ $attempt -le $max_attempts ]; do
+    if wget -q -O "$tmp" "$url" 2>/dev/null; then
+      actual_size=$(wc -c < "$tmp" 2>/dev/null || echo 0)
+      if [ "$actual_size" -ge "$min_size" ]; then
+        mv "$tmp" "$target"
+        echo "✅ $(basename "$target") עודכן (${actual_size} bytes, נסיון ${attempt})"
+        return 0
+      else
+        echo "⚠️ $(basename "$target") הורד אבל קטן-מדי (${actual_size} bytes < ${min_size}) — כנראה הורדה-חלקית, מנסה שוב..."
+      fi
+    else
+      echo "⚠️ $(basename "$target") נכשל בהורדה (נסיון ${attempt}/${max_attempts})"
+    fi
+    rm -f "$tmp"
+    attempt=$((attempt + 1))
+    [ $attempt -le $max_attempts ] && sleep 3
+  done
+  echo "❌ $(basename "$target") — כל הנסיונות נכשלו, נשארים עם הגרסה-הקיימת-בדיסק (לא מוחלפת בקובץ-שבור)"
+  return 1
+}
+
 if [ -n "$GITHUB_REPO" ]; then
   BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/smarthome"
   echo "🔄 מוריד קבצים עדכניים מ-GitHub: ${GITHUB_REPO}..."
   TS=$(date +%s)
-  wget -q -O /app/smart_home_v3.html "${BASE_URL}/smart_home_v3.html?ts=${TS}" && echo "✅ smart_home_v3.html עודכן" || echo "⚠️ לא הצליח להוריד HTML"
-  wget -q -O /app/index.js "${BASE_URL}/index.js?ts=${TS}" && echo "✅ index.js עודכן" || echo "⚠️ לא הצליח להוריד index.js"
+  # min_size: סף-סביר-לזיהוי-הורדה-חלקית — הקבצים האמיתיים גדולים בהרבה (מאות-KB), אז
+  # אפילו סף-נמוך-יחסית (10KB) מספיק כדי לתפוס "כמעט-ריק"/"אמצע-הורדה-שנקטעה".
+  download_with_retry /app/smart_home_v3.html "${BASE_URL}/smart_home_v3.html?ts=${TS}" 10000
+  download_with_retry /app/index.js "${BASE_URL}/index.js?ts=${TS}" 5000
 fi
 
 echo "🚀 מפעיל שרת בית חכם..."
