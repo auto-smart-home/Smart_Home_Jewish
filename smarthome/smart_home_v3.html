@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-L (תיקון-שורש: getModeRevertMsIfEnded סרקה רק מ-d=-1 (אתמול), לא כללה d=0 (היום) - כניסת-המצב-של-היום-עצמו התפספסה, ובטעות נמצאה כניסה-ישנה-משבוע-שעבר (שכבר חזרה) במקומה, מה שגרם לממסר-15 להיראות כבוי בטעות מוקדם-מדי) -->
+<!-- BUILD_MARKER: v2026-07-19-A (תיקון-שורש בתצוגה-המינימלית: קטע-פתוח (openEnded, childConfine:false) נמתח עד rangeEndMs בלי-תלות-במעבר-מצב - תוכנית-ממצב-ישן 'דלפה' חזותית לתוך חלון-זמן-של-מצב-חדש. נוספה capOpenEndedMs שעוצרת בסוף מקטע-המצב הרלוונטי) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 61;
+const BUILD_TOP_MARK = 62;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3595,6 +3595,15 @@ function renderTimelineMinimal(){
   try { modeSegments = computeModeSegments(dates[0], dates.length); } catch(e) { modeSegments = []; }
   const rangeStartMs = dates[0].getTime();
   const rangeEndMs = dates[dates.length-1].getTime() + 86400000;
+  // קטע-פתוח (openEnded, למשל childConfine:false) לא יכול "לדלוף" דרך מעבר-מצב — הוא חייב להיעצר
+  // לא רק ב-rangeEndMs, אלא גם בסוף מקטע-המצב שמכיל את רגע-הירי שלו (אחרת תוכנית-ממצב-אחר ממשיכה
+  // "לנצח" חזותית גם אחרי שהתזמון עבר למצב-אחר, כי אין לה מתחרה-תחום-ומדויק בכל רגע).
+  function capOpenEndedMs(atMs){
+    for(const seg of modeSegments){
+      if(atMs >= seg.startMs && atMs < seg.endMs) return Math.min(rangeEndMs, seg.endMs);
+    }
+    return rangeEndMs;
+  }
 
   const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
   relays.forEach(r => relaySegs[r.id] = []);
@@ -3625,7 +3634,7 @@ function renderTimelineMinimal(){
           // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[rId].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? capOpenEndedMs(dayStart + seg.fireMin*60000) : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
             progId: p.id, label: p.name, openEnded: isOpenEnded, priority: !!p.priority
@@ -3638,7 +3647,7 @@ function renderTimelineMinimal(){
           if (!progModeActiveAtMs(child, dayStart + seg.fireMin*60000, modeSegments)) return;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[child.relay[0]].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? capOpenEndedMs(dayStart + seg.fireMin*60000) : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : 'duration-end',
             progId: child.id, label: child.name, openEnded: isOpenEnded, priority: !!child.priority
@@ -5176,7 +5185,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 61;
+BUILD_BOTTOM_MARK = 62;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
