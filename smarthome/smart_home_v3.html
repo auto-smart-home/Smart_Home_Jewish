@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-G (דיוק-משמעותי: קטע-בת confine:false נסגר עכשיו לפי מעבר-המצב-הבא-בפועל (תזמוני-מצב אמיתיים) - לא לפי סוף-פעילות-ההורה שהיה ניחוש-קירוב בלבד, לא מנגנון-אמיתי) -->
+<!-- BUILD_MARKER: v2026-07-13-H (תיקון: findNextModeTransitionAwayMs עכשיו בודקת גם חזרה-אוטומטית-אחרי-משך (durationOn) של רשומת-תזמון-מצב יחידה, לא רק רשומה-נפרדת עם toModeId אחר) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 56;
+const BUILD_TOP_MARK = 57;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1681,15 +1681,21 @@ function findNextModeTransitionAwayMs(fromMs, excludeModeIds, maxDaysForward){
     const di = dayDate.getDay();
     (_scheduledModes||[]).forEach(sm=>{
       if(!sm.active) return;
-      if(excludeModeIds.includes(sm.toModeId)) return; // מעבר *לתוך* המצב הזה עצמו — לא רלוונטי, אנחנו מחפשים מעבר *ממנו*
       if(sm.days && sm.days.length && !sm.days.includes(di)) return;
       let minOfDay = null;
       if(sm.type==='time'){ minOfDay = timeStrToMinutesLocal(sm.time); }
       else { minOfDay = getZmanMinutesForDateSM(sm.zman, dayDate); if(minOfDay!==null) minOfDay += (sm.offsetDir==='-'?-1:1)*(sm.offsetVal||0); }
       if(minOfDay===null) return;
-      const candMs = dayDate.getTime() + minOfDay*60000;
-      if(candMs<=fromMs) return;
-      if(best===null || candMs<best) best=candMs;
+      const fireMs = dayDate.getTime() + minOfDay*60000;
+      if(!excludeModeIds.includes(sm.toModeId)){
+        // מעבר-ישיר-לתוך-מצב-אחר (לא המצב-הנבדק) — מועמד-סגירה ישיר
+        if(fireMs>fromMs && (best===null || fireMs<best)) best=fireMs;
+      } else if(sm.durationOn && (sm.durationH||sm.durationM)){
+        // רשומה שמעבירה *לתוך* המצב-הנבדק, אבל עם חזרה-אוטומטית-משלה אחרי משך — ברגע-החזרה
+        // (לא ברגע-הכניסה) המצב משתנה בפועל למשהו-אחר, וזה בדיוק מה שבאמת סוגר את הממסר
+        const revertMs = fireMs + ((sm.durationH||0)*60+(sm.durationM||0))*60000;
+        if(revertMs>fromMs && (best===null || revertMs<best)) best=revertMs;
+      }
     });
   }
   return best;
@@ -5130,7 +5136,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 56;
+BUILD_BOTTOM_MARK = 57;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
