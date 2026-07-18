@@ -8,10 +8,18 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 
+// ══ DEBUG ONLY — הזחת-זמן ממוקדת ללוגיקת-התזמון בלבד, לא נוגעת ב-Date הגלובלי ══════════════════
+// (לא לגעת ב-Date הגלובלי! MQTT/Socket.io/HTTPS מסתמכים על שעון-אמיתי — פאץ' גלובלי ישבור אותם.)
+// לקבוע DEBUG_OFFSET_MS לפער הרצוי (במילישניות) בין "עכשיו-אמיתי" ל"עכשיו-מדומה". דוגמה: קפיצה
+// קדימה 2 שעות ו-11 דקות: (2*60*60*1000)+(11*60*1000). אפס = בלי הזחה בכלל (מצב-רגיל).
+// **להסיר/לאפס (0) לפני פרודקשן!**
+const DEBUG_OFFSET_MS = 0;
+function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
+
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 8;
+const IDX_TOP_MARK = 9;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -639,7 +647,7 @@ io.on('connection', (socket) => {
   // זמנים הלכתיים אמיתיים של היום — מאותו מקור-אמת שהשרת עצמו משתמש בו לתזמון בפועל.
   // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
   // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
-  socket.emit('zmanim_today', getZmanim(new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
+  socket.emit('zmanim_today', getZmanim(new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }))));
   // מידע על טיימר-חזרה ממתין (אם יש) — כדי שלקוח שנטען באמצע הספירה-לאחור יראה מיד את המידע הנכון
   socket.emit('pending_mode_revert', _pendingRevertInfo);
   // סימוני-בנייה (ראו הסבר ליד IDX_TOP_MARK) — כדי שהלקוח יוכל להציג את שלמות-שני-הקבצים יחד
@@ -819,7 +827,7 @@ io.on('connection', (socket) => {
       activateProgIds.forEach(progId => {
         // filter — תוכנית יכולה לכלול מספר ממסרים
         const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
-        const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
+        const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
         matches.forEach(match => {
           publishRelay(match.relayId, 'ON').then(() => {
             relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
@@ -1135,7 +1143,7 @@ function computeTodayEvents(nowIL,zmanim,dow,todayKey){
   return events;
 }
 
-function getNowSecIL(){const n=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));return n.getHours()*3600+n.getMinutes()*60+n.getSeconds();}
+function getNowSecIL(){const n=new Date(debugNow().toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));return n.getHours()*3600+n.getMinutes()*60+n.getSeconds();}
 
 function checkAckAndFireChild(event,todayKey){
   const expected=event.ackExpected;
@@ -1287,7 +1295,7 @@ function fireEvent(event,todayKey){
 
 async function schedulerTick(){
   if(!schedulerPrograms.length) return;
-  const now=new Date();
+  const now=debugNow();
   const nowIL=new Date(now.toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));
   const nowSec=nowIL.getHours()*3600+nowIL.getMinutes()*60+nowIL.getSeconds();
   const todayKey=nowIL.toDateString();
@@ -1393,7 +1401,7 @@ function commitAutoModeSwitch(newModeId, label) {
       }).catch(() => {});
     });
     // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
-    const _catchupTodayKey = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
+    const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
     (impact.missedPrograms || []).forEach(m => {
       publishRelay(m.relayId, 'ON').then(() => {
         relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
@@ -1423,7 +1431,7 @@ function commitAutoModeSwitch(newModeId, label) {
 
 // גרסה גלובלית של computeModeSwitchImpact (לא בתוך io.on)
 function computeModeSwitchImpactGlobal(newModeId) {
-  const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const nowIL = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
   const nowSec = getNowSecIL();
   const todayKey = nowIL.toDateString();
   const staleRelays = [];
@@ -1506,7 +1514,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
 function processScheduledModes() {
   if (!scheduledModes.length) return;
   try {
-    const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const nowIL = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
     const nowSec = getNowSecIL();
     const dow = nowIL.getDay();
     const todayKey = nowIL.toDateString();
@@ -1682,4 +1690,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 8;
+const IDX_BOTTOM_MARK = 9;
