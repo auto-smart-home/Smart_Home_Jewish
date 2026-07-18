@@ -1,5 +1,5 @@
 name: "Smart Home Jewish"
-version: "1.0.0"
+version: "1.0.1"
 slug: "smarthome_jewish"
 description: "ממשק בקרה לבית חכם — עם תיזמון עברי ו-Home Assistant"
 url: "https://github.com/auto-smart-home/Smart_Home_Jewish"
