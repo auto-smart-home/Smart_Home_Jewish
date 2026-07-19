@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-E (תיקון-שורש אמיתי: renderTimeline() הייתה עושה return מוקדם ב-minimalViewMode, לפני איפוס _relayEventsCache - הקאש אף פעם לא התאפס בתצוגה המינימלית, אז getRelayStateAtTime החזירה תשובות-ישנות אחרי הפעלה/השבתה של תוכניות. עכשיו מאפסים גם שם) -->
+<!-- BUILD_MARKER: v2026-07-19-F (שחזור-חלקי-נכון: הוחזרו capOpenEndedMs + הרחבת-computeModeSegments-ליום-לפני + מיזוג-קטעי-confine:false - אלה תיקנו בעיה אמיתית ונפרדת (תוכנית-מצב-אחר-דולפת-מיום-לפני-הטווח). לא הוחזרו hadCompetition/hasSiblingOverlap - נשאר פער-אנונימי-קוסמטי (בלי-תווית) במקרי-שיתוף-ממסר, ידוע ולא-מטעה) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 66;
+const BUILD_TOP_MARK = 67;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3591,10 +3591,23 @@ function fmtEpochHM(ms){
 // לעולם לא ממוזג עם תוכנית אחרת גם אם רציף. עמודות-ממסר בלי שום פעילות בכל הטווח המוצג — מוסתרות.
 function renderTimelineMinimal(){
   const dates = getTlDates();
+  // חשוב: מרחיבים את computeModeSegments יום-אחד-אחורה (בדיוק כמו שהסריקה-עצמה עושה, ראו
+  // dayBeforeRange למטה) — אחרת קטע-בת שיורה ביום-לפני-הטווח (ל"זנב" ממחזוריות, למשל תוכנית
+  // שרצה כל-יום ולא רק בשישי) לא נמצא בכלל בתוך modeSegments, וקטע-פתוח-שלו נופל בטעות ל-
+  // ברירת-המחדל (rangeEndMs — סוף כל הטווח המוצג!) במקום להיעצר נכון במעבר-המצב-האמיתי.
+  const dayBeforeRangeForModes = new Date(dates[0].getTime() - 86400000);
   let modeSegments = [];
-  try { modeSegments = computeModeSegments(dates[0], dates.length); } catch(e) { modeSegments = []; }
+  try { modeSegments = computeModeSegments(dayBeforeRangeForModes, dates.length + 1); } catch(e) { modeSegments = []; }
   const rangeStartMs = dates[0].getTime();
   const rangeEndMs = dates[dates.length-1].getTime() + 86400000;
+  // קטע-פתוח (openEnded, למשל childConfine:false) לא יכול "לדלוף" דרך מעבר-מצב — הוא חייב להיעצר
+  // לא רק ב-rangeEndMs, אלא גם בסוף מקטע-המצב שמכיל את רגע-הירי שלו.
+  function capOpenEndedMs(atMs){
+    for(const seg of modeSegments){
+      if(atMs >= seg.startMs && atMs < seg.endMs) return Math.min(rangeEndMs, seg.endMs);
+    }
+    return rangeEndMs;
+  }
 
 
   const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
@@ -3626,7 +3639,7 @@ function renderTimelineMinimal(){
           // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[rId].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? capOpenEndedMs(dayStart + seg.fireMin*60000) : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
             progId: p.id, label: p.name, openEnded: isOpenEnded, priority: !!p.priority
@@ -3635,15 +3648,31 @@ function renderTimelineMinimal(){
       });
       const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
       if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
-        getRelayEventPairs(child, child.relay[0]).forEach(seg => {
+        const childPairs = getRelayEventPairs(child, child.relay[0]);
+        let mergedOpenEndedPushed = false;
+        childPairs.forEach(seg => {
           if (!progModeActiveAtMs(child, dayStart + seg.fireMin*60000, modeSegments)) return;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
-          relaySegs[child.relay[0]].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
-            isOn: seg.action === 'ON',
-            kind: seg.action === 'ON' ? 'on' : 'duration-end',
-            progId: child.id, label: child.name, openEnded: isOpenEnded, priority: !!child.priority
-          });
+          if (isOpenEnded) {
+            // כל קטעי confine:false (openEnded) של אותה תוכנית-בת נמתחים לאותה נקודת-קצה בדיוק —
+            // ממזגים לקטע-פתוח-אחד-בלבד (מהמחזור-הראשון-שעובר-את-הבדיקה), כדי לא לבלבל את
+            // השטחת-החפיפות עם N קטעים-חופפים-מיותרים.
+            if (mergedOpenEndedPushed) return;
+            mergedOpenEndedPushed = true;
+            relaySegs[child.relay[0]].push({
+              startMs: dayStart + seg.fireMin*60000, endMs: capOpenEndedMs(dayStart + seg.fireMin*60000),
+              isOn: seg.action === 'ON',
+              kind: seg.action === 'ON' ? 'on' : 'duration-end',
+              progId: child.id, label: child.name, openEnded: true, priority: !!child.priority
+            });
+          } else {
+            relaySegs[child.relay[0]].push({
+              startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
+              isOn: seg.action === 'ON',
+              kind: seg.action === 'ON' ? 'on' : 'duration-end',
+              progId: child.id, label: child.name, openEnded: false, priority: !!child.priority
+            });
+          }
         });
       }
     });
@@ -5177,7 +5206,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 66;
+BUILD_BOTTOM_MARK = 67;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
