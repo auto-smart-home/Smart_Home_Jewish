@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-D (שחזור-אחורה: כל תיקוני-B/C בתצוגה-המינימלית (capOpenEndedMs, מיזוג-קטעים, hadCompetition, hasSiblingOverlap, הרחבת-computeModeSegments) הוסרו - התברר שה'באג' המקורי היה טעות-משתמש (תוכנית-בנים-ובנות-שבת-חוץ-לבית מושבתת בפועל), לא באג-קוד. חזרה למצב-היציב מ-v62) -->
+<!-- BUILD_MARKER: v2026-07-19-E (תיקון-שורש אמיתי: renderTimeline() הייתה עושה return מוקדם ב-minimalViewMode, לפני איפוס _relayEventsCache - הקאש אף פעם לא התאפס בתצוגה המינימלית, אז getRelayStateAtTime החזירה תשובות-ישנות אחרי הפעלה/השבתה של תוכניות. עכשיו מאפסים גם שם) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 65;
+const BUILD_TOP_MARK = 66;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3896,7 +3896,7 @@ function renderTimelineMinimal(){
   setTimeout(updateStickyOffsets, 0);
 }
 function renderTimeline(){
-  if (minimalViewMode) { renderTimelineMinimal(); return; }
+  if (minimalViewMode) { _relayEventsCache = {}; _runOnceDateCache = {}; renderTimelineMinimal(); return; }
   _relayEventsCache = {}; // reset per-render cache
   _runOnceDateCache = {}; // reset per-render cache
   initTlDates();
@@ -5177,7 +5177,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 65;
+BUILD_BOTTOM_MARK = 66;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
