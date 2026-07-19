@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 13;
+const IDX_TOP_MARK = 15;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -825,6 +825,31 @@ io.on('connection', (socket) => {
     } catch(e) { console.error('שגיאה בעדכון מצב HA:', e.message); }
   });
 
+  // ── Debug: מצב-בעלות-ממסרים בפועל (קריאה-בלבד, לא נוגע/משנה שום דבר) ──
+  // מיועד לבדיקה מהקונסול: socket.emit('debug_get_relay_owner'); socket.once('debug_get_relay_owner_result', console.log);
+  socket.on('debug_get_relay_owner', () => {
+    const owners = {};
+    Object.keys(relayOwner).forEach(relayIdStr => {
+      const relayId = parseInt(relayIdStr, 10);
+      const o = relayOwner[relayId];
+      const p = schedulerPrograms.find(x => String(x.id) === String(o.progId));
+      owners[relayId] = {
+        relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`,
+        progId: o.progId, progName: o.name, priority: !!o.priority,
+        endSec: o.endSec,
+        programStillExists: !!p,
+        programModeIds: p ? (p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0])) : null,
+        programActive: p ? !!p.active : null,
+        programIsChild: p ? !!p.parentProgId : null,
+      };
+    });
+    socket.emit('debug_get_relay_owner_result', {
+      schedulerActiveModeId,
+      relayOwnerCount: Object.keys(relayOwner).length,
+      owners,
+    });
+  });
+
   // ── Sync Programs ──
   socket.on('sync_programs', ({ programs, activeModeId, relayNames, modes, fullConfig }) => {
     const newIds = new Set((programs || []).map(p => String(p.id)));
@@ -1110,6 +1135,15 @@ function getRelayEventPairs(p, baseMin, relayId) {
   return pairs;
 }
 const CHILD_BUFFER_MIN=0.5;
+
+// כשמנגנון-השלמה (מעבר-מצב, תוכניות-שהוחמצו, boot-reconciliation) צריך לשלוח כמה פקודות-ממסר
+// "בבת אחת" — לא לשלוח את כולן באותו רגע ממש. ברירת-מחדל: 5 שניות בין פקודה לפקודה, כדי למנוע
+// עומס-פתאומי על הבקר/MQTT broker (וסיכון-אמיתי לכשל אם הרבה ממסרים מנסים לפעול בו-זמנית).
+const RELAY_COMMAND_STAGGER_MS = 5000;
+function runStaggered(items, fn, delayMs = RELAY_COMMAND_STAGGER_MS) {
+  (items || []).forEach((item, idx) => { setTimeout(() => fn(item, idx), idx * delayMs); });
+}
+
 function getChildEventPairs(child,parent,parentBaseMin){
   if(!parent) return [];
   const parentRelay=(parent.relay||[])[0];
@@ -1605,17 +1639,17 @@ function commitAutoModeSwitch(newModeId, label) {
     const impact = computeModeSwitchImpactGlobal(newModeId);
     schedulerActiveModeId = newModeId;
     saveConfigLocal();
-    // כבה ממסרים ממצב קודם
-    (impact.staleRelays || []).forEach(r => {
+    // כבה ממסרים ממצב קודם — בפיזור-זמן (לא כולם בבת-אחת)
+    runStaggered(impact.staleRelays, r => {
       publishRelay(r.relayId, 'OFF').then(() => {
         if (relayOwner[r.relayId]) delete relayOwner[r.relayId];
         // חובה לשדר scheduler_fired — זהו האירוע היחיד שגורם לדפדפן לעדכן את מצב הממסר בזמן אמת (ראה fireEvent). בלעדיו הממשק נשאר "תקוע" עד רענון ידני.
         io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב (${r.ownerProgName || 'תוכנית קודמת'})`, relayId: r.relayId, action: 'OFF' });
       }).catch(() => {});
     });
-    // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש
+    // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש — בפיזור-זמן
     const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
-    (impact.missedPrograms || []).forEach(m => {
+    runStaggered(impact.missedPrograms, m => {
       publishRelay(m.relayId, 'ON').then(() => {
         relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
         // אותו תיקון: לשדר scheduler_fired כדי שהדפדפן יראה מיד שהממסר עלה בעקבות ההשלמה
@@ -1947,7 +1981,7 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
 
   let appliedCount = 0;
   const _catchupTodayKey = todayKey;
-  relaysInGap.forEach(relayId => {
+  runStaggered([...relaysInGap], relayId => {
     const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
     if (!relayEvents.length) return;
     relayEvents.sort((a,b) => a._epochMs - b._epochMs);
@@ -2012,7 +2046,7 @@ async function runBootReconciliation() {
       // ריק-לגמרי אחרי הפעלה-מחדש, ואין לה זיכרון-של-מה-היה-דולק לפני הקריסה. בתפעול-רגיל (בלי
       // קריסה) אין צורך בזה כלל — relayOwner אמין שם, ו-staleRelays כבר עושה את זה נכון בעצמה.
       const staleFromOldMode = computeStaleRelaysFromOldMode(originalMode, correctModeNow);
-      staleFromOldMode.forEach(relayId => {
+      runStaggered(staleFromOldMode, relayId => {
         publishRelay(relayId, 'OFF', 'התאמה אחרי הפעלה מחדש — יציאה ממצב קודם').then(() => {
           if (relayOwner[relayId]) delete relayOwner[relayId];
           io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב ${originalMode} (התאמה אחרי הפעלה מחדש)`, relayId, action: 'OFF' });
@@ -2140,4 +2174,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 13;
+const IDX_BOTTOM_MARK = 15;
