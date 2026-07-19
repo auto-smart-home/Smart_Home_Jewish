@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-13-L (תיקון-שורש: getModeRevertMsIfEnded סרקה רק מ-d=-1 (אתמול), לא כללה d=0 (היום) - כניסת-המצב-של-היום-עצמו התפספסה, ובטעות נמצאה כניסה-ישנה-משבוע-שעבר (שכבר חזרה) במקומה, מה שגרם לממסר-15 להיראות כבוי בטעות מוקדם-מדי) -->
+<!-- BUILD_MARKER: v2026-07-13-H (תיקון: findNextModeTransitionAwayMs עכשיו בודקת גם חזרה-אוטומטית-אחרי-משך (durationOn) של רשומת-תזמון-מצב יחידה, לא רק רשומה-נפרדת עם toModeId אחר) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 61;
+const BUILD_TOP_MARK = 57;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1670,43 +1670,13 @@ function getZmanMinutesForDateSM(zmanVal, dayDate){
   if(!field) return null;
   return timeStrToMinutesLocal(entry[field]);
 }
-// בודקת אם מצב-מסוים כבר הסתיים (חזר-אוטומטית-אחרי-משך) לפני checkMs — מוצאת את הכניסה-האחרונה-
-// למצב-הזה (לפני checkMs) ובודקת אם החזרה-האוטומטית-שלה כבר עברה. מחזירה את רגע-החזרה-בפועל (ms),
-// או null אם המצב עדיין לא חזר. בלי זה, קטע-תוכנית שיורה **אחרי** שהמצב-שלו כבר חזר-להיות-לא-פעיל
-// (למשל תוכנית-צהריים-שבת ששייכת ל"חוץ לבית" אבל יורה אחרי שהתזמון כבר חזר ל"רגיל") נחשב בטעות
-// כרלוונטי, כי הבדיקה הרגילה (`modeIds.includes(effMode)`) לא בודקת זמן בכלל.
-function getModeRevertMsIfEnded(modeId, checkMs){
-  let mostRecent = null;
-  for(let d=0; d>=-7; d--){
-    const dayDate = new Date(checkMs); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
-    const di = dayDate.getDay();
-    (_scheduledModes||[]).forEach(sm=>{
-      if(!sm.active || sm.toModeId!==modeId) return;
-      if(sm.days && sm.days.length && !sm.days.includes(di)) return;
-      let minOfDay = null;
-      if(sm.type==='time'){ minOfDay = timeStrToMinutesLocal(sm.time); }
-      else { minOfDay = getZmanMinutesForDateSM(sm.zman, dayDate); if(minOfDay!==null) minOfDay += (sm.offsetDir==='-'?-1:1)*(sm.offsetVal||0); }
-      if(minOfDay===null) return;
-      const fireMs = dayDate.getTime() + minOfDay*60000;
-      if(fireMs>checkMs) return;
-      if(mostRecent===null || fireMs>mostRecent.fireMs) mostRecent = {fireMs, sm};
-    });
-  }
-  if(!mostRecent) return null;
-  const {fireMs, sm} = mostRecent;
-  if(!sm.durationOn || (!sm.durationH && !sm.durationM)) return null;
-  const revertMs = fireMs + ((sm.durationH||0)*60+(sm.durationM||0))*60000;
-  return revertMs<=checkMs ? revertMs : null;
-}
+// מוצאת את המעבר-הבא-בפועל (לפי תזמוני-מצב אמיתיים ב-_scheduledModes) למצב שאינו נכלל ב-excludeModeIds
 // — זה מה ש**באמת** מכבה ממסר בפועל (commitAutoModeSwitch, שיטוף-ממסרים-לא-רלוונטיים בעת מעבר-מצב),
 // בניגוד ל"סוף-הפעילות-של-ההורה" שהוא ניחוש-קירוב-בלבד וללא קשר אמיתי לממסר של תוכנית-הבת.
 function findNextModeTransitionAwayMs(fromMs, excludeModeIds, maxDaysForward){
   let best = null;
   const fromDate0 = new Date(fromMs);
-  // מתחילים יומיים *לפני* fromMs, לא רק ממנו — כי קטע-בת עשוי לחצות חצות (fromMs כבר נופל על המחר
-  // בזמן-מוחלט), ואז רשומת-תזמון שהופעלה "אתמול" (למשל יום שישי) עם חזרה-אוטומטית-אחרי-משך עדיין
-  // רלוונטית (הרגע-בו-היא-חוזרת יכול עדיין להיות אחרי fromMs, גם אם רגע-ההפעלה-שלה לפניו).
-  for(let d=-2; d<=(maxDaysForward||14); d++){
+  for(let d=0; d<=(maxDaysForward||14); d++){
     const dayDate = new Date(fromDate0); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
     const di = dayDate.getDay();
     (_scheduledModes||[]).forEach(sm=>{
@@ -3489,16 +3459,6 @@ function _getRelayEvents(relayId, date, modeId) {
     progs.forEach(p => {
       const pairs = getRelayEventPairs(p,relayId);
       pairs.forEach((seg,idx)=>{
-        const fireAbsMs = date.getTime() + (seg.fireMin + offsetMin)*60000;
-        const revertMs = getModeRevertMsIfEnded(effMode, fireAbsMs);
-        if(revertMs !== null){
-          // המצב כבר חזר לפני שהקטע-הזה בכלל היה יורה בפועל — מדלגים על הקטע-עצמו, אבל מוסיפים
-          // סגירה ברגע-החזרה-בפועל (זה בדיוק מה ש-commitAutoModeSwitch עושה במציאות: כיבוי אמיתי
-          // ברגע-המעבר-בחזרה) — לא סתם מוחקים בלי שום תחליף, אחרת מאבדים את אות-הסגירה לגמרי.
-          const revertMin = (revertMs - date.getTime())/60000;
-          allEvents.push({min: revertMin, state: false});
-          return;
-        }
         allEvents.push({min: seg.fireMin + offsetMin, state: seg.action==='ON'});
         if(seg.segType==='child'){
           // כל בלוק של תוכנית-בת עומד בפני עצמו
@@ -5176,7 +5136,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 61;
+BUILD_BOTTOM_MARK = 57;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
