@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 19;
+const IDX_TOP_MARK = 20;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1501,7 +1501,22 @@ function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
       const d = Math.floor(item.secSinceStart/86400);
       const secWithinDay = item.secSinceStart - d*86400;
       const dispDate = new Date(fromDate.getTime() + d*86400000);
+      const transitionMs = fromDate.getTime() + item.secSinceStart*1000;
       report.push({ time: fmtTime(dispDate, secWithinDay), prog: `🔄 מעבר-מצב מתוזמן`, relay: '—', action: `מצב ${item.toModeId}`, blocked: false, note: 'מעבר-מצב', isModeTransition: true });
+
+      // מדמים בדיוק את מה ש-commitAutoModeSwitch עושה בפועל בכל מעבר-מצב אמיתי — **אותה** פונקציה
+      // (computeModeSwitchImpactGlobal), רק עם "עכשיו" ו"מפת-בעלות" מדומים (רגע-המעבר-בסימולציה,
+      // ו-simOwner שכבר נבנה מהאירועים-שקדמו-לו בציר), לא הזמן/הבעלות-האמיתיים. בלי זה, הסימולציה
+      // לא הראתה את פקודות-הכיבוי-בכניסה-למצב ואת פקודות-ההשלמה-בחזרה — בדיוק מה שדיווחת.
+      const impact = computeModeSwitchImpactGlobal(item.toModeId, { nowMs: transitionMs, ownerMap: simOwner });
+      (impact.staleRelays || []).forEach(r => {
+        delete simOwner[r.relayId];
+        report.push({ time: fmtTime(dispDate, secWithinDay), prog: `כיבוי אוטומטי — יציאה ממצב (${r.ownerProgName || 'תוכנית קודמת'})`, relay: r.relayName, action: 'OFF', blocked: false, note: 'מעבר-מצב' });
+      });
+      (impact.missedPrograms || []).forEach(m => {
+        simOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: !!m.isPriority, endSec: m.endSec };
+        report.push({ time: fmtTime(dispDate, secWithinDay), prog: m.progName, relay: m.relayName, action: 'ON', blocked: false, note: 'השלמה (מעבר-מצב)' });
+      });
       continue;
     }
     const ev = item.ev;
@@ -1735,14 +1750,22 @@ function commitAutoModeSwitch(newModeId, label) {
 }
 
 // גרסה גלובלית של computeModeSwitchImpact (לא בתוך io.on)
-function computeModeSwitchImpactGlobal(newModeId) {
-  const nowIL = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const nowSec = getNowSecIL();
+function computeModeSwitchImpactGlobal(newModeId, opts) {
+  opts = opts || {};
+  // opts.nowMs/opts.ownerMap: קיימים **רק** כדי לאפשר לסימולטור (simulateScheduleRange) להשתמש
+  // באותה פונקציה בדיוק (לא לוגיקה-מקבילה!) על "עכשיו" מדומה ו"מפת-בעלות" מדומה של הסימולציה
+  // עצמה — במקום הזמן-האמיתי/relayOwner-האמיתי. כשלא מסופקים (השימוש הרגיל, commitAutoModeSwitch),
+  // ההתנהגות זהה-לחלוטין למה שהייתה קודם.
+  const nowMs = opts.nowMs !== undefined ? opts.nowMs : debugNow().getTime();
+  const ownerMap = opts.ownerMap || relayOwner;
+  const nowIL = new Date(new Date(nowMs).toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const dayStartMsG = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+  const nowSec = opts.nowMs !== undefined ? Math.round((nowMs - dayStartMsG)/1000) : getNowSecIL();
   const todayKey = nowIL.toDateString();
   const staleRelays = [];
-  for (const relayIdStr of Object.keys(relayOwner)) {
+  for (const relayIdStr of Object.keys(ownerMap)) {
     const relayId = parseInt(relayIdStr, 10);
-    const owner = relayOwner[relayId];
+    const owner = ownerMap[relayId];
     const p = schedulerPrograms.find(x => String(x.id) === String(owner.progId));
     const modeIds = p ? (p.modeIds ?? (p.modeId !== null ? [p.modeId] : [0])) : [];
     if (!modeIds.includes(newModeId)) staleRelays.push({ relayId, relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`, ownerProgName: owner.name });
@@ -2308,4 +2331,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 19;
+const IDX_BOTTOM_MARK = 20;
