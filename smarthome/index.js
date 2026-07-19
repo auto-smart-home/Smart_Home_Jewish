@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 15;
+const IDX_TOP_MARK = 16;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -848,6 +848,50 @@ io.on('connection', (socket) => {
       relayOwnerCount: Object.keys(relayOwner).length,
       owners,
     });
+  });
+
+  // ── Debug: מה אמור להיות דלוק *עכשיו* ומכוח איזו תוכנית — מחושב עצמאית, לא תלוי ב-relayOwner
+  // בכלל (משתמשת ב-computeTodayEvents האמיתית, "האחרון-כרונולוגית-מנצח", בדיוק כמו getRelayStateAtTime
+  // בלקוח). קריאה-בלבד, לא נוגעת/משנה שום דבר.
+  // בקונסול: socket.emit('debug_get_expected_state'); socket.once('debug_get_expected_state_result', console.log);
+  socket.on('debug_get_expected_state', () => {
+    const now = debugNow();
+    const nowIL = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const nowSec = getNowSecIL();
+    const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+    const nowMs = dayStartMs + nowSec*1000;
+
+    const todayKey = nowIL.toDateString();
+    const zmanimToday = getZmanim(nowIL);
+    const eventsToday = computeTodayEvents(nowIL, zmanimToday, nowIL.getDay(), todayKey)
+      .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000 }));
+
+    const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
+    const yDayStartMs = new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime();
+    const yKey = yIL.toDateString();
+    const zmanimY = getZmanim(yIL);
+    const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
+      .map(e => ({ ...e, _epochMs: yDayStartMs + e.fireSec*1000 }));
+
+    const allEvents = [...eventsYesterday, ...eventsToday].filter(e => e._epochMs <= nowMs);
+    const byRelay = {};
+    allEvents.forEach(e => { if (!byRelay[e.relayId]) byRelay[e.relayId] = []; byRelay[e.relayId].push(e); });
+
+    const result = {};
+    Object.keys(byRelay).forEach(relayIdStr => {
+      const relayId = parseInt(relayIdStr, 10);
+      const evs = byRelay[relayIdStr].sort((a,b) => a._epochMs - b._epochMs);
+      const last = evs[evs.length-1];
+      result[relayId] = {
+        relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`,
+        expectedState: last.action,
+        progId: last.progId, progName: last.name,
+        firedAt: new Date(last._epochMs).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }),
+        segType: last.segType, isEndEvent: !!last.isEndEvent,
+        hasRegisteredOwner: !!relayOwner[relayId],
+      };
+    });
+    socket.emit('debug_get_expected_state_result', { now: nowIL.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }), schedulerActiveModeId, expected: result });
   });
 
   // ── Sync Programs ──
@@ -2174,4 +2218,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 15;
+const IDX_BOTTOM_MARK = 16;
