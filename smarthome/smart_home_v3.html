@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-I (המשך-לגרסה-H: הקטע הראשוני-של-איסוף-מועמדים הורחב - קטע-תוכנית נכלל כמועמד אם חלון-הזמן הטבעי שלו חופף *בכלל* מקטע-מצב תואם (overlapsMatchingMode), לא רק אם רגע-ההדלקה-המדויק כבר במצב הנכון. הבדיקה-לפי-תא (מגרסה H) עדיין המקור-היחיד לקביעת מצב+תווית סופית, כך שאין סיכון-דליפה חדש. זה סוגר את הפער האחרון: תוכנית שיורה כמה רגעים לפני מעבר-מצב-אוטומטי (ותופסת "תרמיל" בפועל, בדיוק כמו missedPrograms בשרת) מוצגת עכשיו כקטע רגיל עם שם ותצוגה-לחיצה, לא כפער-אנונימי.) -->
+<!-- BUILD_MARKER: v2026-07-19-J (תיקון-שורש נפרד ומשמעותי: getProgMinutes הסתמכה על serverZmanim בלבד - ערך יחיד המייצג רק "היום" הנוכחי, שיכול להיות null ל-candles/havdalah בכל יום שאינו ערב-שבת/מוצ"ש עצמו. זה גרם לתוכניות-zman (בעיקר candles/havdalah) להיעלם/להיות בזמן שגוי-קשיח (19:20, תוך התעלמות מ-offsetVal!) בכל פעם שנסרק יום שאינו "היום" - גם בתצוגה הרגילה (getTimeBlocksForDate/renderTimeline) וגם במינימלית. תוקן: getProgMinutes/getRelayFireMin/getRelayEndMin/getRelayEventPairs/getChildEventPairs מקבלים כעת refDate אופציונלי ומחשבים לפי getZmanMinutesForDateSM (כמו computeModeSegments כבר עושה) עבור היום-הספציפי-שנסרק בפועל. כל נקודות-הקריאה הרלוונטיות עודכנו להעביר את התאריך שכבר יש להן. נבדק: 0 אי-התאמות מול הרגילה, 0 דליפות, ואירועי candles/havdalah מופיעים נכון גם כש-serverZmanim.candles=null.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 70;
+const BUILD_TOP_MARK = 71;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1946,48 +1946,63 @@ function updateStickyOffsets(){
 function zmanimKeyForZmanClient(zman){
   return {sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',alot_hashachar:'alotHaShachar',chatzot:'chatzot',mincha:'minchaGedola',rabeinuTam:'rabeinuTam'}[zman] || zman;
 }
-function getProgMinutes(p, relayIndex){
+function getProgMinutes(p, relayIndex, refDate){
   // relayIndex: which relay in p.relay[] (for stagger delay). Default 0.
+  // refDate (חדש): התאריך-הספציפי-שנסרק בפועל (למשל "יום שישי הבא", לא "היום"). קריטי לזמנים
+  // תלויי-תאריך כמו candles/havdalah — אלה יכולים להיות null אצל serverZmanim ("זמני-היום-בלבד",
+  // שמגיעים מהשרת) בכל יום שאינו ערב-שבת/מוצ"ש עצמו, גם כשסורקים יום אחר (עתידי) שכן כן רלוונטי.
+  // בלי refDate, שתי תוכניות-candles עם offsetVal שונה היו מקבלות בדיוק אותה שעה שגויה (נפילה
+  // קשיחה ל-19:20, שמתעלמת גם מה-offset עצמו) — וזה בדיוק מה שגרם לתוכניות להיעלם מהציר (גם
+  // הרגיל וגם המינימלי) ביום שאינו "היום" בפועל.
   const ri = relayIndex || 0;
   const delayMin = ri * Math.round((p.delay||0) / 60 * 100) / 100; // seconds → minutes (fractional)
   let base;
   if(p.type==='time'){const[hh,mm]=p.time.split(':').map(Number);base=hh*60+mm;}
   else{
-    const key = zmanimKeyForZmanClient(p.zman);
-    const timeStr = serverZmanim[key];
-    if(!timeStr){
-      // נפילה זמנית — עד שהשרת שולח zmanim_today (בדרך כלל תוך שניות מהחיבור). לא אמור לקרות בפועל.
-      base = 19*60+20;
-    } else {
-      const [hh,mm]=timeStr.split(':').map(Number);
-      base = hh*60+mm + (p.offsetDir==='-'?-1:1)*(p.offsetVal||0);
+    let baseMin = null;
+    if (refDate) {
+      try { baseMin = getZmanMinutesForDateSM(p.zman, refDate); } catch(e) { baseMin = null; }
     }
+    if (baseMin === null || baseMin === undefined) {
+      // נפילה: אין refDate (קריאה ישנה/לא-מעודכנת), או שה-zman הזה לא-נתמך ע"י חישוב-לפי-תאריך
+      // (רק sunset/sunrise/tzeit/dawn/candles/havdalah נתמכים שם) — חוזרים ל-serverZmanim הישן.
+      const key = zmanimKeyForZmanClient(p.zman);
+      const timeStr = serverZmanim[key];
+      if(!timeStr){
+        // נפילה זמנית — עד שהשרת שולח zmanim_today (בדרך כלל תוך שניות מהחיבור). לא אמור לקרות בפועל.
+        baseMin = 19*60+20;
+      } else {
+        const [hh,mm]=timeStr.split(':').map(Number);
+        baseMin = hh*60+mm;
+      }
+    }
+    base = baseMin + (p.offsetDir==='-'?-1:1)*(p.offsetVal||0);
   }
   return base + delayMin;
 }
 // Integer minutes for a specific relay in a program (for block placement)
-function getRelayFireMin(p, relayId){
+function getRelayFireMin(p, relayId, refDate){
   const ri = p.relay.indexOf(relayId);
-  if(ri<0) return getProgMinutes(p,0);
+  if(ri<0) return getProgMinutes(p,0,refDate);
   const delayMin = ri * (p.delay||0) / 60; // seconds → minutes
-  return getProgMinutes(p,0) + delayMin;
+  return getProgMinutes(p,0,refDate) + delayMin;
 }
 // End minute when duration auto-off fires (for relay r in program p)
-function getRelayEndMin(p, relayId){
+function getRelayEndMin(p, relayId, refDate){
   if(!p.durationOn || (!p.durationH && !p.durationM)) return null;
   const durMin = (p.durationH||0)*60 + (p.durationM||0);
-  return getRelayFireMin(p, relayId) + durMin;
+  return getRelayFireMin(p, relayId, refDate) + durMin;
 }
 // מחזירה רשימת זוגות {fireMin,endMin,action} לממסר relayId בתוכנית p.
 // תוכנית רגילה — זוג אחד (כמו getRelayFireMin/getRelayEndMin).
 // תוכנית עם מחזורי הפסקה — זוג לכל מחזור (פעולה X דק' → הפך Y דק'), עד תום ה-duration הכולל.
-function getRelayEventPairs(p, relayId){
+function getRelayEventPairs(p, relayId, refDate){
   // תוכנית-בת (יש parentProgId) — הזמנים נגזרים דינמית מהפסקות ההורה
   if(p.parentProgId){
-    return getChildEventPairs(p);
+    return getChildEventPairs(p, refDate);
   }
-  const start=getRelayFireMin(p,relayId);
-  const totalEnd=getRelayEndMin(p,relayId);
+  const start=getRelayFireMin(p,relayId,refDate);
+  const totalEnd=getRelayEndMin(p,relayId,refDate);
   if(totalEnd===null) return [{fireMin:start,endMin:null,action:p.action}];
   if(!p.cycleOn || !p.cycleOnMin || !p.cycleOffMin){
     return [{fireMin:start,endMin:totalEnd,action:p.action}];
@@ -2020,18 +2035,18 @@ function getRelayEventPairs(p, relayId){
   return pairs;
 }
 // מחזירה את הפסקות (off-segments) של תוכנית p לממסר relayId — לשימוש תוכנית-בת
-function getCycleOffSegments(p, relayId){
-  return getRelayEventPairs(p,relayId).filter(seg=>seg.segType==='off');
+function getCycleOffSegments(p, relayId, refDate){
+  return getRelayEventPairs(p,relayId,refDate).filter(seg=>seg.segType==='off');
 }
 // תוכנית-בת (B) — מחשבת בלוק נפרד לכל הפסקה (off-segment) של תוכנית-האם (A),
 // לפי childTiming (לפני/אחרי) + childOffsetMin, ו-childConfine (הגבלה לזמן ההפסקה).
-function getChildEventPairs(child){
+function getChildEventPairs(child, refDate){
   const parent=programs.find(x=>x.id===child.parentProgId);
   if(!parent) return []; // הורה נמחק — לא מציגים כלום
   const parentRelay=parent.relay[0];
   // חשב off-segments של ההורה ללא קשר ל-active שלו (הבת נגזרת ממבנה ההורה)
   const parentRelayCopy = { ...parent }; // עובד על עותק כדי לא לשנות
-  const offSegs=getRelayEventPairs(parentRelayCopy,parentRelay).filter(seg=>seg.segType==='off');
+  const offSegs=getRelayEventPairs(parentRelayCopy,parentRelay,refDate).filter(seg=>seg.segType==='off');
   if(!offSegs.length) return [];
   const BUFFER_MIN=0.5; // ~30 שניות לפני סוף ההפסקה
   const offsetMin=child.childOffsetMin ?? child.offsetMin ?? 0;
@@ -3224,7 +3239,7 @@ function getTimeBlocksForDate(date, daySegments){
     const modeIds = p.modeIds ?? (p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
     if(!modeIds.some(mid=>relevantModes.has(mid))) return;
     p.relay.forEach(rId=>{
-      getRelayEventPairs(p,rId).forEach(seg=>{
+      getRelayEventPairs(p,rId,yesterday).forEach(seg=>{
         if(seg.endMin!==null && seg.endMin>1440){
           const endMinToday = seg.endMin-1440;
           // בדיקה מדויקת-לפי-זמן: המצב-של-התוכנית-הזו חייב להיות פעיל בפועל ברגע-הכיבוי (אחרי
@@ -3258,7 +3273,7 @@ function getTimeBlocksForDate(date, daySegments){
   });
   dayProgs.forEach(p=>{
     p.relay.forEach((rId)=>{
-      getRelayEventPairs(p,rId).forEach(seg=>{
+      getRelayEventPairs(p,rId,date).forEach(seg=>{
         const fireM=Math.floor(seg.fireMin);
         if(!progModeActiveAtMs(p, dayStart+fireM*60000, daySegments)) return; // המצב-של-התוכנית-הזו לא פעיל ברגע הזה בפועל
         if(fireM>=0&&fireM<=1440) mins.add(fireM);
@@ -3285,7 +3300,7 @@ function getTimeBlocksForDate(date, daySegments){
   for(let i=0;i<sorted.length-1;i++){
     const s=sorted[i],e=sorted[i+1];
     const hasProg=dayProgs.some(p=>p.relay.some(rId=>
-      getRelayEventPairs(p,rId).some(seg=>{
+      getRelayEventPairs(p,rId,date).some(seg=>{
         if(!progModeActiveAtMs(p, dayStart+Math.floor(seg.fireMin)*60000, daySegments)) return false;
         const m=Math.floor(seg.fireMin);
         if(m>=s&&m<e)return true;
@@ -3449,7 +3464,7 @@ function isEndEventSuppressed(p, seg, relayId, scanDate, effMode){
     const otherModeIds = other.modeIds ?? (other.modeId!==null&&other.modeId!==undefined?[other.modeId]:[0]);
     if (!other.active || !otherModeIds.includes(checkMode) || !progAppliesOnDate(other, scanDate)) continue;
     if (!other.relay.includes(relayId)) continue;
-    const otherPairs = getRelayEventPairs(other, relayId);
+    const otherPairs = getRelayEventPairs(other, relayId, scanDate);
     for (const oseg of otherPairs) {
       if (oseg.action !== 'ON') continue;
       if (oseg.endMin === null) continue; // בלי duration כלל — אין כוונה מוגנת, אף פעם לא "בעלים" שחוסם
@@ -3487,7 +3502,7 @@ function _getRelayEvents(relayId, date, modeId) {
       return p.active;
     });
     progs.forEach(p => {
-      const pairs = getRelayEventPairs(p,relayId);
+      const pairs = getRelayEventPairs(p,relayId,scanDate);
       pairs.forEach((seg,idx)=>{
         const fireAbsMs = date.getTime() + (seg.fireMin + offsetMin)*60000;
         const revertMs = getModeRevertMsIfEnded(effMode, fireAbsMs);
@@ -3630,7 +3645,7 @@ function renderTimelineMinimal(){
       if (!modeIds.some(mid => relevantModes.has(mid))) return; // סינון-גס-מהיר (יעילות) — הבדיקה המדויקת היא לכל קטע בנפרד, מיד למטה
       p.relay.forEach(rId => {
         if (!relaySegs[rId]) return;
-        getRelayEventPairs(p, rId).forEach(seg => {
+        getRelayEventPairs(p, rId, dayDate).forEach(seg => {
           const segStartMs = dayStart + seg.fireMin*60000;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           const segEndMs = isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000;
@@ -3649,7 +3664,7 @@ function renderTimelineMinimal(){
       const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
       if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
         const childModeIds = child.modeIds ?? (child.modeId !== null && child.modeId !== undefined ? [child.modeId] : [0]);
-        getRelayEventPairs(child, child.relay[0]).forEach(seg => {
+        getRelayEventPairs(child, child.relay[0], dayDate).forEach(seg => {
           const segStartMs = dayStart + seg.fireMin*60000;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           const segEndMs = isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000;
@@ -4028,7 +4043,7 @@ function renderTimeline(){
               const parent=programs.find(x=>x.id===p.parentProgId);
               if(!parent||!parent.active) return;
             }
-            getRelayEventPairs(p,r.id).forEach(seg=>{
+            getRelayEventPairs(p,r.id,dayDate).forEach(seg=>{
               if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
                 fireEvents.push({p, seg});
               }
@@ -4049,7 +4064,7 @@ function renderTimeline(){
           if(todayStr === new Date().toDateString()){
             Object.values(_firedRunOnceToday).forEach(p=>{
               if(!p.relay.includes(r.id)) return;
-              getRelayEventPairs(p,r.id).forEach(seg=>{
+              getRelayEventPairs(p,r.id,dayDate).forEach(seg=>{
                 if(Math.floor(seg.fireMin)>=b.startMin&&Math.floor(seg.fireMin)<b.endMin){
                   fireEvents.push({p:{...p,_firedDone:true}, seg});
                 }
@@ -4178,7 +4193,7 @@ function schedulerTick(){
 
     // בדוק כל ממסר בנפרד — כל אחד יכול לקבל fireMin שונה (stagger)
     p.relay.forEach((relayId, idx)=>{
-      const actualFireMin = getRelayFireMin(p, relayId); // delay בשניות × idx, ממוין לדקות
+      const actualFireMin = getRelayFireMin(p, relayId, nowIL); // delay בשניות × idx, ממוין לדקות
       const fireKey = `${p.id}_${relayId}_${todayKey}`;
       if(_firedToday.has(fireKey)) return;
       if(nowMin < actualFireMin || nowMin > actualFireMin + WINDOW_MIN) return;
@@ -5196,7 +5211,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 70;
+BUILD_BOTTOM_MARK = 71;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
