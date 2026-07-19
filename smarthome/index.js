@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 9;
+const IDX_TOP_MARK = 11;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -62,6 +62,31 @@ try {
 // ── שמירה/טעינה מקומית (במקום GitHub) ──────────────────
 let _saveTimeout = null;
 
+// כתיבה אטומית: קובץ-זמני + rename, לא כתיבה ישירה ליעד. מונע קובץ-פגום-חצי-כתוב אם נפילת-חשמל
+// קורית **בדיוק** באמצע הכתיבה (אותו עיקרון בדיוק שכבר יושם ב-run.sh להורדת-הקבצים מגיטהאב).
+function writeFileAtomic(filePath, content) {
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, content, 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+// ── רשת-הצלה: קובץ-פעימה נפרד וזעיר (לא כל ה-config), נכתב בכל טיק ──────
+// קובץ נפרד (לא בתוך config.json הגדול) כדי שהכתיבה תהיה זולה וקבועה-בגודלה, גם אם config.json
+// עצמו גדול. משמש רק ל"מתי בפעם האחרונה השרת בטוח היה פעיל" — לא לשום דבר אחר.
+const LAST_TICK_FILE = path.join(DATA_DIR, 'last_tick.json');
+let _lastTickAtEpochMs = null;
+function loadLastTick() {
+  try {
+    if (!fs.existsSync(LAST_TICK_FILE)) return null;
+    const d = JSON.parse(fs.readFileSync(LAST_TICK_FILE, 'utf-8'));
+    return d.lastTickAtEpochMs || null;
+  } catch(e) { return null; }
+}
+function saveLastTick(epochMs) {
+  try { writeFileAtomic(LAST_TICK_FILE, JSON.stringify({ lastTickAtEpochMs: epochMs })); }
+  catch(e) { console.error('⚠️ לא ניתן לשמור last_tick.json:', e.message); }
+}
+
 function loadConfigLocal() {
   try {
     if (!fs.existsSync(CONFIG_FILE_LOCAL)) {
@@ -85,6 +110,9 @@ function loadConfigLocal() {
     if (cfg.haToken) { haToken = cfg.haToken; }
     if (cfg.haUrl) { haUrl = cfg.haUrl; }
     if (cfg.yemotPhoneMap) { yemotPhoneMap = cfg.yemotPhoneMap; }
+    // מידע-טיימר-חזרה-ממתין (תזמון-מצב עם duration) — היה בזיכרון-בלבד קודם, ואבד לגמרי בקריסה.
+    // בלי זה, שרת שקרס באמצע "חלון-חזרה-ממתינה" לא היה יודע בכלל שהיה אמור לחזור למצב-קודם.
+    if (cfg.pendingRevertInfo) { _pendingRevertInfo = cfg.pendingRevertInfo; }
     if (cfg.users) {
       runtimeUsers = cfg.users;
       let needsSave = false;
@@ -120,9 +148,10 @@ function saveConfigLocal() {
         haDevices,
         haToken,
         haUrl,
+        pendingRevertInfo: _pendingRevertInfo,
         savedAt: new Date().toISOString(),
       };
-      fs.writeFileSync(CONFIG_FILE_LOCAL, JSON.stringify(cfg, null, 2), 'utf-8');
+      writeFileAtomic(CONFIG_FILE_LOCAL, JSON.stringify(cfg, null, 2));
       console.log('💾 config נשמר מקומית');
     } catch(e) {
       console.error('❌ שגיאה בשמירת config:', e.message);
@@ -463,6 +492,10 @@ function connectMQTT() {
       mqttClient.publish(`cmnd/${ctrl.topic}/STATUS`, '11');
     });
     io.emit('mqtt_status', { connected: true });
+    // רשת-הצלה: מריצים את בדיקת-ההתאמה-אחרי-הפעלה-מחדש רק **אחרי** שהחיבור ל-MQTT יציב (לא מיד
+    // בעליית-התהליך) — זה בדיוק האיתות-בפועל ל"המערכת עלתה ומוכנה לשלוח פקודות אמיתיות". השהיה
+    // קצרה נוספת (3 שניות) כדי לתת ל-subscribe/STATUS שנשלחו למעלה זמן-להתיישב, לא חובה אך זול-ובטוח.
+    setTimeout(() => { runBootReconciliation(); }, 3000);
   });
 
   mqttClient.on('message', (topic, message) => {
@@ -1294,6 +1327,10 @@ function fireEvent(event,todayKey){
 }
 
 async function schedulerTick(){
+  // רשת-הצלה: רושמים "עוד פעם אחת השרת בטוח היה פעיל" — **לפני** כל early-return, כדי שהפעימה
+  // תשקף "השרת רץ" גם אם אין עדיין אף תוכנית מוגדרת. כתיבה זולה לקובץ-זעיר-נפרד (לא config.json).
+  _lastTickAtEpochMs = Date.now();
+  saveLastTick(_lastTickAtEpochMs);
   if(!schedulerPrograms.length) return;
   const now=debugNow();
   const nowIL=new Date(now.toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));
@@ -1385,6 +1422,39 @@ async function processIvrPendingTimers(){
 
 // ── תזמוני מצב אוטומטיים ───────────────────────────────
 const _firedScheduledModes = new Set(); // מונע ירי כפול באותו tick
+
+// מגדיר טיימר-חזרה-אוטומטית לתזמון-מצב עם duration, וגם **שומר** את המידע ל-config.json (לא רק
+// זיכרון+שידור-ללקוח כמו קודם) — כדי ששרת שקורס בדיוק תוך-כדי חלון-החזרה-הממתין ידע לשחזר את זה
+// אחרי אתחול-מחדש (ראו runBootReconciliation), במקום לאבד את המידע לגמרי.
+function armPendingRevertTimer(prevMode, modeJustSetTo, revertAtEpochMs) {
+  if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
+  const remainingMs = revertAtEpochMs - Date.now();
+  _pendingRevertInfo = { revertToMode: prevMode, revertAtEpochMs, modeJustSetTo };
+  io.emit('pending_mode_revert', _pendingRevertInfo);
+  saveConfigLocal();
+  if (remainingMs <= 0) {
+    // הזמן כבר עבר (למשל טיימר ששוחזר אחרי קריסה, וגם הזמן-לחזרה כבר חלף בינתיים) — לבצע מיד.
+    clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo);
+    return;
+  }
+  _activeScheduledModeTimer = setTimeout(() => {
+    clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo);
+  }, remainingMs);
+}
+function clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo) {
+  _activeScheduledModeTimer = null;
+  _pendingRevertInfo = null;
+  io.emit('pending_mode_revert', null);
+  saveConfigLocal();
+  // הגנה מפני race condition: אם תזמון מצב אחר כבר החליף את המצב הפעיל בינתיים (למשל שני תזמונים
+  // שחלים כמעט באותו רגע), אסור לטיימר החזרה "העיוור" הזה לדרוס את המצב הנוכחי בחזרה — רק אם
+  // עדיין נמצאים באותו מצב שאליו עברנו במקור, מותר לחזור.
+  if (schedulerActiveModeId !== modeJustSetTo) {
+    addServerLog({ type: 'info', msg: `🕐 חזרה אוטומטית למצב ${prevMode} בוטלה — תזמון אחר כבר החליף את המצב בינתיים (נשארים במצב ${schedulerActiveModeId})`, user: 'מערכת' });
+    return;
+  }
+  commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
+}
 
 function commitAutoModeSwitch(newModeId, label) {
   if (newModeId === schedulerActiveModeId) return;
@@ -1511,57 +1581,67 @@ function computeModeSwitchImpactGlobal(newModeId) {
   return { staleRelays, missedPrograms };
 }
 
+// מחשבת את זמן-ההפעלה (epoch ms, זמן ישראל) של תזמון-מצב sm בתאריך dateIL נתון — או null אם
+// התזמון לא חל בתאריך הזה בכלל (ימים/תאריך-עברי לא מתאימים, או zman לא-רלוונטי). זו בדיוק אותה
+// לוגיקת-הסינון שהייתה בתוך processScheduledModes, רק מופרדת כדי שאפשר יהיה להשתמש בה גם ליום
+// אחר מ"היום" (חיוני ל-runBootReconciliation, שצריך לסרוק את **כל הימים** שבתוך פער-הקריסה).
+function computeScheduledModeFireEpoch(sm, dateIL) {
+  if (!sm.active) return null;
+  const dow = dateIL.getDay();
+  if (sm.days?.length && !sm.days.includes(dow)) return null;
+  if (sm.calType && sm.calType !== 'none') {
+    const dd = String(dateIL.getDate()).padStart(2,'0');
+    const mm = String(dateIL.getMonth()+1).padStart(2,'0');
+    const yyyy = dateIL.getFullYear();
+    const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
+    if (!entry) return null;
+    const calDate = entry['תאריך עברי'] || '';
+    if (sm.calType === 'annual') {
+      if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) return null;
+    } else if (sm.calType === 'once') {
+      if (calDate !== sm.calLabel || yyyy !== sm.calYear) return null;
+    } else if (sm.calType === 'rosh_chodesh_aleph') {
+      if (getHebrewDayNumber(entry) !== 1) return null;
+    } else if (sm.calType === 'rosh_chodesh_lamed') {
+      if (getHebrewDayNumber(entry) !== 30) return null;
+    }
+  }
+  let fireSec = -1;
+  if (sm.type === 'time') {
+    const [h,m] = (sm.time||'00:00').split(':').map(Number);
+    fireSec = h*3600 + m*60;
+  } else if (sm.type === 'zman') {
+    const zmanim = getZmanim(dateIL);
+    const zmKey = { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',mincha:'minchaGedola' }[sm.zman] || sm.zman;
+    const base = zmanim[zmKey];
+    if (!base) return null;
+    const [h,m] = base.split(':').map(Number);
+    const baseSec = h*3600 + m*60;
+    const offset = (sm.offsetVal||0) * 60;
+    fireSec = sm.offsetDir === '-' ? baseSec - offset : baseSec + offset;
+  }
+  if (fireSec < 0) return null;
+  // בונה Date-object בזמן-ישראל-מקומי, בדיוק כמו getIsraelParts+Date-numeric בלקוח — נמנע מ-
+  // new Date(string) לא-חד-משמעי (אותו עיקרון-יסוד שכבר תועד ותוקן שוב ושוב בתצוגת-הלקוח).
+  const local = new Date(dateIL.getFullYear(), dateIL.getMonth(), dateIL.getDate(), 0, 0, 0, 0);
+  return local.getTime() + fireSec * 1000;
+}
+
 function processScheduledModes() {
   if (!scheduledModes.length) return;
   try {
     const nowIL = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
     const nowSec = getNowSecIL();
-    const dow = nowIL.getDay();
     const todayKey = nowIL.toDateString();
-    const zmanim = getZmanim(nowIL);
     const WINDOW_SEC = 15;
 
     // נקה fired set יומי
     _firedScheduledModes.forEach(k => { if (!k.endsWith(todayKey)) _firedScheduledModes.delete(k); });
 
     for (const sm of scheduledModes) {
-      if (!sm.active) continue;
-      if (sm.days?.length && !sm.days.includes(dow)) continue;
-
-      // בדיקת תאריך
-      if (sm.calType && sm.calType !== 'none') {
-        const dd = String(nowIL.getDate()).padStart(2,'0');
-        const mm = String(nowIL.getMonth()+1).padStart(2,'0');
-        const yyyy = nowIL.getFullYear();
-        const entry = _calendarIndex[`${dd}/${mm}/${yyyy}`];
-        if (!entry) continue;
-        const calDate = entry['תאריך עברי'] || '';
-        if (sm.calType === 'annual') {
-          if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
-        } else if (sm.calType === 'once') {
-          if (calDate !== sm.calLabel || yyyy !== sm.calYear) continue;
-        } else if (sm.calType === 'rosh_chodesh_aleph') {
-          if (getHebrewDayNumber(entry) !== 1) continue;
-        } else if (sm.calType === 'rosh_chodesh_lamed') {
-          if (getHebrewDayNumber(entry) !== 30) continue;
-        }
-      }
-
-      // חשב זמן הפעלה
-      let fireSec = -1;
-      if (sm.type === 'time') {
-        const [h,m] = (sm.time||'00:00').split(':').map(Number);
-        fireSec = h*3600 + m*60;
-      } else if (sm.type === 'zman') {
-        const zmKey = { sunset:'sunset',sunrise:'sunrise',candles:'candles',havdalah:'havdalah',tzeit:'tzeit',dawn:'alotHaShachar',mincha:'minchaGedola' }[sm.zman] || sm.zman;
-        const base = zmanim[zmKey];
-        if (!base) continue;
-        const [h,m] = base.split(':').map(Number);
-        const baseSec = h*3600 + m*60;
-        const offset = (sm.offsetVal||0) * 60;
-        fireSec = sm.offsetDir === '-' ? baseSec - offset : baseSec + offset;
-      }
-      if (fireSec < 0) continue;
+      const fireEpoch = computeScheduledModeFireEpoch(sm, nowIL);
+      if (fireEpoch === null) continue;
+      const fireSec = Math.round((fireEpoch - new Date(nowIL.getFullYear(),nowIL.getMonth(),nowIL.getDate()).getTime())/1000);
       if (fireSec > nowSec || fireSec < nowSec - WINDOW_SEC) continue;
 
       const fireKey = `sm_${sm.id}_${todayKey}`;
@@ -1572,34 +1652,255 @@ function processScheduledModes() {
       if (sm.durationOn) {
         _previousModeId = schedulerActiveModeId;
         const durationSec = ((sm.durationH||0)*3600 + (sm.durationM||0)*60);
-
-        // הגדר טיימר לחזרה
-        if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
-        const prevMode = _previousModeId;
-        const modeJustSetTo = sm.toModeId;
-        // חשיפה ללקוח: "יש כרגע טיימר-חזרה ממתין" — נדרש כדי שציר-הזמן בממשק ידע לדמות נכון
-        // את המצב הצפוי, גם אם הדף נטען *אחרי* שהטיימר כבר החל לרוץ.
-        _pendingRevertInfo = { revertToMode: prevMode, revertAtEpochMs: Date.now() + durationSec * 1000 };
-        io.emit('pending_mode_revert', _pendingRevertInfo);
-        _activeScheduledModeTimer = setTimeout(() => {
-          _activeScheduledModeTimer = null;
-          _pendingRevertInfo = null;
-          io.emit('pending_mode_revert', null);
-          // הגנה מפני race condition: אם תזמון מצב אחר כבר החליף את המצב הפעיל בינתיים (למשל שני תזמונים
-          // שחלים כמעט באותו רגע), אסור לטיימר החזרה "העיוור" הזה לדרוס את המצב הנוכחי בחזרה — רק אם
-          // עדיין נמצאים באותו מצב שאליו עברנו במקור, מותר לחזור.
-          if (schedulerActiveModeId !== modeJustSetTo) {
-            addServerLog({ type: 'info', msg: `🕐 חזרה אוטומטית למצב ${prevMode} בוטלה — תזמון אחר כבר החליף את המצב בינתיים (נשארים במצב ${schedulerActiveModeId})`, user: 'מערכת' });
-            return;
-          }
-          commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
-        }, durationSec * 1000);
+        armPendingRevertTimer(_previousModeId, sm.toModeId, Date.now() + durationSec * 1000);
       }
 
       commitAutoModeSwitch(sm.toModeId, sm.name || `תזמון מצב ${sm.id}`);
     }
   } catch(e) {
     console.error('❌ שגיאה ב-processScheduledModes:', e.message);
+  }
+}
+
+// ═══ רשת-הצלה: התאמה-אחרי-הפעלה-מחדש (boot reconciliation) ══════════════════════════════════
+// מטפלת במקרה שהשרת קרס/נפל-חשמל בדיוק בזמן שהיה אמור להתבצע תזמון-מצב או תוכנית. הרעיון: לא
+// "לנחש מצב-סופי" ולא "לשחזר פקודה-פקודה" — אלא להרחיב את **אותה בדיקה בדיוק** שכבר רצה כל 5-10
+// שניות (processScheduledModes/schedulerTick), רק על-פני **כל הפער** (מ"פעימה אחרונה ידועה" ועד
+// עכשיו) במקום חלון-של-שניות-בודדות. אם לא היה שום דבר מתוזמן בתוך הפער — לא עושים כלום.
+
+// בודקת אם יש **בכלל** משהו-מתוזמן בתוך הפער (תזמוני-מצב או תוכניות) — בדיקה זולה, כדי שרוב
+// המקרים (הפעלה-מחדש רגילה, בלי תזמון בדיוק בחלון) לא יפעילו את כל מנגנון-ההתאמה בכלל.
+function gapHasAnyScheduledActivity(fromMs, toMs) {
+  // תזמוני-מצב: סורקים כל יום בתוך הפער
+  for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
+    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    for (const sm of scheduledModes) {
+      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epoch !== null && epoch > fromMs && epoch <= toMs) return true;
+    }
+  }
+  // תוכניות רגילות: משתמשים ב-computeTodayEvents הקיים (זהה למה ש-schedulerTick כבר עושה),
+  // לכל יום בתוך הפער, ובודקים אם יש אירוע (fireSec) שנופל בתוך הפער.
+  for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
+    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dayStart = dateIL.getTime();
+    const dow = dateIL.getDay();
+    const todayKey = dateIL.toDateString();
+    const zmanim = getZmanim(dateIL);
+    const events = computeTodayEvents(dateIL, zmanim, dow, todayKey);
+    for (const ev of events) {
+      const epoch = dayStart + ev.fireSec*1000;
+      if (epoch > fromMs && epoch <= toMs) return true;
+    }
+  }
+  // טיימר-חזרה-ממתין שהיה תלוי-ועומד (persisted) — גם הוא "פעילות מתוזמנת" שצריך לטפל בה
+  if (_pendingRevertInfo && _pendingRevertInfo.revertAtEpochMs > fromMs && _pendingRevertInfo.revertAtEpochMs <= toMs) return true;
+  return false;
+}
+
+// מחשבת "מה המצב הנכון עכשיו" — מתחילה מהמצב שהיה ידוע-נכון ברגע lastTickAtEpochMs (הנחה סבירה:
+// השרת עבד כרגיל עד לרגע הזה), וסורקת קדימה **רק** את הטריגרים שבתוך הפער עצמו (לא שחזור-היסטוריה
+// מלא) — תזמוני-מצב חדשים וגם טיימר-חזרה-ממתין שהיה תלוי-ועומד — לפי סדר כרונולוגי.
+function computeCorrectModeAfterGap(fromMs, toMs, startModeId) {
+  const timeline = []; // { epochMs, toModeId, sm }
+  for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
+    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    for (const sm of scheduledModes) {
+      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epoch !== null && epoch > fromMs && epoch <= toMs) {
+        timeline.push({ epochMs: epoch, toModeId: sm.toModeId, sm });
+      }
+    }
+  }
+  timeline.sort((a,b) => a.epochMs - b.epochMs);
+
+  // טיימר-חזרה-ממתין שהיה תלוי-ועומד לפני הפער (persisted) — מטופל כטריגר נוסף בציר-הזמן, לפי
+  // סדר-כרונולוגי אמיתי מול שאר הטריגרים (יכול להיות שהוחלף/בוטל ע"י תזמון-חדש שקדם לו בזמן).
+  let pendingRevert = _pendingRevertInfo;
+  let mode = startModeId;
+
+  for (const t of timeline) {
+    // אם יש טיימר-חזרה-ממתין שהיה אמור לקרות **לפני** הטריגר הזה — מבצעים אותו קודם (סדר כרונולוגי),
+    // עם אותה הגנת-race-condition כמו בזמן-אמת (רק אם עדיין באותו מצב שאליו הטיימר "שייך").
+    if (pendingRevert && pendingRevert.revertAtEpochMs <= t.epochMs) {
+      if (mode === pendingRevert.modeJustSetTo) mode = pendingRevert.revertToMode;
+      pendingRevert = null;
+    }
+    const prevMode = mode;
+    mode = t.toModeId;
+    pendingRevert = t.sm.durationOn
+      ? { revertToMode: prevMode, modeJustSetTo: t.toModeId, revertAtEpochMs: t.epochMs + ((t.sm.durationH||0)*3600+(t.sm.durationM||0)*60)*1000 }
+      : null; // תזמון-עם-duration-חדש "דורס" כל טיימר-חזרה-קודם-שממתין, בדיוק כמו armPendingRevertTimer בזמן-אמת
+  }
+
+  // אחרי כל הטריגרים-החדשים בפער — אם עדיין נשאר טיימר-חזרה-ממתין שה-revertAtEpochMs שלו כבר
+  // עבר ביחס ל"עכשיו" (toMs) — הוא היה אמור לקרות גם הוא, בתוך הפער.
+  if (pendingRevert && pendingRevert.revertAtEpochMs <= toMs) {
+    if (mode === pendingRevert.modeJustSetTo) mode = pendingRevert.revertToMode;
+    pendingRevert = null;
+  }
+
+  return { correctModeNow: mode, remainingPendingRevert: pendingRevert };
+}
+
+// staleRelays הרגילה (ב-computeModeSwitchImpactGlobal) מסתמכת על relayOwner בזיכרון — וזה בדיוק
+// מה שנמחק-לגמרי בקריסה! בתפעול-רגיל (בלי קריסה) relayOwner אמין (מתעדכן בכל ON/OFF, ראו fireEvent),
+// ולכן staleRelays כבר-מספיקה שם — אין צורך לשכפל את זה. אבל ב-boot-reconciliation, כשגם התגלה
+// שהוחמץ מעבר-מצב, אין שום זיכרון של "מה היה דלוק בגלל המצב הישן" — צריך לגזור את זה **מהגדרות-
+// התוכניות עצמן**, לא מ-relayOwner: כל ממסר ששייך **רק** לתוכניות-מהמצב-הישן (לא גם למצב-החדש) —
+// בטוח לשלוח לו OFF ללא-תנאי (אם כבר כבוי, no-op). ממסר ששייך **גם** למצב-החדש לא נכלל כאן בכלל —
+// משאירים את הקביעה-לגביו לחישוב-האירועים-של-המצב-החדש עצמו (כדי לא "לקדם" כיבוי שאולי המצב-החדש
+// דווקא רוצה שידלק).
+function computeStaleRelaysFromOldMode(originalMode, correctModeNow) {
+  const newModeRelays = new Set();
+  const oldModeOnlyRelays = new Set();
+  schedulerPrograms.forEach(p => {
+    if (!p.active) return;
+    const modeIds = p.modeIds ?? (p.modeId !== null && p.modeId !== undefined ? [p.modeId] : [0]);
+    if (modeIds.includes(correctModeNow)) (p.relay||[]).forEach(r => newModeRelays.add(r));
+    if (modeIds.includes(originalMode) && !modeIds.includes(correctModeNow)) (p.relay||[]).forEach(r => oldModeOnlyRelays.add(r));
+  });
+  return [...oldModeOnlyRelays].filter(r => !newModeRelays.has(r));
+}
+
+// מוצאת ומיישמת תוכניות-רגילות (לא קשורות-למעבר-מצב) שהוחמצו במהלך הפער — **בכל שני הכיוונים**
+// (ON וגם OFF!). זה שונה מ-computeModeSwitchImpactGlobal.missedPrograms, שבודקת רק אירועי-ON
+// (הגיוני שם — היא נועדה ל"מה-צריך-לדלוק-במצב-החדש" — אבל לא מתאימה למקרה הזה: תוכנית עם
+// action:'OFF' שהיה אמור לכבות משהו באמצע-הלילה לא הייתה נתפסת בכלל).
+// העיקרון: בדיוק כמו getRelayStateAtTime בלקוח — "האחרון-כרונולוגית-מנצח" מתוך רשימת-האירועים-
+// הממוזגת (כולל גם אירועי-סיום שנוצרים אוטומטית ל-endMin!==null). לא בודקים checkRelayOwnerBlock
+// כאן (זו התאמה-חד-פעמית-להיסטוריה, לא תחרות-בזמן-אמת בין תוכניות) — עקבי עם איך שהתצוגה-בלקוח
+// כבר מוכחת-נכונה לאורך כל הפרויקט.
+function applyMissedRegularPrograms(gapFromMs, nowMs) {
+  const nowDate = new Date(nowMs);
+  const nowIL = new Date(nowDate.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+  const nowSec = Math.round((nowMs - dayStartMs) / 1000);
+
+  // אוספים אירועים של "היום" וגם "אתמול" (לתוכניות חוצות-חצות) — בדיוק כמו שני-החלקים ב-schedulerTick.
+  const todayKey = nowIL.toDateString();
+  const zmanimToday = getZmanim(nowIL);
+  const eventsToday = computeTodayEvents(nowIL, zmanimToday, nowIL.getDay(), todayKey)
+    .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000, _dayKey: todayKey, _dayStartMs: dayStartMs }));
+
+  const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
+  const yDayStartMs = new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime();
+  const yKey = yIL.toDateString();
+  const zmanimY = getZmanim(yIL);
+  const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
+    .map(e => ({ ...e, _epochMs: yDayStartMs + e.fireSec*1000, _dayKey: yKey, _dayStartMs: yDayStartMs }));
+
+  const allEvents = [...eventsYesterday, ...eventsToday];
+
+  // אילו ממסרים בכלל היו "נוגעים" ע"י משהו בתוך הפער עצמו (start או end) — רק אלה מקבלים טיפול.
+  const relaysInGap = new Set();
+  allEvents.forEach(e => { if (e._epochMs > gapFromMs && e._epochMs <= nowMs) relaysInGap.add(e.relayId); });
+  if (!relaysInGap.size) return { appliedCount: 0 };
+
+  let appliedCount = 0;
+  const _catchupTodayKey = todayKey;
+  relaysInGap.forEach(relayId => {
+    const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
+    if (!relayEvents.length) return;
+    relayEvents.sort((a,b) => a._epochMs - b._epochMs);
+    const last = relayEvents[relayEvents.length - 1];
+    const correctState = last.action; // 'ON' או 'OFF' — האחרון-כרונולוגית מנצח
+    appliedCount++;
+    publishRelay(relayId, correctState, 'התאמה אחרי הפעלה מחדש').then(() => {
+      io.emit('scheduler_fired', { progName: last.name, relayId, action: correctState });
+      addServerLog({ type: 'info', msg: `🔄 [התאמה] "${last.name}" — ${schedulerRelayNames[relayId]||`ממסר ${relayId}`} → ${correctState} (הוחמץ בזמן שהשרת היה למטה)`, user: 'מערכת' });
+      // אם זה "התחלה" שעדיין לא הגיע-זמן-הסיום-שלה (או שאין לה סיום) — לרשום _actuallyFired עם
+      // ה-fireSec ה**מקורי** וה-todayKey הנכון, כדי שהכיבוי/הפיכה-הטבעית-לפי-משך (isEndEvent) שתגיע
+      // בהמשך דרך ה-schedulerTick הרגיל לא תידלג בשקט (בדיוק אותו עיקרון כמו ב-commitAutoModeSwitch).
+      if (!last.isEndEvent && (last.endSec === null || last._dayStartMs + last.endSec*1000 > nowMs)) {
+        _actuallyFired.add(`${last.progId}_${relayId}_${last.segType}_${last.cycleIdx??'x'}_${last.fireSec}_start_${last._dayKey}`);
+        if (correctState === 'ON') {
+          relayOwner[relayId] = { progId: last.progId, name: last.name, priority: !!last.isPriority, endSec: last.endSec !== null ? last.endSec : null };
+        }
+        if (last.runOnce) {
+          const p = schedulerPrograms.find(x => x.id === last.progId);
+          if (p && p.active) { p.active = false; _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey }); io.emit('program_updated', { id: p.id, active: false }); saveConfigLocal(); }
+        }
+      }
+    }).catch(() => {});
+  });
+  return { appliedCount };
+}
+
+
+let _hasRunBootReconciliation = false;
+async function runBootReconciliation() {
+  if (_hasRunBootReconciliation) return; // רק פעם אחת, לא בכל reconnect
+  _hasRunBootReconciliation = true;
+  try {
+    const now = Date.now();
+    const lastTick = _lastTickAtEpochMs;
+    if (lastTick === null) {
+      addServerLog({ type: 'info', msg: '🔄 עלייה ראשונה (אין פעימה קודמת) — לא נדרשת התאמה', user: 'מערכת' });
+      return;
+    }
+    if (now <= lastTick) {
+      // שעון-המערכת לא-מהימן (למשל Pi בלי RTC, עוד לפני סנכרון-NTP) — לא מריצים שום דבר על שעון-דמיוני.
+      addServerLog({ type: 'warning', msg: `⚠️ שעון-המערכת ברגע-העלייה לא מאוחר מהפעימה-האחרונה-הידועה — דוחים את בדיקת-ההתאמה (יתבצע-אוטומטית בטיק-הבא אחרי שהשעון יסתדר)`, user: 'מערכת' });
+      return;
+    }
+    const downMs = now - lastTick;
+    const downMin = Math.round(downMs/60000*10)/10;
+    addServerLog({ type: 'info', msg: `🔄 השרת עלה מחדש — היה לא-פעיל ${downMin} דקות (${new Date(lastTick).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})} עד עכשיו). בודק אם נדרשת התאמה...`, user: 'מערכת' });
+
+    if (!gapHasAnyScheduledActivity(lastTick, now)) {
+      addServerLog({ type: 'info', msg: '✅ לא היה שום תזמון (מצב או תוכנית) בחלון הזה — לא נדרשת התאמה', user: 'מערכת' });
+      return;
+    }
+
+    // שלב 1: מצב-מצב (mode) — כולל טיימר-חזרה-ממתין שהיה תלוי-ועומד
+    const { correctModeNow, remainingPendingRevert } = computeCorrectModeAfterGap(lastTick, now, schedulerActiveModeId);
+    const originalMode = schedulerActiveModeId;
+
+    if (correctModeNow !== originalMode) {
+      addServerLog({ type: 'info', msg: `🔄 [התאמה] המצב אמור להיות ${correctModeNow} (לא ${originalMode}) — מתקן`, user: 'מערכת' });
+      // לפני commitAutoModeSwitch: לכבות ללא-תנאי כל ממסר ששייך **רק** לתוכניות-מהמצב-הישן (לא גם
+      // לחדש) — כי staleRelays (בתוך commitAutoModeSwitch) לא יכולה לתפוס את זה בעצמה: relayOwner
+      // ריק-לגמרי אחרי הפעלה-מחדש, ואין לה זיכרון-של-מה-היה-דולק לפני הקריסה. בתפעול-רגיל (בלי
+      // קריסה) אין צורך בזה כלל — relayOwner אמין שם, ו-staleRelays כבר עושה את זה נכון בעצמה.
+      const staleFromOldMode = computeStaleRelaysFromOldMode(originalMode, correctModeNow);
+      staleFromOldMode.forEach(relayId => {
+        publishRelay(relayId, 'OFF', 'התאמה אחרי הפעלה מחדש — יציאה ממצב קודם').then(() => {
+          if (relayOwner[relayId]) delete relayOwner[relayId];
+          io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב ${originalMode} (התאמה אחרי הפעלה מחדש)`, relayId, action: 'OFF' });
+          addServerLog({ type: 'info', msg: `🔄 [התאמה] ממסר ${schedulerRelayNames[relayId]||relayId} → OFF (שייך רק למצב הקודם ${originalMode}, אין ל-relayOwner זיכרון אחרי הפעלה-מחדש)`, user: 'מערכת' });
+        }).catch(() => {});
+      });
+      commitAutoModeSwitch(correctModeNow, `התאמה אחרי הפעלה מחדש (${downMin} דקות)`);
+      // commitAutoModeSwitch כבר מטפלת בתוכניות-ON שהוחמצו במצב-החדש (missedPrograms) — אבל, כמו
+      // בהמשך, זה מכסה רק כיוון-ON. מריצים גם את הבדיקה-הדו-כיוונית, ליתר ביטחון (idempotent — אם
+      // commitAutoModeSwitch כבר תיקן, זה פשוט ישלח את אותה פקודה שוב, לא מזיק).
+      try { applyMissedRegularPrograms(lastTick, now); } catch(e) { console.error('❌ שגיאה בבדיקה דו-כיוונית אחרי מעבר-מצב:', e.message); }
+    } else {
+      addServerLog({ type: 'info', msg: `🔄 [התאמה] המצב (${originalMode}) לא השתנה בפועל — בודק תוכניות שהוחמצו בתוך אותו מצב`, user: 'מערכת' });
+      // גם אם המצב לא השתנה, ייתכן שתוכניות-רגילות באותו מצב פוספסו (כיבוי או הדלקה כאחד — למשל
+      // טיימר-כיבוי-אור-בלילה בזמן שהשרת היה למטה) — commitAutoModeSwitch מדלג כי "אין שינוי-מצב".
+      try {
+        const { appliedCount } = applyMissedRegularPrograms(lastTick, now);
+        if (!appliedCount) {
+          addServerLog({ type: 'info', msg: '✅ לא נמצאו תוכניות-שהוחמצו לתיקון', user: 'מערכת' });
+        }
+      } catch(e) {
+        console.error('❌ שגיאה בבדיקת תוכניות-שהוחמצו (boot reconciliation):', e.message);
+      }
+    }
+
+    // שלב 2: אם עדיין נשאר טיימר-חזרה-ממתין לעתיד (לא הופעל כבר בשלב 1 כי revertAtEpochMs>now) —
+    // לחמש אותו מחדש עם הזמן-שנותר-בפועל (לא duration מלא מחדש!).
+    if (remainingPendingRevert && remainingPendingRevert.revertAtEpochMs > now) {
+      armPendingRevertTimer(remainingPendingRevert.revertToMode, remainingPendingRevert.modeJustSetTo, remainingPendingRevert.revertAtEpochMs);
+      addServerLog({ type: 'info', msg: `🔄 [התאמה] טיימר-חזרה-ממתין שוחזר — יחזור למצב ${remainingPendingRevert.revertToMode} ב-${new Date(remainingPendingRevert.revertAtEpochMs).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})}`, user: 'מערכת' });
+    }
+
+    addServerLog({ type: 'success', msg: '✅ התאמה-אחרי-הפעלה-מחדש הושלמה', user: 'מערכת' });
+  } catch(e) {
+    console.error('❌ שגיאה ב-runBootReconciliation:', e.message);
+    addServerLog({ type: 'danger', msg: `❌ שגיאה בהתאמה-אחרי-הפעלה-מחדש: ${e.message}`, user: 'מערכת' });
   }
 }
 
@@ -1681,6 +1982,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 (async () => {
   loadConfigLocal();
+  _lastTickAtEpochMs = loadLastTick();
   rebuildHaRelayNames();
   connectMQTT();
   server.listen(PORT, () => {
@@ -1690,4 +1992,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 9;
+const IDX_BOTTOM_MARK = 11;
