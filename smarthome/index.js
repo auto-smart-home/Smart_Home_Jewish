@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 12;
+const IDX_TOP_MARK = 13;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1787,7 +1787,12 @@ function processScheduledModes() {
       const fireSec = Math.round((fireEpoch - new Date(nowIL.getFullYear(),nowIL.getMonth(),nowIL.getDate()).getTime())/1000);
       if (fireSec > nowSec || fireSec < nowSec - WINDOW_SEC) continue;
 
-      const fireKey = `sm_${sm.id}_${todayKey}`;
+      // מפתח-ה"ירה-כבר" כולל את שעת-ההפעלה-המחושבת עצמה (fireSec), לא רק את ה-ID והתאריך —
+      // כך שעריכת-שעת-התזמון (אפילו באותו יום, בדיוק כמו בבדיקה חוזרת) נחשבת "תזמון חדש" ויכולה
+      // לירות שוב, בעוד שהגנת-מפני-ירי-כפול-אמיתי (אותו תזמון, אותה שעה, כמה טיקים ברצף) נשארת
+      // שלמה. todayKey נשאר **בסוף** המפתח בכוונה — הניקוי-היומי למטה (`endsWith(todayKey)`)
+      // תלוי בזה.
+      const fireKey = `sm_${sm.id}_${fireSec}_${todayKey}`;
       if (_firedScheduledModes.has(fireKey)) continue;
       _firedScheduledModes.add(fireKey);
 
@@ -2135,4 +2140,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 12;
+const IDX_BOTTOM_MARK = 13;
