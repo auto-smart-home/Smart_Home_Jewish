@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 18;
+const IDX_TOP_MARK = 19;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -75,6 +75,8 @@ function writeFileAtomic(filePath, content) {
 // עצמו גדול. משמש רק ל"מתי בפעם האחרונה השרת בטוח היה פעיל" — לא לשום דבר אחר.
 const LAST_TICK_FILE = path.join(DATA_DIR, 'last_tick.json');
 let _lastTickAtEpochMs = null;
+// עותק-קפוא של הערך-שנטען-מהקובץ, לפני שכל schedulerTick דורס אותו — ראו הסבר מלא ב-runBootReconciliation
+let _lastTickAtEpochMsBeforeThisBoot = null;
 function loadLastTick() {
   try {
     if (!fs.existsSync(LAST_TICK_FILE)) return null;
@@ -86,6 +88,13 @@ function saveLastTick(epochMs) {
   try { writeFileAtomic(LAST_TICK_FILE, JSON.stringify({ lastTickAtEpochMs: epochMs })); }
   catch(e) { console.error('⚠️ לא ניתן לשמור last_tick.json:', e.message); }
 }
+// קופאים את הערך-שנטען **כאן, מיד**, ברגע-טעינת-הקובץ (לפני כל קוד אחר בקובץ, כולל הקריאה-
+// המיידית ל-schedulerTick() בהמשך) — כי schedulerTick דורסת את _lastTickAtEpochMs (ואת הקובץ-
+// עצמו, דרך saveLastTick) עם Date.now() נוכחי, בכל קריאה, כולל הקריאה-הראשונה-מיידית שקורית עוד
+// לפני שה-IIFE-של-האתחול-בתחתית-הקובץ בכלל מתחיל לרוץ. בלי ה"הקפאה" הזו כאן-ומיד, שום ערך-אמיתי
+// (מלפני-הכיבוי) לא היה שורד בכלל עד ש-runBootReconciliation מגיעה לקרוא אותו.
+_lastTickAtEpochMsBeforeThisBoot = loadLastTick();
+_lastTickAtEpochMs = _lastTickAtEpochMsBeforeThisBoot;
 
 function loadConfigLocal() {
   try {
@@ -2132,7 +2141,7 @@ async function runBootReconciliation() {
   _hasRunBootReconciliation = true;
   try {
     const now = Date.now();
-    const lastTick = _lastTickAtEpochMs;
+    const lastTick = _lastTickAtEpochMsBeforeThisBoot;
     if (lastTick !== null && now <= lastTick) {
       // שעון-המערכת לא-מהימן (למשל Pi בלי RTC, עוד לפני סנכרון-NTP) — לא מריצים שום דבר על שעון-דמיוני,
       // כולל שחזור-הבעלויות למטה (היא גם תלויה ב"עכשיו" אמין).
@@ -2289,7 +2298,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 (async () => {
   loadConfigLocal();
-  _lastTickAtEpochMs = loadLastTick();
+  // (הקפאת last_tick כבר בוצעה למעלה, ברגע-טעינת-הקובץ — לפני כל קוד אחר. לא נוגעים בזה כאן שוב.)
   rebuildHaRelayNames();
   connectMQTT();
   server.listen(PORT, () => {
@@ -2299,4 +2308,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 18;
+const IDX_BOTTOM_MARK = 19;
