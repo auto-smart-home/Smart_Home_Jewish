@@ -13,7 +13,7 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // לקבוע DEBUG_OFFSET_MS לפער הרצוי (במילישניות) בין "עכשיו-אמיתי" ל"עכשיו-מדומה". דוגמה: קפיצה
 // קדימה 2 שעות ו-11 דקות: (2*60*60*1000)+(11*60*1000). אפס = בלי הזחה בכלל (מצב-רגיל).
 // **להסיר/לאפס (0) לפני פרודקשן!**
-const DEBUG_OFFSET_MS = 460099879; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
+const DEBUG_OFFSET_MS = 0; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
 function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
