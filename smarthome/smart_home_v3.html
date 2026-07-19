@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-C (תיקון-שורש-סופי בתצוגה-המינימלית: 1) מיזוג כל קטעי confine:false הרצופים לקטע-פתוח-אחד במקום N חופפים - ביטל בלבול-flattenOverlaps. 2) computeModeSegments הורחבה לכלול גם יום-לפני-הטווח (כמו הסריקה עצמה) - בלעדיה capOpenEndedMs לא מצאה מקטע-מכיל לקטעי-זנב-ממחזוריות ונפלה בטעות ל-rangeEndMs) -->
+<!-- BUILD_MARKER: v2026-07-19-D (שחזור-אחורה: כל תיקוני-B/C בתצוגה-המינימלית (capOpenEndedMs, מיזוג-קטעים, hadCompetition, hasSiblingOverlap, הרחבת-computeModeSegments) הוסרו - התברר שה'באג' המקורי היה טעות-משתמש (תוכנית-בנים-ובנות-שבת-חוץ-לבית מושבתת בפועל), לא באג-קוד. חזרה למצב-היציב מ-v62) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 64;
+const BUILD_TOP_MARK = 65;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -3591,24 +3591,11 @@ function fmtEpochHM(ms){
 // לעולם לא ממוזג עם תוכנית אחרת גם אם רציף. עמודות-ממסר בלי שום פעילות בכל הטווח המוצג — מוסתרות.
 function renderTimelineMinimal(){
   const dates = getTlDates();
-  // חשוב: מרחיבים את computeModeSegments יום-אחד-אחורה (בדיוק כמו שהסריקה-עצמה עושה, ראו
-  // dayBeforeRange למטה) — אחרת קטע-בת שיורה ביום-לפני-הטווח (ל"זנב" ממחזוריות) לא נמצא בכלל
-  // בתוך modeSegments, ו-capOpenEndedMs נופלת בטעות לברירת-המחדל (rangeEndMs — סוף כל הטווח
-  // המוצג!) במקום להיעצר נכון במעבר-המצב-האמיתי הראשון שאחריו.
-  const dayBeforeRangeForModes = new Date(dates[0].getTime() - 86400000);
   let modeSegments = [];
-  try { modeSegments = computeModeSegments(dayBeforeRangeForModes, dates.length + 1); } catch(e) { modeSegments = []; }
+  try { modeSegments = computeModeSegments(dates[0], dates.length); } catch(e) { modeSegments = []; }
   const rangeStartMs = dates[0].getTime();
   const rangeEndMs = dates[dates.length-1].getTime() + 86400000;
-  // קטע-פתוח (openEnded, למשל childConfine:false) לא יכול "לדלוף" דרך מעבר-מצב — הוא חייב להיעצר
-  // לא רק ב-rangeEndMs, אלא גם בסוף מקטע-המצב שמכיל את רגע-הירי שלו (אחרת תוכנית-ממצב-אחר ממשיכה
-  // "לנצח" חזותית גם אחרי שהתזמון עבר למצב-אחר, כי אין לה מתחרה-תחום-ומדויק בכל רגע).
-  function capOpenEndedMs(atMs){
-    for(const seg of modeSegments){
-      if(atMs >= seg.startMs && atMs < seg.endMs) return Math.min(rangeEndMs, seg.endMs);
-    }
-    return rangeEndMs;
-  }
+
 
   const relaySegs = {}; // relayId -> [{startMs,endMs,isOn,kind,progId,label}]
   relays.forEach(r => relaySegs[r.id] = []);
@@ -3639,7 +3626,7 @@ function renderTimelineMinimal(){
           // תדע שהיה כאן "משהו" ולא תשאיר את זה כפער-ריק-סתמי.
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
           relaySegs[rId].push({
-            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? capOpenEndedMs(dayStart + seg.fireMin*60000) : dayStart + seg.endMin*60000,
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
             isOn: seg.action === 'ON',
             kind: seg.action === 'ON' ? 'on' : (seg.isEndEvent ? 'duration-end' : 'off-action'),
             progId: p.id, label: p.name, openEnded: isOpenEnded, priority: !!p.priority
@@ -3648,34 +3635,15 @@ function renderTimelineMinimal(){
       });
       const child = p.childProgId ? programs.find(c => c.id === p.childProgId) : null;
       if (child && child.active && child.relay && child.relay[0] && relaySegs[child.relay[0]]) {
-        const childPairs = getRelayEventPairs(child, child.relay[0]);
-        let mergedOpenEndedPushed = false;
-        childPairs.forEach(seg => {
+        getRelayEventPairs(child, child.relay[0]).forEach(seg => {
           if (!progModeActiveAtMs(child, dayStart + seg.fireMin*60000, modeSegments)) return;
           const isOpenEnded = seg.endMin === null || seg.endMin === undefined;
-          if (isOpenEnded) {
-            // כל קטעי confine:false (openEnded) של אותה תוכנית-בת נמתחים לאותה נקודת-קצה בדיוק
-            // (capOpenEndedMs תלוי רק במקטע-המצב, לא ברגע-הירי-הספציפי) — כלומר הם כולם חופפים-
-            // לגמרי-אחד-את-השני. דחיפת N קטעים-נפרדים-חופפים (אחד לכל מחזור) גורמת לבלבול חמור
-            // ב-flattenOverlaps (הרבה גבולות-מיותרים, הכרעות-שגויות). לכן: ממזגים לקטע-פתוח-
-            // **אחד-בלבד**, מהמחזור-הראשון-שעובר-את-הבדיקה ועד לקצה — זהה חזותית (הממסר "דולק
-            // ברצף" מהמחזור-הראשון), בלי הכפילות-הפנימית שגרמה לבעיות.
-            if (mergedOpenEndedPushed) return;
-            mergedOpenEndedPushed = true;
-            relaySegs[child.relay[0]].push({
-              startMs: dayStart + seg.fireMin*60000, endMs: capOpenEndedMs(dayStart + seg.fireMin*60000),
-              isOn: seg.action === 'ON',
-              kind: seg.action === 'ON' ? 'on' : 'duration-end',
-              progId: child.id, label: child.name, openEnded: true, priority: !!child.priority
-            });
-          } else {
-            relaySegs[child.relay[0]].push({
-              startMs: dayStart + seg.fireMin*60000, endMs: dayStart + seg.endMin*60000,
-              isOn: seg.action === 'ON',
-              kind: seg.action === 'ON' ? 'on' : 'duration-end',
-              progId: child.id, label: child.name, openEnded: false, priority: !!child.priority
-            });
-          }
+          relaySegs[child.relay[0]].push({
+            startMs: dayStart + seg.fireMin*60000, endMs: isOpenEnded ? rangeEndMs : dayStart + seg.endMin*60000,
+            isOn: seg.action === 'ON',
+            kind: seg.action === 'ON' ? 'on' : 'duration-end',
+            progId: child.id, label: child.name, openEnded: isOpenEnded, priority: !!child.priority
+          });
         });
       }
     });
@@ -3718,11 +3686,7 @@ function renderTimelineMinimal(){
         return priorityOffs.length ? priorityOffs : pool0;
       })();
       const chosen = pool.reduce((best, s) => (!best || s.endMs > best.endMs) ? s : best, null);
-      // hadCompetition: הייתה כאן יותר מתביעה-אחת על הזמן-הזה (למשל אח confine:true על אותו ממסר) —
-      // ואז ההכרעה כבר בוצעה נכון (לפי הכללים למעלה), ואין צורך/כדאי לאמת שוב מול stateAt בהמשך —
-      // stateAt (getRelayStateAtTime) מניחה "ציר-אירועים-רציף-אחד", לא "כמה תביעות-עצמאיות-על-אותו
-      // ממסר", ועלולה לתת תשובה שגויה (למשל: כיבוי-של-אח-שכן לא אומר שהאח-השני-פסק-לתבוע "דלוק").
-      result.push({ ...chosen, startMs: segStart, endMs: segEnd, hadCompetition: covering.length>1 });
+      result.push({ ...chosen, startMs: segStart, endMs: segEnd });
     }
     return result;
   }
@@ -3731,15 +3695,6 @@ function renderTimelineMinimal(){
   relays.forEach(r => {
     let segs = (relaySegs[r.id]||[]).filter(s => s.endMs > rangeStartMs && s.startMs < rangeEndMs);
     if (!segs.length) return; // אין שום פעילות בכל הטווח — מוסתר
-    // לכל קטע-פתוח (openEnded), בודקים אם *הטווח-המלא-שלו* (לא רק נקודת-בדיקה-ספציפית) חופף תוכנית-
-    // אחרת כלשהי על אותו ממסר (למשל אח confine:true) — אם כן, מסמנים hasSiblingOverlap, כדי שבהמשך
-    // נדע לדלג על אימות-stateAt (getRelayStateAtTime מניחה ציר-אירועים-רציף-אחד, לא כמה-תביעות-
-    // עצמאיות-על-אותו-ממסר, ולכן לא-אמינה במצב-כזה) — ממוקד לקטע-הזה-בלבד, לא גורף לכל היום (ניסיון
-    // קודם שדילג-גורף-על-כל-הממסר בכל מקרה גרם לרגרסיה ביום-רגיל, הרבה-לפני-מעבר-מצב).
-    segs.forEach(s => {
-      if (!s.openEnded) return;
-      s.hasSiblingOverlap = segs.some(o => o.progId !== s.progId && o.startMs < s.endMs && o.endMs > s.startMs);
-    });
     segs.sort((a,b) => a.startMs - b.startMs);
     segs = flattenOverlaps(segs);
     // בודק את המצב-בפועל של הממסר ברגע נתון (כולל לוקבאק/רקע) — אותה פונקציה שהתצוגה הרגילה כבר
@@ -3760,11 +3715,10 @@ function renderTimelineMinimal(){
       // לקטע openEnded (ניחוש-בלבד, מ-childConfine:false וכדומה) מוודאים את isOn מול המצב-האמיתי —
       // קטע תחום-ומדויק (isEndEvent/off-action רגילים) נשאר מהימן כפי שהוא, בלי לבדוק מחדש.
       if (en > st) {
-        if (s.openEnded && !s.hadCompetition && !s.hasSiblingOverlap) {
-          // קטע-פתוח (מ-childConfine:false וכדומה) "מנחש" שהוא נשאר באותו מצב עד סוף-הטווח, **בלי**
-          // שהייתה כאן הכרעה-מול-קטע-מתחרה-אחר (אחרת ההכרעה כבר נכונה, ואין טעם לאמת שוב מול stateAt
-          // — ראו הסבר ב-hadCompetition למעלה). אם בדיקת-המצב-האמיתי מגלה שהניחוש-הבלתי-מתחרה הזה
-          // שגוי — לא משאירים את זה מיוחס/לחיץ לתוכנית שהניחוש שלה נכשל; הופכים לפער אנונימי.
+        if (s.openEnded) {
+          // קטע-פתוח (מ-childConfine:false וכדומה) "מנחש" שהוא נשאר באותו מצב עד סוף-הטווח. אם
+          // בדיקת-המצב-האמיתי (stateAt) מגלה שהניחוש שגוי כאן — לא משאירים את זה מיוחס/לחיץ לתוכנית
+          // שהניחוש שלה נכשל; הופכים לפער אנונימי (בלי שם, בלי לחיצה), רק הצבע-הנכון נשאר.
           const actualIsOn = stateAt((st+en)/2);
           if (actualIsOn !== s.isOn) {
             filled.push({ startMs: st, endMs: en, isOn: actualIsOn, kind: 'gap', progId: null, label: '' });
@@ -5223,7 +5177,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 64;
+BUILD_BOTTOM_MARK = 65;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
