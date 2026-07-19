@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 17;
+const IDX_TOP_MARK = 18;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1551,13 +1551,18 @@ async function schedulerTick(){
   const nowSec=nowIL.getHours()*3600+nowIL.getMinutes()*60+nowIL.getSeconds();
   const todayKey=nowIL.toDateString();
   const dow=nowIL.getDay();
-  _firedToday.forEach(k=>{if(!k.endsWith(todayKey))_firedToday.delete(k);});
+  // תיקון קריטי (אותה בעיה בדיוק שכבר תוקנה ל-_actuallyFired למטה, אבל נשכחה כאן): מפתח-אירוע-חוצה-
+  // חצות (מהסריקה "אתמול", בהמשך) מסתיים ב-yKey (תאריך-אתמול), לא ב-todayKey! ניקוי שבודק רק
+  // "מסתיים-ב-todayKey" היה מוחק אותו **מיד בטיק הבא** (5 שניות אחר-כך) — עוד לפני שהחלון-של-8-
+  // השניות בכלל נגמר — מה שאיפשר לאותו אירוע-בדיוק לירות **פעמיים** (נתפס-נמחק-נתפס-שוב, בתוך
+  // אותו חלון-תפיסה). זו הייתה הסיבה לכפילויות-מוזרות ב-5-שניות שנראו בפועל בלוג.
+  const _yIL_prune=new Date(nowIL);_yIL_prune.setDate(_yIL_prune.getDate()-1);
+  const _yesterdayKeyForPrune=_yIL_prune.toDateString();
+  _firedToday.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_firedToday.delete(k);});
   // תיקון קריטי: לא למחוק _actuallyFired ברגע ש-02:00 עבר! תוכנית שה"התחלה" שלה הייתה אתמול, אבל
   // ה"סיום-לפי-משך" שלה חוצה הרבה יותר מ-2 שעות לתוך היום הבא (למשל 22:59+8.5שע=07:29 למחרת) —
   // הייתה "שוכחת" שהיא בכלל התחילה, ברגע שהשעון עבר 02:00, ולעולם לא מכבה את עצמה. שומרים גם את
   // מפתחות-אתמול (לא רק היום), ומוחקים רק דברים ישנים משני ימים.
-  const _yIL_prune=new Date(nowIL);_yIL_prune.setDate(_yIL_prune.getDate()-1);
-  const _yesterdayKeyForPrune=_yIL_prune.toDateString();
   _actuallyFired.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_actuallyFired.delete(k);});
   if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey)_firedRunOnceToday.delete(id);});
   // ה-cache של getRunOnceTargetDateKeyServer מחשב "מהיום-האמיתי-קדימה" — צריך להתאפס בכל יום, אחרת
@@ -1738,7 +1743,21 @@ function computeModeSwitchImpactGlobal(newModeId) {
   const dow = nowIL.getDay();
   const zmanim = getZmanim(nowIL);
   let newModeEvents = [];
-  try { newModeEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey); }
+  try {
+    const todayEvents = computeTodayEvents(nowIL, zmanim, dow, todayKey);
+    // קריטי: "היום בלבד" לא מספיק! תוכנית שממשיכה-לדלוק-ברציפות מאתמול (או אפילו קודם) — למשל
+    // מחזור-לילה שחוצה-חצות, או תוכנית-כיבוי-יומית-עם-חזרה-אוטומטית (כמו "תאורה סלון") שה-OFF/ON
+    // שלה **כולם** קרו אתמול (בלי לחצות לתוך היום כלל) — הייתה בלתי-נראית-לגמרי ל"תוכניות-שהוחמצו",
+    // כי computeTodayEvents(היום) לא מייצרת בשבילה שום אירוע (המחזור-שלה-היום מתחיל רק הערב).
+    // זו בדיוק הסיבה שממסרים שהיו-כבר-דולקים-מאתמול לא חזרו לדלוק אחרי חזרה-ממצב-זמני.
+    // הפתרון: לחשב גם את "אתמול" (יום שלם, לא רק אירועים-חוצי-חצות) ולמזג לאותו ציר-זמן (בהזזה
+    // של 86400- שניות), בדיוק כמו ש-applyMissedRegularPrograms/reestablishRelayOwnership כבר עושות.
+    const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
+    const yKey = yIL.toDateString(), yDow = yIL.getDay(), yZman = getZmanim(yIL);
+    const yesterdayEvents = computeTodayEvents(yIL, yZman, yDow, yKey)
+      .map(e => ({ ...e, fireSec: e.fireSec - 86400, endSec: e.endSec !== null ? e.endSec - 86400 : null }));
+    newModeEvents = [...yesterdayEvents, ...todayEvents];
+  }
   finally { schedulerActiveModeId = savedMode; }
 
   // מפה של טווחי-בעלות של תוכניות עדיפות לכל ממסר — ראו הסבר מלא בגרסה הידנית של הפונקציה הזו למעלה
@@ -1762,11 +1781,16 @@ function computeModeSwitchImpactGlobal(newModeId) {
   }
 
   // מצא תוכניות שפספסו — מועמד אחד לכל ממסר
+  // חשוב: **לא** מסננים isEndEvent כאן! תוכנית עם action:OFF+duration (למשל "תאורה סלון", כיבוי-
+  // בלילה עם חזרה-אוטומטית-לדלוק) — המצב-הנכון-שלה-עכשיו ("צריכה לדלוק") מגיע **רק** מאירוע-
+  // הסיום-לפי-משך (isEndEvent, שבו action='ON' זה בעצם 'חזרה למצב-הקודם', לא תחילת-תוכנית-חדשה).
+  // סינון isEndEvent כאן הפך את התוכנית הזו לבלתי-נראית-לגמרי ל"תוכניות-שהוחמצו" — זו בדיוק הסיבה
+  // שממסרי-אור (עם מחזור OFF-בלילה/ON-ביום מבוסס-משך) לא חזרו לדלוק אחרי חזרה-ממצב-זמני.
   const missedCandidatesByRelay = {};
   for (const ev of newModeEvents) {
-    if (ev.action !== 'ON' || ev.isEndEvent) continue;
+    if (ev.action !== 'ON') continue;
     if (ev.fireSec > nowSec) continue;
-    if (nowSec - ev.fireSec <= 8) continue;
+    if (!ev.isEndEvent && nowSec - ev.fireSec <= 8) continue;
     if (ev.endSec !== null && ev.endSec <= nowSec) continue;
     // אם יש אירוע כיבוי מאוחר יותר שכבר עבר — הממסר כבוי כעת
     const lastOff = lastOffFiredByRelayG[ev.relayId];
@@ -1783,7 +1807,7 @@ function computeModeSwitchImpactGlobal(newModeId) {
   const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
   const missedPrograms = [];
   for (const ev of newModeEvents) {
-    if (ev.action !== 'ON' || ev.isEndEvent) continue;
+    if (ev.action !== 'ON') continue;
     if (!missedProgIds.has(ev.progId)) continue;
     if (ev.fireSec > nowSec) continue;
     if (ev.endSec !== null && ev.endSec <= nowSec) continue;
@@ -2275,4 +2299,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 17;
+const IDX_BOTTOM_MARK = 18;
