@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 16;
+const IDX_TOP_MARK = 17;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2055,19 +2055,76 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
 
 
 let _hasRunBootReconciliation = false;
+// משחזרת את relayOwner (הנהלת-חשבונות בזיכרון-בלבד — **לא** שולחת שום פקודת-MQTT) מול המצב-הנכון-
+// עכשיו, לכל ממסר עם היסטוריית-אירועים, לא רק ממסרים עם אירוע בתוך פער-מסוים. רצה **תמיד** בעלייה
+// (ראו runBootReconciliation) כי relayOwner נמחקת-לגמרי בכל הפעלה-מחדש, ובלי זה, ממסר שהיה כבר-
+// דולק-רציף (למשל באמצע-מחזור, בלי תזמון-ON/OFF ספציפי סמוך-לרגע-ההפעלה-מחדש) נשאר בלי-בעלים-רשום
+// לצמיתות — מה שמונע מ-staleRelays לתפוס אותו במעבר-המצב הבא (זה בדיוק הבאג שהתגלה בבדיקה בפועל).
+function reestablishRelayOwnership(nowMs) {
+  try {
+    const nowIL = new Date(new Date(nowMs).toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+    const todayKey = nowIL.toDateString();
+    const zmanimToday = getZmanim(nowIL);
+    const eventsToday = computeTodayEvents(nowIL, zmanimToday, nowIL.getDay(), todayKey)
+      .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000 }));
+
+    const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
+    const yDayStartMs = new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime();
+    const yKey = yIL.toDateString();
+    const zmanimY = getZmanim(yIL);
+    const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
+      .map(e => ({ ...e, _epochMs: yDayStartMs + e.fireSec*1000 }));
+
+    const allEvents = [...eventsYesterday, ...eventsToday].filter(e => e._epochMs <= nowMs);
+    const byRelay = {};
+    allEvents.forEach(e => { if (!byRelay[e.relayId]) byRelay[e.relayId] = []; byRelay[e.relayId].push(e); });
+
+    let restoredCount = 0;
+    Object.keys(byRelay).forEach(relayIdStr => {
+      const relayId = parseInt(relayIdStr, 10);
+      const evs = byRelay[relayIdStr].sort((a,b) => a._epochMs - b._epochMs);
+      const last = evs[evs.length-1];
+      if (last.action !== 'ON') return; // לא-דולק — אין בעלות-להחזיר
+      // אם עדיין יש endSec ולא עבר — התחייבות-הזמן עוד בתוקף; אם endSec כבר עבר, הבעלות-הזו כבר
+      // "פגה" בפועל (גם אם ה-OFF-event-הטבעי-שלה עוד לא הגיע ל-schedulerTick) — לא משחזרים אותה.
+      if (last.endSec !== null) {
+        const endEpochMs = dayStartMs + last.endSec*1000; // מבוסס תמיד על "היום" — תקין כי last כבר בעבר-הקרוב
+        if (endEpochMs <= nowMs) return;
+      }
+      relayOwner[relayId] = { progId: last.progId, name: last.name, priority: !!last.isPriority, endSec: last.endSec };
+      restoredCount++;
+    });
+    if (restoredCount > 0) {
+      addServerLog({ type: 'info', msg: `🔄 [התאמה] שוחזרו ${restoredCount} בעלויות-ממסר (לפי היסטוריית-אירועים, ללא שליחת פקודות)`, user: 'מערכת' });
+    }
+  } catch(e) {
+    console.error('❌ שגיאה בשחזור-בעלויות-ממסר (reestablishRelayOwnership):', e.message);
+  }
+}
+
 async function runBootReconciliation() {
   if (_hasRunBootReconciliation) return; // רק פעם אחת, לא בכל reconnect
   _hasRunBootReconciliation = true;
   try {
     const now = Date.now();
     const lastTick = _lastTickAtEpochMs;
-    if (lastTick === null) {
-      addServerLog({ type: 'info', msg: '🔄 עלייה ראשונה (אין פעימה קודמת) — לא נדרשת התאמה', user: 'מערכת' });
+    if (lastTick !== null && now <= lastTick) {
+      // שעון-המערכת לא-מהימן (למשל Pi בלי RTC, עוד לפני סנכרון-NTP) — לא מריצים שום דבר על שעון-דמיוני,
+      // כולל שחזור-הבעלויות למטה (היא גם תלויה ב"עכשיו" אמין).
+      addServerLog({ type: 'warning', msg: `⚠️ שעון-המערכת ברגע-העלייה לא מאוחר מהפעימה-האחרונה-הידועה — דוחים את בדיקת-ההתאמה (יתבצע-אוטומטית בטיק-הבא אחרי שהשעון יסתדר)`, user: 'מערכת' });
       return;
     }
-    if (now <= lastTick) {
-      // שעון-המערכת לא-מהימן (למשל Pi בלי RTC, עוד לפני סנכרון-NTP) — לא מריצים שום דבר על שעון-דמיוני.
-      addServerLog({ type: 'warning', msg: `⚠️ שעון-המערכת ברגע-העלייה לא מאוחר מהפעימה-האחרונה-הידועה — דוחים את בדיקת-ההתאמה (יתבצע-אוטומטית בטיק-הבא אחרי שהשעון יסתדר)`, user: 'מערכת' });
+
+    // שחזור-בעלויות (relayOwner) — **תמיד** רץ, בלי קשר לגודל-הפער או ל"האם קרה משהו בפער". זה
+    // בדיוק המקרה שהתגלה בבדיקה: ממסר שהיה כבר-דולק-באמצע-מחזור **לפני** ההפעלה-מחדש (בלי אף אירוע-
+    // ON/OFF ספציפי בתוך הפער-עצמו, כי הוא כבר היה באמצע-הפעולה) נשאר בלי-בעלים-רשום לצמיתות — כי
+    // relayOwner היא זיכרון-בלבד, ונמחקת-לגמרי בכל הפעלה-מחדש, ושום דבר אחר לא היה מחזיר אותה. זו
+    // רק "הנהלת-חשבונות" פנימית (לא שולחת שום פקודת-MQTT) — אין שום סיכון בהרצתה תמיד, ללא-תנאי.
+    reestablishRelayOwnership(now);
+
+    if (lastTick === null) {
+      addServerLog({ type: 'info', msg: '🔄 עלייה ראשונה (אין פעימה קודמת) — בעלויות-ממסרים שוחזרו, לא נדרשת התאמה נוספת', user: 'מערכת' });
       return;
     }
     const downMs = now - lastTick;
@@ -2075,7 +2132,7 @@ async function runBootReconciliation() {
     addServerLog({ type: 'info', msg: `🔄 השרת עלה מחדש — היה לא-פעיל ${downMin} דקות (${new Date(lastTick).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})} עד עכשיו). בודק אם נדרשת התאמה...`, user: 'מערכת' });
 
     if (!gapHasAnyScheduledActivity(lastTick, now)) {
-      addServerLog({ type: 'info', msg: '✅ לא היה שום תזמון (מצב או תוכנית) בחלון הזה — לא נדרשת התאמה', user: 'מערכת' });
+      addServerLog({ type: 'info', msg: '✅ לא היה שום תזמון (מצב או תוכנית) בחלון הזה — לא נדרשת התאמה נוספת (בעלויות-ממסרים כבר שוחזרו למעלה)', user: 'מערכת' });
       return;
     }
 
@@ -2218,4 +2275,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 16;
+const IDX_BOTTOM_MARK = 17;
