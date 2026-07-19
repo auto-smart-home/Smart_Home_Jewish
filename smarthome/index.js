@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 11;
+const IDX_TOP_MARK = 12;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1127,6 +1127,42 @@ function getChildEventPairs(child,parent,parentBaseMin){
   });
 }
 
+// מקבילה-שרתית ל-getRunOnceTargetDateKey שכבר קיימת בלקוח: מוצאת את "התאריך-היעד" של תוכנית
+// חד-פעמית — התאריך **הראשון מהיום-האמיתי** (לא מהתאריך-שנסרק כרגע!) שמתאים ל-days/calType שלה.
+// קריטי לסימולטור: בלי זה, computeTodayEvents לא בדק בכלל אם תאריך-עתידי-שנסרק הוא באמת התאריך
+// שבו התוכנית-החד-פעמית אמורה לירות — היא הייתה "יורה" בכל תאריך-עתידי-מתאים (כל יום-בשבוע התואם),
+// למרות שבפועל תוכנית חד-פעמית יורה **פעם אחת בלבד**, בתאריך-היעד-הקרוב-ביותר-מעכשיו, ואז מדביקה
+// את עצמה (active=false). ב"זמן-אמת" זה לא היה בעיה (ה-active flag כבר דואג לזה בפועל אחרי שהיא
+// יורה) — הבעיה חשופה **רק** כשסורקים תאריך-עתידי לפני שהתאריך-האמיתי-הזה כבר הגיע.
+const _runOnceDateCacheServer = {};
+let _lastRunOnceCacheDay = null;
+function getRunOnceTargetDateKeyServer(p) {
+  if (!p.runOnce) return null;
+  if (_runOnceDateCacheServer[p.id] !== undefined) return _runOnceDateCacheServer[p.id];
+  if (!p.active) { _runOnceDateCacheServer[p.id] = null; return null; }
+  const hasDays = p.days && p.days.length > 0;
+  const realToday = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  realToday.setHours(0,0,0,0);
+  for (let d = 0; d < 8; d++) {
+    const cand = new Date(realToday); cand.setDate(cand.getDate()+d);
+    const di = cand.getDay();
+    if (hasDays && !p.days.includes(di)) continue;
+    if (p.calType && p.calType !== 'none') {
+      const dd = cand.getDate(), mm = cand.getMonth()+1, yyyy = cand.getFullYear();
+      const entry = _calendarIndex[`${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}/${yyyy}`];
+      if (p.calType === 'annual') { if (dd !== p.calDay || mm !== p.calMonth) continue; }
+      else if (p.calType === 'once') { if (dd !== p.calDay || mm !== p.calMonth || yyyy !== p.calYear) continue; }
+      else if (p.calType === 'rosh_chodesh_aleph') { if (getHebrewDayNumber(entry) !== 1) continue; }
+      else if (p.calType === 'rosh_chodesh_lamed') { if (getHebrewDayNumber(entry) !== 30) continue; }
+    }
+    const key = cand.toDateString();
+    _runOnceDateCacheServer[p.id] = key;
+    return key;
+  }
+  _runOnceDateCacheServer[p.id] = null;
+  return null;
+}
+
 function computeTodayEvents(nowIL,zmanim,dow,todayKey){
   const events=[];
   const progsById={};
@@ -1135,6 +1171,13 @@ function computeTodayEvents(nowIL,zmanim,dow,todayKey){
     const runOnceStillOwedToday=p.runOnce&&_firedRunOnceToday.has(p.id)&&_firedRunOnceToday.get(p.id)._todayKey===todayKey;
     if(!p.active&&!runOnceStillOwedToday) continue;
     if(p.parentProgId) continue;
+    // תוכנית חד-פעמית: נכללת **רק** בתאריך-היעד-האמיתי-הראשון-מעכשיו — לא בכל תאריך-מתאים-אחר
+    // (ראו הסבר מעל getRunOnceTargetDateKeyServer). תוכנית שכבר "הושלמה היום" (runOnceStillOwedToday)
+    // ממשיכה להיכלל כרגיל, ללא קשר לבדיקה הזו — היא כבר עברה את זה בפועל.
+    if(p.runOnce && !runOnceStillOwedToday){
+      const targetKey = getRunOnceTargetDateKeyServer(p);
+      if(!targetKey || targetKey !== todayKey) continue;
+    }
     const modeIds=p.modeIds??(p.modeId!==null&&p.modeId!==undefined?[p.modeId]:[0]);
     if(!modeIds.includes(schedulerActiveModeId)) continue;
     if(p.days?.length&&!p.days.includes(dow)) continue;
@@ -1225,6 +1268,49 @@ function checkRelayOwnerBlockSim(simOwner,event,nowSec){
   return false;
 }
 
+// מחשבת את מקטעי-המצב הצפויים על-פני טווח-זמן — משתמשת **באותה בדיוק** computeScheduledModeFireEpoch
+// שכבר בנויה, מאומתת, ומשמשת את runBootReconciliation. לא נכתבה כאן שום לוגיקת-חישוב-זמנים חדשה —
+// רק "הליכה" על ציר-הזמן, בדיוק כמו computeModeSegments בלקוח (ואותו עיקרון-עיצוב: להשתמש
+// בפונקציות-החישוב-האמיתיות, כדי שאין סיכוי לפער בין מה-שהסימולטור-מראה למה-שבאמת-יקרה).
+function computeModeTimeline(rangeStartMs, rangeEndMs, startModeId) {
+  const timeline = [];
+  for (let d = new Date(rangeStartMs); d.getTime() <= rangeEndMs; d.setDate(d.getDate()+1)) {
+    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    for (const sm of scheduledModes) {
+      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epoch !== null && epoch >= rangeStartMs && epoch < rangeEndMs) {
+        timeline.push({ epochMs: epoch, toModeId: sm.toModeId, sm });
+      }
+    }
+  }
+  timeline.sort((a,b) => a.epochMs - b.epochMs);
+
+  // אם יש טיימר-חזרה-ממתין-בפועל (persisted) שרלוונטי לטווח — הוא הטרנזיציה-הראשונה-שתקרה
+  let pendingRevert = _pendingRevertInfo;
+  let mode = startModeId;
+  let segStart = rangeStartMs;
+  const segments = [];
+  const pushSeg = (endMs) => { if (endMs > segStart) { segments.push({ startMs: segStart, endMs, modeId: mode }); segStart = endMs; } };
+
+  for (const t of timeline) {
+    if (pendingRevert && pendingRevert.revertAtEpochMs <= t.epochMs && pendingRevert.revertAtEpochMs > rangeStartMs) {
+      if (mode === pendingRevert.modeJustSetTo) { pushSeg(pendingRevert.revertAtEpochMs); mode = pendingRevert.revertToMode; }
+      pendingRevert = null;
+    }
+    pushSeg(t.epochMs);
+    const prevMode = mode;
+    mode = t.toModeId;
+    pendingRevert = t.sm.durationOn
+      ? { revertToMode: prevMode, modeJustSetTo: t.toModeId, revertAtEpochMs: t.epochMs + ((t.sm.durationH||0)*3600+(t.sm.durationM||0)*60)*1000 }
+      : null;
+  }
+  if (pendingRevert && pendingRevert.revertAtEpochMs <= rangeEndMs && pendingRevert.revertAtEpochMs > rangeStartMs) {
+    if (mode === pendingRevert.modeJustSetTo) { pushSeg(pendingRevert.revertAtEpochMs); mode = pendingRevert.revertToMode; }
+  }
+  pushSeg(rangeEndMs);
+  return segments;
+}
+
 // ═══ סימולציית-תזמון לצורך בדיקה ═══════════════════════════════════════════════
 // מריצה "יבש" (בלי לשלוח שום פקודה אמיתית, בלי לגעת במצב-האמת) את כל התוכניות הפעילות
 // על פני טווח-תאריכים נבחר — כולל מחזורים, תוכניות-בת, אירועים-חוצי-חצות, וחסימות-בעלות-ממסר —
@@ -1241,24 +1327,56 @@ function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
   if (rangeSec > 32*86400) throw new Error('טווח ארוך מדי (מקסימום 31 ימים)');
   const rangeDays = Math.ceil(rangeSec/86400);
 
-  // מדמים activeModeId שונה (אופציונלי) בלי לגעת בערך האמיתי בזמן החישוב
-  const savedMode = schedulerActiveModeId;
-  if (simModeId !== undefined && simModeId !== null) schedulerActiveModeId = simModeId;
+  // ברירת-מחדל (simModeId לא סופק בכלל): מדמים את **המצבים-שבאמת-יקרו**, כולל כל מעברי-המצב
+  // המתוזמנים בטווח (computeModeTimeline) — לא מצב-קבוע-אחד לאורך כל הטווח. זה משקף את מה שבאמת
+  // יקרה בפועל, כולל הפקודות-שיתבצעו-בזמן-ואחרי-כל-מעבר. אם simModeId **כן** סופק במפורש — זו
+  // בקשה מפורשת ל"מה-היה-קורה-אילו-נשארנו-תמיד-במצב-הזה" (שימושי לבדיקת-תוכניות-של-מצב-ספציפי
+  // בבידוד) — במקרה הזה שומרים על ההתנהגות הישנה (מצב-קבוע-לאורך-כל-הטווח).
+  const scanLookbackStart = fromDate.getTime() - 86400000; // יום אחד לפני, לתפוס אירועים-חוצי-חצות
+  const scanRangeEnd = toDateExclusive.getTime();
+  const forcedConstantMode = (simModeId !== undefined && simModeId !== null);
+  const modeSegments = forcedConstantMode
+    ? [{ startMs: scanLookbackStart, endMs: scanRangeEnd, modeId: simModeId }]
+    : computeModeTimeline(scanLookbackStart, scanRangeEnd, schedulerActiveModeId);
 
+  const modeTransitionReportEntries = [];
+  if (!forcedConstantMode && modeSegments.length > 1) {
+    // מדלגים על המקטע-הראשון (הוא לא "מעבר", זה המצב-שכבר-היה-פעיל מלכתחילה) — כל שאר תחילות-
+    // המקטעים הן מעברי-מצב אמיתיים שיקרו בתוך הטווח, ומוסיפים אותם לדוח כדי שיראו "מה ומתי".
+    for (let i = 1; i < modeSegments.length; i++) {
+      const seg = modeSegments[i];
+      if (seg.startMs < fromDate.getTime() || seg.startMs >= scanRangeEnd) continue; // מחוץ לטווח-המבוקש-להצגה (רק ה-lookback)
+      modeTransitionReportEntries.push({ epochMs: seg.startMs, toModeId: seg.modeId });
+    }
+  }
+
+  const savedMode = schedulerActiveModeId;
   const allEvents = [];
   try {
     // סורקים גם יום אחד לפני הטווח, כדי לתפוס אירועים-חוצי-חצות שנכנסים לתוך הטווח
     for (let d = -1; d <= rangeDays; d++) {
       const scanDate = new Date(fromDate.getTime() + d*86400000);
+      const dayStartMs = scanDate.getTime();
       const dow = scanDate.getDay();
       const dateKey = scanDate.toDateString();
       const zmanim = getZmanim(scanDate);
-      const events = computeTodayEvents(scanDate, zmanim, dow, dateKey);
-      events.forEach(ev => {
-        const secSinceStart = d*86400 + ev.fireSec;
-        if (secSinceStart < 0 || secSinceStart >= rangeSec) return;
-        const endSecSinceStart = ev.endSec !== null ? d*86400 + ev.endSec : null;
-        allEvents.push({ ...ev, secSinceStart, endSecSinceStart, sourceDayKey: dateKey, scanDate: new Date(scanDate) });
+      // מוצאים את כל מקטעי-המצב שחופפים את היום הזה — יום יחיד עשוי לחצות מעבר-מצב (למשל ליל-שישי),
+      // ולכן ייתכן שצריך לחשב את אותו יום פעמיים, פעם לכל מצב, ולסנן כל אירוע לפי המקטע-שבאמת-חל
+      // ברגע-ההדלקה-שלו (בדיוק עיקרון-ה"בדיקה-לפי-תא" שכבר הוכח נכון בתצוגת-הלקוח).
+      const dayEndMs = dayStartMs + 86400000;
+      const overlappingSegs = modeSegments.filter(seg => seg.startMs < dayEndMs && seg.endMs > dayStartMs);
+      const segsToUse = overlappingSegs.length ? overlappingSegs : [{ startMs: dayStartMs, endMs: dayEndMs, modeId: schedulerActiveModeId }];
+      segsToUse.forEach(seg => {
+        schedulerActiveModeId = seg.modeId;
+        const events = computeTodayEvents(scanDate, zmanim, dow, dateKey);
+        events.forEach(ev => {
+          const epochMs = dayStartMs + ev.fireSec*1000;
+          if (epochMs < seg.startMs || epochMs >= seg.endMs) return; // שייך למקטע-מצב אחר של אותו יום
+          const secSinceStart = d*86400 + ev.fireSec;
+          if (secSinceStart < 0 || secSinceStart >= rangeSec) return;
+          const endSecSinceStart = ev.endSec !== null ? d*86400 + ev.endSec : null;
+          allEvents.push({ ...ev, secSinceStart, endSecSinceStart, sourceDayKey: dateKey, scanDate: new Date(scanDate) });
+        });
       });
     }
   } finally {
@@ -1281,7 +1399,25 @@ function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
     return `${dow}, ${dd}.${mm}, ${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   };
 
-  for (const ev of allEvents) {
+  // ממזגים את אירועי-התוכניות ואת מעברי-המצב לרשימה כרונולוגית **אחת**, לפי אותו בסיס-זמן
+  // (secSinceStart, יחסית ל-fromDate) — כדי שהדוח יראה בדיוק "מה קורה ומתי", כולל המעברים עצמם.
+  const modeMerged = modeTransitionReportEntries.map(m => ({
+    _isModeTransition: true,
+    secSinceStart: (m.epochMs - fromDate.getTime())/1000,
+    toModeId: m.toModeId,
+  }));
+  const timeline = [...allEvents.map(ev => ({ _isModeTransition: false, ev, secSinceStart: ev.secSinceStart })), ...modeMerged]
+    .sort((a,b) => a.secSinceStart - b.secSinceStart);
+
+  for (const item of timeline) {
+    if (item._isModeTransition) {
+      const d = Math.floor(item.secSinceStart/86400);
+      const secWithinDay = item.secSinceStart - d*86400;
+      const dispDate = new Date(fromDate.getTime() + d*86400000);
+      report.push({ time: fmtTime(dispDate, secWithinDay), prog: `🔄 מעבר-מצב מתוזמן`, relay: '—', action: `מצב ${item.toModeId}`, blocked: false, note: 'מעבר-מצב', isModeTransition: true });
+      continue;
+    }
+    const ev = item.ev;
     const key = `${ev.progId}_${ev.relayId}_${ev.segType}_${ev.cycleIdx??'x'}_${ev.fireSec}_${ev.isEndEvent?'end':'start'}_${ev.sourceDayKey}`;
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -1346,6 +1482,13 @@ async function schedulerTick(){
   const _yesterdayKeyForPrune=_yIL_prune.toDateString();
   _actuallyFired.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_actuallyFired.delete(k);});
   if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey)_firedRunOnceToday.delete(id);});
+  // ה-cache של getRunOnceTargetDateKeyServer מחשב "מהיום-האמיתי-קדימה" — צריך להתאפס בכל יום, אחרת
+  // אחרי כמה ימים הוא ימשיך להחזיר תאריך-יעד שכבר עבר (מחושב-פעם-אחת מ"היום" הישן). בניגוד ללקוח
+  // (שמתאפס ממילא בכל טעינת-דף), השרת רץ ברצף לאורך זמן, אז צריך איפוס-יזום.
+  if (todayKey !== _lastRunOnceCacheDay) {
+    Object.keys(_runOnceDateCacheServer).forEach(k => delete _runOnceDateCacheServer[k]);
+    _lastRunOnceCacheDay = todayKey;
+  }
   const zmanim=getZmanim(nowIL);
   const events=computeTodayEvents(nowIL,zmanim,dow,todayKey);
   const WINDOW_SEC=8;
@@ -1992,4 +2135,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 11;
+const IDX_BOTTOM_MARK = 12;
