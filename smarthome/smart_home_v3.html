@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-J (תיקון-שורש נפרד ומשמעותי: getProgMinutes הסתמכה על serverZmanim בלבד - ערך יחיד המייצג רק "היום" הנוכחי, שיכול להיות null ל-candles/havdalah בכל יום שאינו ערב-שבת/מוצ"ש עצמו. זה גרם לתוכניות-zman (בעיקר candles/havdalah) להיעלם/להיות בזמן שגוי-קשיח (19:20, תוך התעלמות מ-offsetVal!) בכל פעם שנסרק יום שאינו "היום" - גם בתצוגה הרגילה (getTimeBlocksForDate/renderTimeline) וגם במינימלית. תוקן: getProgMinutes/getRelayFireMin/getRelayEndMin/getRelayEventPairs/getChildEventPairs מקבלים כעת refDate אופציונלי ומחשבים לפי getZmanMinutesForDateSM (כמו computeModeSegments כבר עושה) עבור היום-הספציפי-שנסרק בפועל. כל נקודות-הקריאה הרלוונטיות עודכנו להעביר את התאריך שכבר יש להן. נבדק: 0 אי-התאמות מול הרגילה, 0 דליפות, ואירועי candles/havdalah מופיעים נכון גם כש-serverZmanim.candles=null.) -->
+<!-- BUILD_MARKER: v2026-07-19-K (המשך-ישיר לגרסה-J: getProgMinutes כעת מבחינה בין "candles/havdalah שלא-רלוונטי-היום" (null תקין ומשמעותי - אין הדלקת-נרות/הבדלה כלל, למשל באמצע השבוע) לבין "zman אחר שלא-נתמך ע"י חישוב-לפי-תאריך" (נופל ל-serverZmanim, כמו קודם). בלי ההבחנה הזו, תוכנית-עוגן-candles/havdalah (עם או בלי ימים נבחרים - days לא באמת מסנן כאן, אלא רק isAssurMelachaEntryClient על היום-הבא) הייתה מקבלת נפילה שגויה ומופיעה בכל יום. וגם: null עובר עכשיו נכון בכל השרשרת (getRelayFireMin/getRelayEndMin/getRelayEventPairs) - קודם null+delayMin היה "נהפך בשקט" למספר (0+delayMin) בגלל coercion, מה שהיה שובר את זה מחדש. נבדק: תוכנית-candles עם כל 7 הימים מסומנים כעת לא-יורה בשום יום מלבד ערב-שבת/חג, גם ברגיל וגם במינימלי; 0 אי-התאמות, 0 דליפות.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 71;
+const BUILD_TOP_MARK = 72;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1960,8 +1960,19 @@ function getProgMinutes(p, relayIndex, refDate){
   if(p.type==='time'){const[hh,mm]=p.time.split(':').map(Number);base=hh*60+mm;}
   else{
     let baseMin = null;
+    let candlesOrHavdalahNotApplicable = false;
     if (refDate) {
       try { baseMin = getZmanMinutesForDateSM(p.zman, refDate); } catch(e) { baseMin = null; }
+      // חשוב: null עבור candles/havdalah הוא תוצאה **תקינה ומשמעותית** ("היום הזה לא ערב-שבת/חג,
+      // אין הדלקת-נרות/הבדלה כלל") — לא "זמן לא-נתמך שצריך נפילה". אם ניפול כאן ל-serverZmanim,
+      // תוכנית-candles-בלי-ימים-נבחרים תדלוק **כל יום** (גם באמצע השבוע), במקום רק בערבי-שבת/חג —
+      // זה בדיוק הבאג שנמצא בפועל. לכן: רק זמנים אחרים (למשל sunset/sunrise) ממשיכים לנפילה.
+      if ((baseMin === null || baseMin === undefined) && (p.zman === 'candles' || p.zman === 'havdalah')) {
+        candlesOrHavdalahNotApplicable = true;
+      }
+    }
+    if (candlesOrHavdalahNotApplicable) {
+      return null; // אין הדלקת-נרות/הבדלה ביום הזה — התוכנית לא יורה כלל, אין "זמן" בכלל להחזיר
     }
     if (baseMin === null || baseMin === undefined) {
       // נפילה: אין refDate (קריאה ישנה/לא-מעודכנת), או שה-zman הזה לא-נתמך ע"י חישוב-לפי-תאריך
@@ -1981,17 +1992,23 @@ function getProgMinutes(p, relayIndex, refDate){
   return base + delayMin;
 }
 // Integer minutes for a specific relay in a program (for block placement)
+// מחזירה null אם התוכנית לא-יורה כלל היום (למשל zman:candles ביום-חול, ראו getProgMinutes) —
+// חובה להעביר את ה-null הזה הלאה, לא לתת ל-null+delayMin "להיהפך בשקט" למספר (0+delayMin).
 function getRelayFireMin(p, relayId, refDate){
   const ri = p.relay.indexOf(relayId);
-  if(ri<0) return getProgMinutes(p,0,refDate);
+  const base = getProgMinutes(p,0,refDate);
+  if(base === null || base === undefined) return null;
+  if(ri<0) return base;
   const delayMin = ri * (p.delay||0) / 60; // seconds → minutes
-  return getProgMinutes(p,0,refDate) + delayMin;
+  return base + delayMin;
 }
 // End minute when duration auto-off fires (for relay r in program p)
 function getRelayEndMin(p, relayId, refDate){
   if(!p.durationOn || (!p.durationH && !p.durationM)) return null;
+  const fireMin = getRelayFireMin(p, relayId, refDate);
+  if(fireMin === null || fireMin === undefined) return null;
   const durMin = (p.durationH||0)*60 + (p.durationM||0);
-  return getRelayFireMin(p, relayId, refDate) + durMin;
+  return fireMin + durMin;
 }
 // מחזירה רשימת זוגות {fireMin,endMin,action} לממסר relayId בתוכנית p.
 // תוכנית רגילה — זוג אחד (כמו getRelayFireMin/getRelayEndMin).
@@ -2002,6 +2019,10 @@ function getRelayEventPairs(p, relayId, refDate){
     return getChildEventPairs(p, refDate);
   }
   const start=getRelayFireMin(p,relayId,refDate);
+  // התוכנית לא-יורה כלל היום (למשל עוגן candles/havdalah ביום-חול, בלי ימים נבחרים) — אין שום
+  // קטע להחזיר, לא "קטע-בזמן-שגוי". בלי הבדיקה הזו, תוכנית-candles הייתה מקבלת ברירת-מחדל-קשיחה
+  // ומופיעה (בטעות) בכל יום, במקום רק בערבי-שבת/חג.
+  if(start === null || start === undefined) return [];
   const totalEnd=getRelayEndMin(p,relayId,refDate);
   if(totalEnd===null) return [{fireMin:start,endMin:null,action:p.action}];
   if(!p.cycleOn || !p.cycleOnMin || !p.cycleOffMin){
@@ -5211,7 +5232,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 71;
+BUILD_BOTTOM_MARK = 72;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
