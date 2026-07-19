@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-K (המשך-ישיר לגרסה-J: getProgMinutes כעת מבחינה בין "candles/havdalah שלא-רלוונטי-היום" (null תקין ומשמעותי - אין הדלקת-נרות/הבדלה כלל, למשל באמצע השבוע) לבין "zman אחר שלא-נתמך ע"י חישוב-לפי-תאריך" (נופל ל-serverZmanim, כמו קודם). בלי ההבחנה הזו, תוכנית-עוגן-candles/havdalah (עם או בלי ימים נבחרים - days לא באמת מסנן כאן, אלא רק isAssurMelachaEntryClient על היום-הבא) הייתה מקבלת נפילה שגויה ומופיעה בכל יום. וגם: null עובר עכשיו נכון בכל השרשרת (getRelayFireMin/getRelayEndMin/getRelayEventPairs) - קודם null+delayMin היה "נהפך בשקט" למספר (0+delayMin) בגלל coercion, מה שהיה שובר את זה מחדש. נבדק: תוכנית-candles עם כל 7 הימים מסומנים כעת לא-יורה בשום יום מלבד ערב-שבת/חג, גם ברגיל וגם במינימלי; 0 אי-התאמות, 0 דליפות.) -->
+<!-- BUILD_MARKER: v2026-07-19-L (תיקון-שורש: computeModeSegments הציגה תמיד "מצב 0" עבור כל זמן שכבר עבר (before "now"), גם ברגיל וגם במינימלי - כי הייתה מדלגת על כל תזמון-מצב שכבר קרה (atMs<nowMs), ומתחילה תמיד מ"מצב 0" ב-rangeStart עצמו. תוקן: הפונקציה מרחיבה כעת סריקה-פנימית 10 ימים אחורה מ-rangeStart (בלי קשר למה שהקורא ביקש), מפסיקה להתעלם מאירועים-שכבר-קרו, ומתחילה את ההליכה-הכרונולוגית מנקודת-העיגון-המורחבת - כך שגם זמנים-שחלפו משקפים נכון את מעבר-המצב-שבאמת-קרה, לא ברירת-מחדל שגויה. הפלט עדיין מוגבל ל-[rangeStart,rangeEnd) המבוקש. נבדק: תוצאה זהה לחלוטין ללא-תלות ב"עכשיו", וטווח-תצוגה שמתחיל בעבר עדיין נותן 0 אי-התאמות מול החישוב האמיתי.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -979,7 +979,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 72;
+const BUILD_TOP_MARK = 73;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1765,12 +1765,20 @@ function computeModeSegments(fromDate, rangeDays){
   const segments = [];
   const rangeStart = fromDate.getTime();
   const rangeEnd = rangeStart + rangeDays*86400000;
-  const nowMs = nowInLocalBasis();
 
-  // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח, ממוינים לפי זמן.
+  // הרחבה-פנימית-לאחור: תמיד סורקים לפחות 10 ימים *לפני* rangeStart (בלי קשר לטווח שביקש הקורא),
+  // כדי לתפוס לפחות מחזור-שבועי-מלא אחד של תזמוני-מצב לפני תחילת-התצוגה. זה קריטי כדי לדעת "מה
+  // המצב-הנכון כבר ב-rangeStart עצמו" — לא רק כדי להציג נכון ימים-עתידיים. פלט-הפונקציה עדיין
+  // מוגבל ל-[rangeStart, rangeEnd) בלבד (התוספת היא רק לחישוב-הבסיס-הפנימי, לא נחשפת החוצה).
+  const LOOKBACK_MS = 10*86400000;
+  const scanStart = rangeStart - LOOKBACK_MS;
+
+  // אסוף את כל אירועי-ההפעלה הסטטיים (מתי כל תזמון-מצב אמור לירות) בכל הטווח (כולל ה-lookback),
+  // ממוינים לפי זמן.
   const fireEvents = [];
-  for(let d=0; d<=rangeDays; d++){
-    const dayDate = new Date(fromDate); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
+  const scanDays = Math.ceil((rangeEnd - scanStart)/86400000);
+  for(let d=0; d<=scanDays; d++){
+    const dayDate = new Date(scanStart); dayDate.setDate(dayDate.getDate()+d); dayDate.setHours(0,0,0,0);
     const dow = dayDate.getDay();
     for(const sm of (_scheduledModes||[])){
       if(!sm.active) continue;
@@ -1803,24 +1811,22 @@ function computeModeSegments(fromDate, rangeDays){
       }
       if(fireMin===null || fireMin<0) continue;
       const atMs = dayDate.getTime() + fireMin*60000;
-      if(atMs<rangeStart || atMs>rangeEnd) continue;
-      // קריטי: תזמון שכבר ירה *בעבר האמיתי* (לפני "עכשיו") אסור לדמות מחדש — הוא כבר "אפוי" בתוך
-      // activeModeId (המצב הנוכחי בפועל) ו/או serverPendingRevert (אם עוד רץ). לדמות אותו מחדש כאן
-      // יוצר טיימר-חזרה כפול/סותר שמוחק את כל התוצאה (זה בדיוק הבאג שנמצא בבדיקה בפועל).
-      if(atMs < nowMs) continue;
+      if(atMs<scanStart || atMs>rangeEnd) continue;
       const durationSec = sm.durationOn ? ((sm.durationH||0)*3600+(sm.durationM||0)*60) : 0;
       fireEvents.push({ atMs, toModeId: sm.toModeId, durationSec, smName: sm.name });
     }
   }
   fireEvents.sort((a,b)=>a.atMs-b.atMs);
 
-  // ציר-הזמן הוא תחזית קבועה על סמך התזמונים המוגדרים בלבד — לא תלוי מה קורה בפועל ברגע הנוכחי.
-  // לכן הסימולציה תמיד מתחילה מ"מצב 0" (רגיל) כנקודת-ייחוס קבועה, ומתעלמת הן מ-activeModeId
-  // (המצב הפעיל בפועל, שיכול להשתנות ע"י מעבר-מצב ידני) והן מטיימר-חזרה אמיתי שכבר רץ בשרת —
-  // אחרת מעבר-מצב ידני היה "מאפס" את התצוגה למשתמש, בניגוד לכוונה (לראות תמיד את אותה תחזית).
+  // הסימולציה מתחילה תמיד מ"מצב 0" (רגיל) כנקודת-ייחוס קבועה, ומתעלמת מ-activeModeId (המצב הפעיל
+  // בפועל, שיכול להשתנות ע"י מעבר-מצב ידני) — אחרת מעבר-מצב ידני היה "מאפס" את התצוגה למשתמש,
+  // בניגוד לכוונה (לראות תמיד את אותה תחזית). ההבדל מהגרסה הקודמת: הנקודה הזו היא **scanStart**
+  // (10 ימים לפני הטווח המבוקש), לא rangeStart עצמו — וממשיכה כרונולוגית **כולל** אירועים-שכבר-
+  // עברו-בזמן-האמיתי (לא מדלגת עליהם יותר), כדי שגם ימים-שחלפו יראו נכון את המצב-שבאמת-חל אז,
+  // לא ברירת-מחדל שגויה של "מצב 0 תמיד". פלט הפונקציה עדיין נחתך ל-[rangeStart, rangeEnd) בלבד.
   const TIMELINE_HOME_MODE = 0;
   let curMode = TIMELINE_HOME_MODE;
-  let curTime = rangeStart;
+  let curTime = scanStart;
   let pendingRevert = null;
   let fireIdx = 0;
 
@@ -1831,7 +1837,10 @@ function computeModeSegments(fromDate, rangeDays){
     else if(pendingRevert){ nextAtMs = pendingRevert.atMs; nextType = 'revert'; }
     if(nextType===null || nextAtMs > rangeEnd) break;
 
-    segments.push({ startMs: curTime, endMs: nextAtMs, modeId: curMode });
+    if(nextAtMs > curTime){
+      const segStart = Math.max(curTime, rangeStart), segEnd = Math.min(nextAtMs, rangeEnd);
+      if(segEnd > segStart) segments.push({ startMs: segStart, endMs: segEnd, modeId: curMode });
+    }
     curTime = nextAtMs;
 
     if(nextType==='fire'){
@@ -1847,7 +1856,9 @@ function computeModeSegments(fromDate, rangeDays){
       pendingRevert = null;
     }
   }
-  segments.push({ startMs: curTime, endMs: rangeEnd, modeId: curMode });
+  if(rangeEnd > Math.max(curTime, rangeStart)){
+    segments.push({ startMs: Math.max(curTime, rangeStart), endMs: rangeEnd, modeId: curMode });
+  }
   return segments;
 }
 
@@ -5232,7 +5243,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 72;
+BUILD_BOTTOM_MARK = 73;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
