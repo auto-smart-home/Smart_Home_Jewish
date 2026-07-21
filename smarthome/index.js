@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 20;
+const IDX_TOP_MARK = 21;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -460,6 +460,10 @@ let schedulerPrograms = [];
 let schedulerActiveModeId = 0;
 let scheduledModes = []; // תזמוני החלפת מצב
 let _previousModeId = null; // המצב לפני מעבר עם duration (לחזרה אוטומטית)
+// מתי קרה מעבר-המצב-האחרון — נדרש כדי לדעת "מאיפה להתחיל לחפש תוכניות-שהוחמצו" בכל מעבר-מצב-חדש
+// (ראו commitAutoModeSwitch: applyMissedRegularPrograms(lastTransition, now)). null עד המעבר-הראשון
+// (לא רץ retroactively על היסטוריה-מלפני-שהשרת-עלה — boot reconciliation כבר מטפלת בזה בנפרד).
+let _lastModeTransitionAtMs = null;
 let _activeScheduledModeTimer = null; // טיימר חזרה פעיל
 let _pendingRevertInfo = null; // מידע חשוף ללקוח: { revertToMode, revertAtEpochMs } | null
 const _firedToday = new Set();
@@ -1709,6 +1713,7 @@ function clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo) {
 function commitAutoModeSwitch(newModeId, label) {
   if (newModeId === schedulerActiveModeId) return;
   try {
+    const nowMsForSwitch = debugNow().getTime();
     const impact = computeModeSwitchImpactGlobal(newModeId);
     schedulerActiveModeId = newModeId;
     saveConfigLocal();
@@ -1742,6 +1747,17 @@ function commitAutoModeSwitch(newModeId, label) {
         }
       }).catch(() => {});
     });
+    // תוכנית-כיבוי (או הדלקה) שהוחמצה **בזמן-שהות-במצב-שרק-עכשיו-עוזבים** — staleRelays/missedPrograms
+    // מבוססות-בעלות (relayOwner) בלבד, ולכן לא תופסות מקרה שבו הממסר מעולם לא היה "בבעלות" (למשל
+    // הודלק/כובה ידנית תוך-כדי-השהות-במצב-הזמני — פעולה ידנית לא נוגעת ב-relayOwner בכלל!) — אבל
+    // הלוח-זמנים-של-המצב-החדש עדיין "רוצה" משהו-אחר עכשיו. applyMissedRegularPrograms לא תלויה
+    // ב-relayOwner בכלל — מחשבת ישירות מההיסטוריה (שני הכיוונים), ו"אחרון-כרונולוגית-מנצח" — כך
+    // שהדלקה-מאוחרת-יותר (אחרי הכיבוי-שהוחמץ) עדיין מכבדת אוטומטית, בלי טיפול-מיוחד.
+    if (_lastModeTransitionAtMs !== null) {
+      try { applyMissedRegularPrograms(_lastModeTransitionAtMs, nowMsForSwitch); }
+      catch(e) { console.error('❌ שגיאה בבדיקת-תוכניות-שהוחמצו (מעבר-מצב חי):', e.message); }
+    }
+    _lastModeTransitionAtMs = nowMsForSwitch;
     io.emit('mode_changed', { newModeId, label });
     addServerLog({ type: 'info', msg: `🕐 [תזמון מצב] עבר למצב ${newModeId} — ${label}`, user: 'מערכת' });
   } catch(e) {
@@ -1766,6 +1782,11 @@ function computeModeSwitchImpactGlobal(newModeId, opts) {
   for (const relayIdStr of Object.keys(ownerMap)) {
     const relayId = parseInt(relayIdStr, 10);
     const owner = ownerMap[relayId];
+    // אם הבעלות-הרשומה כבר פגה (endSec שלה כבר עבר) — היא לא אומרת שום דבר אמין על "מה-כרגע-דולק-
+    // ומכוח-מה". תוכנית שכבר סיימה-את-ההתחייבות-שלה (ואולי הממסר שונה-ידנית כמה פעמים מאז, בלי
+    // שדבר עדכן/ניקה את הרישום — פעולה ידנית לא נוגעת ב-relayOwner בכלל) לא צריכה לגרום לכיבוי
+    // כאן. זה בדיוק אותו עיקרון-תפוגה שכבר קיים ב-checkRelayOwnerBlock — עכשיו עקבי גם כאן.
+    if (owner.endSec !== null && owner.endSec <= nowSec) { delete ownerMap[relayId]; continue; }
     const p = schedulerPrograms.find(x => String(x.id) === String(owner.progId));
     const modeIds = p ? (p.modeIds ?? (p.modeId !== null ? [p.modeId] : [0])) : [];
     if (!modeIds.includes(newModeId)) staleRelays.push({ relayId, relayName: schedulerRelayNames[relayId] || `ממסר ${relayId}`, ownerProgName: owner.name });
@@ -2331,4 +2352,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 20;
+const IDX_BOTTOM_MARK = 21;
