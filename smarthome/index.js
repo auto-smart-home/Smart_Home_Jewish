@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 27;
+const IDX_TOP_MARK = 28;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -438,6 +438,9 @@ function getControllerForRelay(globalRelayId) {
 
 // ── IVR URL — כעת מצביע לדומיין המקומי (Cloudflare Tunnel) ─
 const YEMOT_API_LINK_URL = process.env.YEMOT_API_LINK_URL || 'https://smarthome.example.com/yemot';
+// "בסיס" בלי ה-/yemot בסוף — כדי לבנות נתיבים ברמה-עליונה (למשל /schedule) ולא רק תת-נתיבים תחת
+// /yemot/... — נבדק כניסוי, כי יש חשד שהמערכת של ימות לא מטפלת נכון בתת-נתיבים (subpaths).
+const YEMOT_API_BASE_URL = YEMOT_API_LINK_URL.replace(/\/yemot\/?$/, '');
 
 // שתי הפונקציות האלה הן **מקור-האמת היחיד** לסדר-הפריטים ברשימת-הבחירה הטלפונית (תוכניות/
 // תיזמונים) — גם בונה-ה-TTS (buildYemotAutoFiles) וגם ה-endpoints שמפרשים-לחיצה (/yemot/program,
@@ -502,7 +505,7 @@ function buildYemotAutoFiles(kind) {
       'type=api',
       'rate=0',
       'voice=Osnat',
-      `api_link=${YEMOT_API_LINK_URL}/schedule`,
+      `api_link=${YEMOT_API_BASE_URL}/schedule`,
       'api_hangup_send=No',
       `api_000=SchedNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
       'api_001=Action,,1,1,5,No,yes,yes,,1.2.3,3,',
@@ -2431,7 +2434,9 @@ app.get('/yemot/program', async (req, res) => {
 // ניהול-תיזמוני-מצב (הפעלה/השבתה) דרך IVR — **רק לאדמין**, ורק תזמונים שסומנו sm.ivr===true.
 // השבתה כאן **לא** מבטלת מעבר-מצב שכבר קורה עכשיו — רק מונעת הפעלות-עתידיות (אותה סמנטיקה
 // בדיוק כמו ה-checkbox "פעיל" בממשק).
-app.get('/yemot/schedule', async (req, res) => {
+// הלוגיקה מופרדת לפונקציה-משותפת, נרשמת גם תחת /yemot/schedule (המקורי) וגם תחת /schedule
+// (ניסוי: חשד שמערכת-ימות לא מטפלת נכון בתת-נתיבים כמו /yemot/schedule — ראו את השיחה על כך).
+async function handleScheduleIvrRequest(req, res) {
   const schedNumStr=req.query.SchedNum||'',actionDigit=req.query.Action||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
   if(!schedNumStr||!actionDigit||!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
@@ -2447,7 +2452,7 @@ app.get('/yemot/schedule', async (req, res) => {
   if(!sm) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
   if(actionDigit==='3'){
-    return res.send(ymResponse(`תזמון`));
+    return res.send(ymResponse(`תזמון ${sm.name} כרגע ${sm.active?'פעיל':'מושבת'}`));
   }
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
   if(setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
@@ -2458,7 +2463,9 @@ app.get('/yemot/schedule', async (req, res) => {
     addServerLog({type:'info',msg:`📞 [IVR] תזמון-מצב "${sm.name}" ${setActive?'הופעל':'הושבת'} ע"י מנהל (ID ${callerId})`,user:'IVR'});
     return res.send(ymResponse(`תזמון ${sm.name} ${setActive?'הופעל':'הושבת'} בהצלחה`));
   }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
-});
+}
+app.get('/yemot/schedule', handleScheduleIvrRequest);
+app.get('/schedule', handleScheduleIvrRequest);
 
 app.get('/dashboard', (req, res) => res.redirect('/smart_home_v3.html'));
 
@@ -2497,4 +2504,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 27;
+const IDX_BOTTOM_MARK = 28;
