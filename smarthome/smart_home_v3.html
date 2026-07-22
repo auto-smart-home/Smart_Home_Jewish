@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-21-M (תוסף חדש: שליטה-טלפונית (IVR) בתוכניות ותיזמוני-מצב, לא רק ממסרים. כל תוכנית (לא-בת) וכל תזמון-מצב יכולים להיות מסומנים checkbox "🎙️ IVR" - רק המסומנים נכללים ברשימת-הבחירה שנבנית אוטומטית לשלוחה. נוסף בורר "תוכן התפריט-האוטומטי" (ממסרים/תוכניות/תיזמוני-מצב) לטאב ה-IVR, ששולח kind לשרת. שרת: buildYemotAutoFiles מקבלת קלט kind ובונה תוכן מתאים; שני endpoints חדשים /yemot/program ו-/yemot/schedule (מוגבלים לאדמין בלבד) מטפלים בהפעלה/השבתה בפועל, עם עדכון-חי לממשק (program_updated/scheduled_modes). נבדק: שלושת סוגי-buildYemotAutoFiles, ושני ה-endpoints החדשים (אדמין/לא-אדמין/קלט-שגוי/מספר-לא-מוכר) - כולם תקינים.) -->
+<!-- BUILD_MARKER: v2026-07-21-O (תיקון-שורש: sm.name (שם-תזמון-המצב) היה קיים בנתונים ומשמש להכרזת-IVR, אבל **מעולם לא הוצג בממשק בכלל** - המשתמש לא היה יכול לראות/לערוך אותו, ולכן הוצג טקסט-ישן/מוזר (כמו "תזמון 9604" - שם-ברירת-מחדל שלא שונה, או שם-בדיקה-ישן) בלי שהיה ברור מנין. נוסף שדה-טקסט גלוי-ועריך בראש כל שורת-תזמון בחלון ניהול-מצבים-מתוזמנים, קשור ל-sm.name - עכשיו המשתמש רואה בדיוק מה יוקרא בטלפון, ויכול לשנות ישירות.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -572,6 +572,8 @@
       <button class="icon-btn" onclick="clearProgSelection()">נקה בחירה</button>
       <button class="icon-btn" onclick="bulkSetActive(true)">✅ הפעל נבחרים</button>
       <button class="icon-btn" onclick="bulkSetActive(false)">⏸ השבת נבחרים</button>
+      <button class="icon-btn" onclick="bulkSetIvr(true)">🎙️ הוסף ל-IVR</button>
+      <button class="icon-btn" onclick="bulkSetIvr(false)">🎙️ הסר מ-IVR</button>
       <button class="icon-btn" onclick="bulkDelete()" style="color:var(--danger)">🗑 מחק נבחרים</button>
       <span style="display:flex;align-items:center;gap:5px">
         <select class="form-select" id="bulk-mode-select"></select>
@@ -992,7 +994,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 74;
+const BUILD_TOP_MARK = 76;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -2718,6 +2720,22 @@ function bulkSetActive(active){
   renderPrograms();renderRelays();saveLS();
   if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
   toast(`${n} תוכניות עודכנו`);
+}
+function bulkSetIvr(ivr){
+  if(currentUser && currentUser.role!=='admin' && !currentUser.canEditPrograms){
+    toast('אינך מורשה לערוך תוכניות');return;
+  }
+  if(!selectedProgIds.size){toast('לא נבחרו תוכניות');return;}
+  let n=0;
+  selectedProgIds.forEach(id=>{
+    const p=programs.find(x=>x.id===id);
+    // תוכניות-בת לא נכללות ב-IVR בכלל (הן פרטי-מימוש-פנימיים, לא נועדו לניהול-טלפוני ישיר) — אין
+    // להן ממילא checkbox-בחירה משלהן ברשימה, אבל בדיקה הגנתית כאן לא מזיקה.
+    if(p && !p.parentProgId && !!p.ivr!==ivr){p.ivr=ivr;n++;}
+  });
+  if(n) addLog('info', `${n} תוכניות ${ivr?'נוספו ל-IVR 🎙️':'הוסרו מ-IVR'} (פעולה מרובה)`);
+  renderPrograms();saveLS();syncProgramsToServer();
+  toast(n ? `${n} תוכניות עודכנו` : `כל התוכניות הנבחרות כבר ${ivr?'ב-IVR':'לא ב-IVR'}`);
 }
 function bulkDelete(){
   if(currentUser && currentUser.role!=='admin' && !currentUser.canDeletePrograms){
@@ -5135,9 +5153,10 @@ function buildSmRow(sm, idx) {
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <input type="checkbox" ${sm.active?'checked':''} onchange="_scheduledModes[${idx}].active=this.checked" title="פעיל">
       <span style="font-size:12px;color:var(--muted)">#${sm.id}</span>
+      <input type="text" value="${(sm.name||'').replace(/"/g,'&quot;')}" placeholder="שם התזמון (למשל: כניסה למצב חוץ-לבית)" oninput="_scheduledModes[${idx}].name=this.value" title="השם הזה נקרא-בקול כשמסמנים 🎙️ IVR — כדאי לתת שם ברור" style="flex:1;min-width:180px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-family:inherit;color:var(--text)">
       <span style="font-size:13px;color:var(--muted)">עבור למצב:</span>
       <select onchange="_scheduledModes[${idx}].toModeId=parseInt(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${modeOpts}</select>
-      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer" title="תאפשר הפעלה/השבתה של התזמון הזה דרך שיחת-טלפון (IVR)">
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer" title="תאפשר הפעלה/השבתה של התזמון הזה דרך שיחת-טלפון (IVR) — השם שכתוב משמאל הוא מה שיוקרא בטלפון">
         <input type="checkbox" ${sm.ivr?'checked':''} onchange="_scheduledModes[${idx}].ivr=this.checked"> 🎙️ IVR
       </label>
       <button onclick="removeScheduledMode(${idx})" style="margin-right:auto;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:6px;padding:3px 8px;cursor:pointer;font-family:inherit">🗑</button>
@@ -5267,7 +5286,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 74;
+BUILD_BOTTOM_MARK = 76;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
