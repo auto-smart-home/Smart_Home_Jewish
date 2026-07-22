@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-19-L (תיקון-שורש: computeModeSegments הציגה תמיד "מצב 0" עבור כל זמן שכבר עבר (before "now"), גם ברגיל וגם במינימלי - כי הייתה מדלגת על כל תזמון-מצב שכבר קרה (atMs<nowMs), ומתחילה תמיד מ"מצב 0" ב-rangeStart עצמו. תוקן: הפונקציה מרחיבה כעת סריקה-פנימית 10 ימים אחורה מ-rangeStart (בלי קשר למה שהקורא ביקש), מפסיקה להתעלם מאירועים-שכבר-קרו, ומתחילה את ההליכה-הכרונולוגית מנקודת-העיגון-המורחבת - כך שגם זמנים-שחלפו משקפים נכון את מעבר-המצב-שבאמת-קרה, לא ברירת-מחדל שגויה. הפלט עדיין מוגבל ל-[rangeStart,rangeEnd) המבוקש. נבדק: תוצאה זהה לחלוטין ללא-תלות ב"עכשיו", וטווח-תצוגה שמתחיל בעבר עדיין נותן 0 אי-התאמות מול החישוב האמיתי.) -->
+<!-- BUILD_MARKER: v2026-07-21-M (תוסף חדש: שליטה-טלפונית (IVR) בתוכניות ותיזמוני-מצב, לא רק ממסרים. כל תוכנית (לא-בת) וכל תזמון-מצב יכולים להיות מסומנים checkbox "🎙️ IVR" - רק המסומנים נכללים ברשימת-הבחירה שנבנית אוטומטית לשלוחה. נוסף בורר "תוכן התפריט-האוטומטי" (ממסרים/תוכניות/תיזמוני-מצב) לטאב ה-IVR, ששולח kind לשרת. שרת: buildYemotAutoFiles מקבלת קלט kind ובונה תוכן מתאים; שני endpoints חדשים /yemot/program ו-/yemot/schedule (מוגבלים לאדמין בלבד) מטפלים בהפעלה/השבתה בפועל, עם עדכון-חי לממשק (program_updated/scheduled_modes). נבדק: שלושת סוגי-buildYemotAutoFiles, ושני ה-endpoints החדשים (אדמין/לא-אדמין/קלט-שגוי/מספר-לא-מוכר) - כולם תקינים.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -696,9 +696,19 @@
       <div style="font-size: 13px;color:var(--muted);margin-bottom:12px">עריכה ישירה של קבצי הטקסט/TTS בשלוחת ימות המשיח דרך ה-API הרשמי (DownloadFile/UploadFile) — בלי להיכנס לאתר ימות. אפשר גם לעדכן אוטומטית את כל קבצי תפריט "ממסר ← פעולה ← משך זמן" לפי שמות הממסרים והרשאות המתקשרים שמוגדרים כרגע במערכת.</div>
       <div class="form-row-inline">
         <div class="form-row">
-          <label class="form-label">מספר שלוחה</label>
-          <input class="form-input" id="ivr-ext-input" placeholder="למשל: 1">
+          <label class="form-label">תוכן התפריט-האוטומטי</label>
+          <select class="form-select" id="ivr-autoupdate-kind">
+            <option value="relay">ממסרים (הדלקה/כיבוי/משך)</option>
+            <option value="program">ניהול תוכניות (הפעלה/השבתה) — רק תוכניות המסומנות 🎙️ IVR</option>
+            <option value="schedule">ניהול תיזמוני-מצב (הפעלה/השבתה) — רק תזמונים המסומנים 🎙️ IVR</option>
+          </select>
         </div>
+        <div class="form-row">
+          <label class="form-label">מספר שלוחה (התיקייה בימות שאליה מעדכנים)</label>
+          <input class="form-input" id="ivr-ext-input" placeholder="למשל: 700/1">
+        </div>
+      </div>
+      <div class="form-row-inline">
         <div class="form-row">
           <label class="form-label">שם קובץ (TTS / ext.ini)</label>
           <input class="form-input" id="ivr-tts-file-input" placeholder="למשל: 000.tts / ext.ini">
@@ -947,6 +957,9 @@
       <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer">
         <input type="checkbox" id="prog-active" checked> פעיל
       </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer" title="תאפשר הפעלה/השבתה של התוכנית הזו דרך שיחת-טלפון (IVR) — יתווסף לרשימת-הקריאה בשלוחת ניהול-התוכניות">
+        <input type="checkbox" id="prog-ivr"> 🎙️ כלול בשליטה טלפונית (IVR)
+      </label>
     </div>
     <div class="form-row">
       <label class="form-label">מרווח בין ערוצים (שניות)</label>
@@ -979,7 +992,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 73;
+const BUILD_TOP_MARK = 74;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1301,9 +1314,9 @@ function connectMQTT() {
   socket.on('yemot_autoupdate_preview', ({ ok, tts000, tts001, tts002, extIni, error }) => {
     if (ok) {
       document.getElementById('ivr-tts-content').value =
-        `═══ 000.tts (רשימת ממסרים + בחירה) ═══\n${tts000}\n\n` +
+        `═══ 000.tts (רשימת-בחירה) ═══\n${tts000}\n\n` +
         `═══ 001.tts (בחירת פעולה) ═══\n${tts001}\n\n` +
-        `═══ 002.tts (בחירת משך זמן) ═══\n${tts002}\n\n` +
+        (tts002 ? `═══ 002.tts (בחירת משך זמן) ═══\n${tts002}\n\n` : '') +
         `═══ ext.ini ═══\n${extIni}`;
       toast('זו תצוגה מקדימה בלבד — עדיין לא הועלה לימות');
     } else {
@@ -2439,6 +2452,7 @@ function renderPrograms(){
           ${p.durationOn&&(p.durationH||p.durationM)?`<span class="prog-chip" style="color:var(--accent3);border-color:rgba(167,139,250,0.28)">⏱ למשך ${p.durationH?p.durationH+'שע ':' '}${p.durationM?p.durationM+'דק':''}</span>`:''}
           ${p.cycleOn&&p.cycleOnMin&&p.cycleOffMin?`<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🔁 מחזורים: ${p.cycleOnMin}/${p.cycleOffMin} דק'</span>`:''}
           ${p.calType&&p.calType!=='none'&&p.calLabel?`<span class="prog-chip" style="color:var(--warn);border-color:rgba(245,158,11,0.28)">📅 ${p.calLabel}</span>`:''}
+          ${p.ivr?'<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🎙️ IVR</span>':''}
           ${cfWith?`<span class="prog-chip conflict-c" onclick="scrollToProg(${cfWith})">⚠ התנגשות עם #${cfWith}</span>`:''}
           ${!modeMatch?'<span class="prog-chip" style="color:var(--muted)">לא פעיל במצב נוכחי</span>':''}
         </div>
@@ -2784,6 +2798,7 @@ function openAddProgram(editId){
   document.getElementById('prog-runonce').checked=false;
   document.getElementById('prog-priority').checked=false;
   document.getElementById('prog-active').checked=true;
+  document.getElementById('prog-ivr').checked=false;
   document.getElementById('prog-delay').value=0;
   document.getElementById('prog-duration-on').checked=false;
   document.getElementById('prog-duration-h').value=0;
@@ -2818,6 +2833,7 @@ function openAddProgram(editId){
     document.getElementById('prog-runonce').checked=!!p.runOnce;
     document.getElementById('prog-priority').checked=!!p.priority;
     document.getElementById('prog-active').checked=!!p.active;
+    document.getElementById('prog-ivr').checked=!!p.ivr;
     document.getElementById('prog-delay').value=p.delay||0;
     document.getElementById('prog-duration-on').checked=!!p.durationOn;
     document.getElementById('prog-duration-h').value=p.durationH||0;
@@ -3001,6 +3017,7 @@ function saveProgram(){
     days,priority:document.getElementById('prog-priority').checked,
     runOnce:document.getElementById('prog-runonce').checked,
     active:document.getElementById('prog-active').checked,
+    ivr:document.getElementById('prog-ivr').checked,
     delay:parseInt(document.getElementById('prog-delay').value)||0,
     modeIds,
     calType: calType,
@@ -4583,18 +4600,21 @@ function saveYemotFile(){
   socket.emit('save_yemot_file', { ext, filename, content });
 }
 
-// תצוגה מקדימה / עדכון אוטומטי של תפריט "ממסר ← פעולה ← משך זמן" (000/001/002.tts + ext.ini)
-// בנוי משמות הממסרים הקיימים כרגע במערכת — בלי לדעת את קידודי ימות בעצמך
+// תצוגה מקדימה / עדכון אוטומטי של תפריט-הקריאה (000/001[/002].tts + ext.ini) — לפי הסוג הנבחר:
+// ממסרים (הדלקה/כיבוי/משך, כמו קודם), או ניהול-תוכניות/ניהול-תיזמוני-מצב (רק פריטים המסומנים 🎙️ IVR)
 function previewYemotAutoUpdate(){
+  const kind = document.getElementById('ivr-autoupdate-kind').value;
   toast('בונה תצוגה מקדימה...');
-  socket.emit('get_yemot_autoupdate_preview');
+  socket.emit('get_yemot_autoupdate_preview', { kind });
 }
 
 function runYemotAutoUpdate(){
+  const kind = document.getElementById('ivr-autoupdate-kind').value;
   const ext = document.getElementById('ivr-ext-input').value.trim();
   if(!ext){ toast('נא למלא מספר שלוחה'); return; }
-  if(!confirm(`לעדכן אוטומטית את הקבצים 000.tts / 001.tts / 002.tts / ext.ini בשלוחה ${ext}? פעולה זו תחליף כל תוכן קיים בקבצים האלה.`)) return;
-  socket.emit('run_yemot_autoupdate', { ext });
+  const filesDesc = kind==='relay' ? '000.tts / 001.tts / 002.tts / ext.ini' : '000.tts / 001.tts / ext.ini';
+  if(!confirm(`לעדכן אוטומטית את הקבצים ${filesDesc} בשלוחה ${ext}? פעולה זו תחליף כל תוכן קיים בקבצים האלה.`)) return;
+  socket.emit('run_yemot_autoupdate', { ext, kind });
 }
 
 // ── QUICK ACTIONS ─────────────────────────────────────────
@@ -5114,8 +5134,12 @@ function buildSmRow(sm, idx) {
   return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px" id="sm-row-${idx}">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <input type="checkbox" ${sm.active?'checked':''} onchange="_scheduledModes[${idx}].active=this.checked" title="פעיל">
+      <span style="font-size:12px;color:var(--muted)">#${sm.id}</span>
       <span style="font-size:13px;color:var(--muted)">עבור למצב:</span>
       <select onchange="_scheduledModes[${idx}].toModeId=parseInt(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-family:inherit;color:var(--text)">${modeOpts}</select>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer" title="תאפשר הפעלה/השבתה של התזמון הזה דרך שיחת-טלפון (IVR)">
+        <input type="checkbox" ${sm.ivr?'checked':''} onchange="_scheduledModes[${idx}].ivr=this.checked"> 🎙️ IVR
+      </label>
       <button onclick="removeScheduledMode(${idx})" style="margin-right:auto;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:6px;padding:3px 8px;cursor:pointer;font-family:inherit">🗑</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -5243,7 +5267,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 73;
+BUILD_BOTTOM_MARK = 74;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
