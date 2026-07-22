@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 26;
+const IDX_TOP_MARK = 27;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -478,6 +478,8 @@ function buildYemotAutoFiles(kind) {
     const tts001 = buildTtsLines(['להפעלת התוכנית הקש 1', 'להשבתת התוכנית הקש 2', 'לבדיקת סטטוס התוכנית הקש 3']);
     const extIni = [
       'type=api',
+      'rate=0',
+      'voice=Osnat',
       `api_link=${YEMOT_API_LINK_URL}/program`,
       'api_hangup_send=No',
       `api_000=ProgNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
@@ -498,6 +500,8 @@ function buildYemotAutoFiles(kind) {
     const tts001 = buildTtsLines(['להפעלת התזמון הקש 1', 'להשבתת התזמון הקש 2', 'לבדיקת סטטוס התזמון הקש 3']);
     const extIni = [
       'type=api',
+      'rate=0',
+      'voice=Osnat',
       `api_link=${YEMOT_API_LINK_URL}/schedule`,
       'api_hangup_send=No',
       `api_000=SchedNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
@@ -518,6 +522,8 @@ function buildYemotAutoFiles(kind) {
   const tts002 = buildTtsLines(['כעת הקישו את מספר הדקות לפעולה, או הקישו 0 לפעולה קבועה בלי הגבלת זמן']);
   const extIni = [
     'type=api',
+    'rate=0',
+    'voice=Osnat',
     `api_link=${YEMOT_API_LINK_URL}`,
     'api_hangup_send=No',
     `api_000=Relay,,2,1,7,No,yes,yes,,${relayKeys},3,`,
@@ -2491,4 +2497,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 26;
+const IDX_BOTTOM_MARK = 27;
