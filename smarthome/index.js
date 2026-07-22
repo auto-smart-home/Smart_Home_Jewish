@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 24;
+const IDX_TOP_MARK = 26;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -369,6 +369,10 @@ function notifyRelayAck(relayId) {
 
 // בנה schedulerRelayNames + relayState מ-CONTROLLERS + haDevices
 const schedulerRelayNames = {};
+// מקביל בדיוק ל-schedulerRelayNames — "האם ממסר זה מסומן לשליטה-טלפונית (IVR)". כמו schedulerRelayNames,
+// לא נשמר-בנפרד ב-config.json — מתעדכן-מחדש מ-sync_programs בכל פעם שדפדפן מתחבר/משנה (אותה
+// אמינות בדיוק כמו שמות-ממסרים, שגם הם לא נשמרים כאן ישירות אלא מגיעים תמיד מחדש מהלקוח).
+const schedulerRelayIvr = {};
 let _relayOffset = 0;
 CONTROLLERS.forEach(ctrl => {
   ctrl._offset = _relayOffset;
@@ -471,13 +475,13 @@ function buildYemotAutoFiles(kind) {
     const tts000 = ivrProgs.length
       ? buildTtsLines(['שלום, להלן רשימת התוכניות הזמינות לניהול', ...ivrProgs.map((p,i) => `ל${p.name} הקש ${i+1}`)])
       : 'לא הוגדרו תוכניות זמינות לניהול טלפוני.';
-    const tts001 = buildTtsLines(['להפעלת התוכנית הקש 1', 'להשבתת התוכנית הקש 2']);
+    const tts001 = buildTtsLines(['להפעלת התוכנית הקש 1', 'להשבתת התוכנית הקש 2', 'לבדיקת סטטוס התוכנית הקש 3']);
     const extIni = [
       'type=api',
       `api_link=${YEMOT_API_LINK_URL}/program`,
       'api_hangup_send=No',
       `api_000=ProgNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
-      'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
+      'api_001=Action,,1,1,5,No,yes,yes,,1.2.3,3,',
       'api_end_goto=/',
       '',
     ].join('\n');
@@ -491,23 +495,25 @@ function buildYemotAutoFiles(kind) {
     const tts000 = ivrModes.length
       ? buildTtsLines(['שלום, להלן רשימת תזמוני-המצב הזמינים לניהול', ...ivrModes.map((sm,i) => `ל${sm.name} הקש ${i+1}`)])
       : 'לא הוגדרו תזמוני-מצב זמינים לניהול טלפוני.';
-    const tts001 = buildTtsLines(['להפעלת התזמון הקש 1', 'להשבתת התזמון הקש 2']);
+    const tts001 = buildTtsLines(['להפעלת התזמון הקש 1', 'להשבתת התזמון הקש 2', 'לבדיקת סטטוס התזמון הקש 3']);
     const extIni = [
       'type=api',
       `api_link=${YEMOT_API_LINK_URL}/schedule`,
       'api_hangup_send=No',
       `api_000=SchedNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
-      'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
+      'api_001=Action,,1,1,5,No,yes,yes,,1.2.3,3,',
       'api_end_goto=/',
       '',
     ].join('\n');
     return { tts000, tts001, extIni };
   }
 
-  // kind === 'relay' (ברירת-מחדל)
-  const relayIds = getOrderedRelayIds();
+  // kind === 'relay' (ברירת-מחדל) — **רק** ממסרים שסומנו ivr===true (בדיוק כמו תוכניות/תיזמונים)
+  const relayIds = getOrderedRelayIds().filter(id => schedulerRelayIvr[id]);
   const relayKeys = relayIds.join('.');
-  const tts000 = buildTtsLines(['שלום, להלן רשימת המתגים הקיימים', ...relayIds.map(id => `ל${schedulerRelayNames[id]} הקש ${id}`)]);
+  const tts000 = relayIds.length
+    ? buildTtsLines(['שלום, להלן רשימת המתגים הקיימים', ...relayIds.map(id => `ל${schedulerRelayNames[id]} הקש ${id}`)])
+    : 'לא הוגדרו ממסרים זמינים לשליטה טלפונית.';
   const tts001 = buildTtsLines(['לבחירת הדלקה הקש 1', 'לבחירת כיבוי הקש 2']);
   const tts002 = buildTtsLines(['כעת הקישו את מספר הדקות לפעולה, או הקישו 0 לפעולה קבועה בלי הגבלת זמן']);
   const extIni = [
@@ -981,7 +987,7 @@ io.on('connection', (socket) => {
     Array.from(_firedToday).forEach(k => { const progId = k.split('_')[0]; if (!newIds.has(progId)) _firedToday.delete(k); });
     schedulerPrograms = programs || [];
     schedulerActiveModeId = activeModeId || 0;
-    if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; });
+    if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; schedulerRelayIvr[r.id] = !!r.ivr; });
     if (fullConfig) serverConfig = fullConfig;
     socket.emit('sync_ack', { count: schedulerPrograms.length, firedRunOnceToday: Array.from(_firedRunOnceToday.values()) });
     saveConfigLocal();
@@ -2400,8 +2406,13 @@ app.get('/yemot/program', async (req, res) => {
   const pos=parseInt(progNumStr,10);
   const ivrProgs=getIvrProgramsOrdered();
   const p=(pos>=1&&pos<=ivrProgs.length)?ivrProgs[pos-1]:null;
+  if(!p) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
+  if(actionDigit==='3'){
+    return res.send(ymResponse(`תוכנית ${p.name} כרגע ${p.active?'פעילה':'מושבתת'}`));
+  }
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
-  if(!p||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  if(setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   try{
     p.active=setActive;
     saveConfigLocal();
@@ -2427,8 +2438,13 @@ app.get('/yemot/schedule', async (req, res) => {
   const pos=parseInt(schedNumStr,10);
   const ivrModes=getIvrSchedulesOrdered();
   const sm=(pos>=1&&pos<=ivrModes.length)?ivrModes[pos-1]:null;
+  if(!sm) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
+  if(actionDigit==='3'){
+    return res.send(ymResponse(`תזמון ${sm.name} כרגע ${sm.active?'פעיל':'מושבת'}`));
+  }
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
-  if(!sm||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  if(setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   try{
     sm.active=setActive;
     saveConfigLocal();
@@ -2475,4 +2491,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 24;
+const IDX_BOTTOM_MARK = 26;
