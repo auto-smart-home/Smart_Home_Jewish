@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-21-O (תיקון-שורש: sm.name (שם-תזמון-המצב) היה קיים בנתונים ומשמש להכרזת-IVR, אבל **מעולם לא הוצג בממשק בכלל** - המשתמש לא היה יכול לראות/לערוך אותו, ולכן הוצג טקסט-ישן/מוזר (כמו "תזמון 9604" - שם-ברירת-מחדל שלא שונה, או שם-בדיקה-ישן) בלי שהיה ברור מנין. נוסף שדה-טקסט גלוי-ועריך בראש כל שורת-תזמון בחלון ניהול-מצבים-מתוזמנים, קשור ל-sm.name - עכשיו המשתמש רואה בדיוק מה יוקרא בטלפון, ויכול לשנות ישירות.) -->
+<!-- BUILD_MARKER: v2026-07-21-P (המשך: תיבת-סימון IVR נוספה גם לממסרים בטאב ממסרים (r.ivr), עם כפתורי סמן-הכל/בטל-הכל בראש הטאב. הרשימה-האוטומטית-לשלוחת-ממסרים (kind=relay) מסננת עכשיו רק ממסרים מסומנים - עקבי עם תוכניות/תיזמונים. חשוב: זה רק מסנן מה נכלל ב-TTS/ext.ini שנבנה - לא נוגע בבדיקת-ההרשאות-בזמן-אמת הקיימת (/yemot עדיין בודקת רק allowedRelays, לא ivr) כדי לא לשבור פונקציונליות-קיימת של מי שכבר משתמש ב-IVR-לממסרים.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -536,6 +536,8 @@
         <button class="quick-btn" onclick="morningMode()">🌅 בוקר טוב</button>
         <button onclick="editQuickAction('morning')" title="עריכת בוקר טוב" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:14px;color:var(--muted)">✏️</button>
       </div>
+      <button class="quick-btn" onclick="setAllRelaysIvr(true)" title="מסמן את כל הממסרים לשליטה טלפונית (IVR) — כולם ייכללו ברשימת-הבחירה שנבנית לשלוחה">🎙️ סמן הכל ל-IVR</button>
+      <button class="quick-btn" onclick="setAllRelaysIvr(false)" title="מבטל סימון-IVR מכל הממסרים">🎙️ בטל הכל מ-IVR</button>
     </div>
     <div class="relay-grid" id="relay-grid"></div>
   </div>
@@ -994,7 +996,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 76;
+const BUILD_TOP_MARK = 77;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1046,7 +1048,7 @@ let _zmanimBarRetryCount = 0;
 function saveLS() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
-      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
       programs, modes, activeModeId,
       nextProgId,
       log: logEntries.slice(0,250)
@@ -1064,9 +1066,9 @@ function syncProgramsToServer() {
     socket.emit('sync_programs', {
       programs,
       activeModeId,
-      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
       fullConfig: {
-        relayNames: relays.map(r=>({id:r.id,name:r.name})),
+        relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
         programs,
         modes,
         activeModeId,
@@ -1095,7 +1097,7 @@ function applyServerConfig(d) {
   // שמור ב-LocalStorage כדי שבפתיחה הבאה יטען מהר
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
-      relayNames: relays.map(r=>({id:r.id,name:r.name})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
       programs, modes, activeModeId, nextProgId,
       log: logEntries.slice(0,250)
     }));
@@ -2346,6 +2348,9 @@ function relayCardHtml(r){
   return `<div class="relay-card ${r.state?'relay-on':''}" id="card-${r.id}">
     <div class="relay-header">
       <span class="relay-num">${r.ctrl==='ha'?'🏠':''} ${r.id}</span>
+      <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;margin-right:auto" title="כלול ממסר זה בשליטה טלפונית (IVR)">
+        <input type="checkbox" ${r.ivr?'checked':''} onchange="setRelayIvr(${r.id},this.checked)"> 🎙️
+      </label>
     </div>
     <input class="relay-name-input" value="${r.name}"
       onchange="saveRelayName(${r.id},this.value)" placeholder="שם...">
@@ -2363,6 +2368,21 @@ function relayCardHtml(r){
       <span class="prog-count" onclick="showTab('programs',null);highlightRelayProgs(${r.id})" title="לחץ לתוכניות">${cnt} תוכניות</span>
     </div>
   </div>`;
+}
+function setRelayIvr(id, ivr){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לשנות הגדרות ממסרים');return;
+  }
+  const r=relays.find(x=>x.id===id);
+  if(r){ r.ivr=ivr; saveLS(); syncProgramsToServer(); }
+}
+function setAllRelaysIvr(ivr){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לשנות הגדרות ממסרים');return;
+  }
+  relays.forEach(r=>{ r.ivr=ivr; });
+  renderRelays(); saveLS(); syncProgramsToServer();
+  toast(ivr ? 'כל הממסרים סומנו ל-IVR' : 'סימון-IVR הוסר מכל הממסרים');
 }
 function saveRelayName(id,name){
   if(currentUser && currentUser.role!=='admin'){
@@ -3102,7 +3122,7 @@ function exportJSON(){
   if(currentUser && currentUser.role!=='admin'){
     toast('אינך מורשה לייצא הגדרות');return;
   }
-  const blob=new Blob([JSON.stringify({programs,modes,relayNames:relays.map(r=>({id:r.id,name:r.name})),activeModeId,nextProgId,scheduledModes:_scheduledModes},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({programs,modes,relayNames:relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),activeModeId,nextProgId,scheduledModes:_scheduledModes},null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='smarthome_programs.json';a.click();
   toast('ייצוא JSON הצליח');
 }
@@ -3120,7 +3140,7 @@ function importJSON(ev){
   reader.onload=e=>{
     try{
       const d=JSON.parse(e.target.result);
-      if(d.relayNames)d.relayNames.forEach(rn=>{const r=relays.find(x=>x.id===rn.id);if(r)r.name=rn.name;});
+      if(d.relayNames)d.relayNames.forEach(rn=>{const r=relays.find(x=>x.id===rn.id);if(r){r.name=rn.name;r.ivr=!!rn.ivr;}});
       if(d.programs){programs.length=0;d.programs.forEach(p=>programs.push(migrateProg(p)));}
       if(d.modes){modes.length=0;d.modes.forEach(m=>modes.push(m));}
       if(d.activeModeId!==undefined)activeModeId=d.activeModeId;
@@ -5286,7 +5306,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 76;
+BUILD_BOTTOM_MARK = 77;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
