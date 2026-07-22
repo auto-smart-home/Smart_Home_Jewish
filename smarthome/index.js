@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 33;
+const IDX_TOP_MARK = 34;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2356,7 +2356,9 @@ processIvrPendingTimers();
 // ── ימות המשיח ──────────────────────────────────────────
 function ymResponse(text){
   const clean=text.replace(/[:]/g," , ").replace(/\.{2,}/g," , ").replace(/\.(?!\d)/g," , ").replace(/[*#_>"]/g,"").replace(/\n/g," , ").replace(/\s+/g," ").trim();
-  return `id_list_message=t-${clean}`;
+  // "&" בסוף חובה! בלעדיו, טקסט-עברי בפרט (לא אנגלית) גורם לימות להשמיע "שגיאה" — מתועד בפורום
+  // freeivr (משתמש נתקל בדיוק בתופעה הזו: אנגלית עבדה, עברית לא, עד שהוסיפו & בסוף).
+  return `id_list_message=t-${clean}&`;
 }
 
 const IVR_ACK_TIMEOUT_MS = 3000;
@@ -2430,11 +2432,6 @@ app.get('/yemot', (req, res) => dispatchIvrRequest(req, res));
 // כי זו יכולת משמעותית-יותר מהדלקת-ממסר בודד — שינוי-תצורה, לא רק שליטה-רגעית). מוגבל **רק**
 // לתוכניות שסומנו p.ivr===true בממשק — לא כל תוכנית קיימת, כדי שרשימת-הבחירה בטלפון תישאר קצרה
 // וממוקדת, ולא תיחשף תוכניות-פנימיות שלא נועדו לניהול-טלפוני.
-// ניסוי: אולי ימות זקוקה לזמן-מינימלי לפני שהיא "מוכנה" לקבל תגובה מה-API — תגובה-מיידית-מדי
-// (בלי await בכלל, כמו בבדיקת-סטטוס) אולי נתפסת כשגיאה, בעוד שהממסר (שתמיד מחכה עד 3 שניות
-// ל-ack מהבקר) עובד מצוין. מוסיפים השהיה מלאכותית קטנה, לחקות את התזמון-הטבעי של הממסר.
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 async function handleProgramIvrRequest(req, res) {
   const progNumStr=req.query.ProgNum||'',actionDigit=req.query.Action||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
@@ -2449,7 +2446,6 @@ async function handleProgramIvrRequest(req, res) {
   const ivrProgs=getIvrProgramsOrdered();
   const p=(pos>=1&&pos<=ivrProgs.length)?ivrProgs[pos-1]:null;
   if(!p) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
-  await delay(2000); // ניסוי-תזמון — ראו הסבר למעלה ליד function delay
   // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
   if(actionDigit==='3'){
     return res.send(ymResponse(`תוכנית ${p.name} כרגע ${p.active?'פעילה':'מושבתת'}`));
@@ -2486,7 +2482,6 @@ async function handleScheduleIvrRequest(req, res) {
   const ivrModes=getIvrSchedulesOrdered();
   const sm=(pos>=1&&pos<=ivrModes.length)?ivrModes[pos-1]:null;
   if(!sm) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
-  await delay(2000); // ניסוי-תזמון — ראו הסבר למעלה ליד function delay
   // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
   if(actionDigit==='3'){
     return res.send(ymResponse(`תזמון ${sm.name} כרגע ${sm.active?'פעיל':'מושבת'}`));
@@ -2551,4 +2546,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 33;
+const IDX_BOTTOM_MARK = 34;
