@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 29;
+const IDX_TOP_MARK = 31;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2364,17 +2364,20 @@ const IVR_ACK_TIMEOUT_MS = 3000;
 // רשת-דיבוג לכל בקשות-ה-IVR: רושמת ליומן (הנראה בממשק) בדיוק מה ימות שלחה (כל ה-query) ובדיוק
 // מה השרת החזיר (הטקסט המלא) — בלי זה אין שום דרך לדעת אם התקלה בכלל מגיעה לשרת, ואם כן, מה
 // בדיוק חוזר ממנו. חשוב לצפייה-אחרי-שיחת-בדיקה: היומן (טאב הראשי) יראה שתי שורות לכל בקשה.
-app.use(['/yemot', '/yemot/program', '/yemot/schedule', '/program', '/schedule'], (req, res, next) => {
-  addServerLog({ type: 'info', msg: `📞 [IVR-בקשה] ${req.path} query=${JSON.stringify(req.query)}`, user: 'IVR' });
+app.use(['/', '/yemot', '/yemot/program', '/yemot/schedule', '/program', '/schedule'], (req, res, next) => {
+  // req.originalUrl (לא req.path!) — כי req.path נגזם-זמנית ע"י Express כשה-middleware הזה
+  // מורכב על נתיב ספציפי (למשל '/yemot'), מה שגרם ל"בקשה" ו"תגובה" של אותה בקשה-בדיוק להראות
+  // נתיבים-שונים בלוג הקודם (זה היה באג בלוג-הדיבוג עצמו, לא תיאור אמיתי של מה שימות שולחת).
+  addServerLog({ type: 'info', msg: `📞 [IVR-בקשה] ${req.originalUrl.split('?')[0]} query=${JSON.stringify(req.query)}`, user: 'IVR' });
   const origSend = res.send.bind(res);
   res.send = (body) => {
-    addServerLog({ type: 'info', msg: `📞 [IVR-תגובה] ${req.path} -> ${body}`, user: 'IVR' });
+    addServerLog({ type: 'info', msg: `📞 [IVR-תגובה] ${req.originalUrl.split('?')[0]} -> ${body}`, user: 'IVR' });
     return origSend(body);
   };
   next();
 });
 
-app.get('/yemot', async (req, res) => {
+async function handleRelayIvrRequest(req, res) {
   const relayDigits=req.query.Relay||'',actionDigit=req.query.Action||'',durationStr=req.query.Duration||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
   if(relayDigits&&actionDigit&&callerPhone){
@@ -2409,13 +2412,14 @@ app.get('/yemot', async (req, res) => {
     }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
   }
   return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
-});
+}
+app.get('/yemot', handleRelayIvrRequest);
 
 // ניהול-תוכניות (הפעלה/השבתה) דרך IVR — **רק לאדמין** (לא לפי allowedRelays/allowedActions הרגילים,
 // כי זו יכולת משמעותית-יותר מהדלקת-ממסר בודד — שינוי-תצורה, לא רק שליטה-רגעית). מוגבל **רק**
 // לתוכניות שסומנו p.ivr===true בממשק — לא כל תוכנית קיימת, כדי שרשימת-הבחירה בטלפון תישאר קצרה
 // וממוקדת, ולא תיחשף תוכניות-פנימיות שלא נועדו לניהול-טלפוני.
-app.get('/yemot/program', async (req, res) => {
+async function handleProgramIvrRequest(req, res) {
   const progNumStr=req.query.ProgNum||'',actionDigit=req.query.Action||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
   if(!progNumStr||!actionDigit||!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
@@ -2442,7 +2446,9 @@ app.get('/yemot/program', async (req, res) => {
     addServerLog({type:'info',msg:`📞 [IVR] תוכנית "${p.name}" ${setActive?'הופעלה':'הושבתה'} ע"י מנהל (ID ${callerId})`,user:'IVR'});
     return res.send(ymResponse(`תוכנית ${p.name} ${setActive?'הופעלה':'הושבתה'} בהצלחה`));
   }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
-});
+}
+app.get('/yemot/program', handleProgramIvrRequest);
+app.get('/program', handleProgramIvrRequest);
 
 // ניהול-תיזמוני-מצב (הפעלה/השבתה) דרך IVR — **רק לאדמין**, ורק תזמונים שסומנו sm.ivr===true.
 // השבתה כאן **לא** מבטלת מעבר-מצב שכבר קורה עכשיו — רק מונעת הפעלות-עתידיות (אותה סמנטיקה
@@ -2479,6 +2485,18 @@ async function handleScheduleIvrRequest(req, res) {
 }
 app.get('/yemot/schedule', handleScheduleIvrRequest);
 app.get('/schedule', handleScheduleIvrRequest);
+
+// גילינו (דרך רשת-הדיבוג למעלה) שימות לפעמים שולחת את הבקשה ל-"/" הגולמי, בלי-קשר-לנתיב
+// שהוגדר בפועל ב-api_link (סיבה לא ברורה בצד-ימות — אולי caching, אולי טיפול-לא-אמין בנתיבים).
+// כדי שהמערכת תעבוד **בכל מקרה**, בלי תלות בהתנהגות-הזו: "/" עצמו בודק את ה-query-parameters
+// (לא את הנתיב) כדי להחליט לאיזו-לוגיקה להפנות — SchedNum→תיזמונים, ProgNum→תוכניות, Relay→ממסרים.
+// אם אין אף אחד מהם (בקשה רגילה לדף-הבית) — ממשיכים הלאה (next) ליומן/סטטי הרגיל.
+app.get('/', (req, res, next) => {
+  if (req.query.SchedNum !== undefined) return handleScheduleIvrRequest(req, res);
+  if (req.query.ProgNum !== undefined) return handleProgramIvrRequest(req, res);
+  if (req.query.Relay !== undefined) return handleRelayIvrRequest(req, res);
+  return next();
+});
 
 app.get('/dashboard', (req, res) => res.redirect('/smart_home_v3.html'));
 
@@ -2517,4 +2535,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 29;
+const IDX_BOTTOM_MARK = 31;
