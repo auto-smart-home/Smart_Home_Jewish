@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 21;
+const IDX_TOP_MARK = 22;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -435,7 +435,54 @@ function getControllerForRelay(globalRelayId) {
 // ── IVR URL — כעת מצביע לדומיין המקומי (Cloudflare Tunnel) ─
 const YEMOT_API_LINK_URL = process.env.YEMOT_API_LINK_URL || 'https://smarthome.example.com/yemot';
 
-function buildYemotAutoFiles() {
+// בונה את קבצי-ה-TTS/ext.ini עבור שלושה סוגי-תפריט אפשריים בשלוחת-IVR:
+// 'relay' (ברירת-מחדל, הקיים) — ממסר←פעולה←משך, על כל הממסרים.
+// 'program' — ניהול-תוכניות (הפעלה/השבתה), **רק** על תוכניות שמסומנות p.ivr===true, לפי seqId שלהן
+//   (אותו מספר-# שכבר מוצג בכרטיס בטאב תוכניות — לא מספר-IVR נפרד).
+// 'schedule' — ניהול-תיזמוני-מצב (הפעלה/השבתה), **רק** על תזמונים שמסומנים sm.ivr===true, לפי ה-id
+//   הפשוט שלהם (כבר מספר-רץ-קטן, מוצג עכשיו גם בממשק ליד כל שורת-תזמון).
+function buildYemotAutoFiles(kind) {
+  kind = kind || 'relay';
+
+  if (kind === 'program') {
+    const ivrProgs = schedulerPrograms.filter(p => p.ivr && !p.parentProgId);
+    const progKeys = ivrProgs.map(p => p.seqId).join('.');
+    const tts000 = ivrProgs.length
+      ? 'שלום, להלן רשימת התוכניות הזמינות לניהול. ' + ivrProgs.map(p => `ל${p.name} הקש ${p.seqId}`).join('. ') + '.'
+      : 'לא הוגדרו תוכניות זמינות לניהול טלפוני.';
+    const tts001 = 'להפעלת התוכנית הקש 1. להשבתת התוכנית הקש 2.';
+    const extIni = [
+      'type=api',
+      `api_link=${YEMOT_API_LINK_URL}/program`,
+      'api_hangup_send=No',
+      `api_000=ProgNum,,3,1,7,No,yes,yes,,${progKeys},3,`,
+      'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
+      'api_end_goto=/',
+      '',
+    ].join('\n');
+    return { tts000, tts001, extIni };
+  }
+
+  if (kind === 'schedule') {
+    const ivrModes = scheduledModes.filter(sm => sm.ivr);
+    const modeKeys = ivrModes.map(sm => sm.id).join('.');
+    const tts000 = ivrModes.length
+      ? 'שלום, להלן רשימת תזמוני-המצב הזמינים לניהול. ' + ivrModes.map(sm => `ל${sm.name} הקש ${sm.id}`).join('. ') + '.'
+      : 'לא הוגדרו תזמוני-מצב זמינים לניהול טלפוני.';
+    const tts001 = 'להפעלת התזמון הקש 1. להשבתת התזמון הקש 2.';
+    const extIni = [
+      'type=api',
+      `api_link=${YEMOT_API_LINK_URL}/schedule`,
+      'api_hangup_send=No',
+      `api_000=SchedNum,,3,1,7,No,yes,yes,,${modeKeys},3,`,
+      'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
+      'api_end_goto=/',
+      '',
+    ].join('\n');
+    return { tts000, tts001, extIni };
+  }
+
+  // kind === 'relay' (ברירת-מחדל, ההתנהגות המקורית — ללא שינוי)
   const relayIds = getOrderedRelayIds();
   const relayKeys = relayIds.join('.');
   const tts000 = 'שלום, להלן רשימת המתגים הקיימים. '
@@ -1021,17 +1068,17 @@ io.on('connection', (socket) => {
     } catch(e) { socket.emit('yemot_save_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
   });
 
-  socket.on('get_yemot_autoupdate_preview', () => {
-    try { socket.emit('yemot_autoupdate_preview', { ok: true, ...buildYemotAutoFiles() }); }
+  socket.on('get_yemot_autoupdate_preview', ({ kind } = {}) => {
+    try { socket.emit('yemot_autoupdate_preview', { ok: true, ...buildYemotAutoFiles(kind) }); }
     catch(e) { socket.emit('yemot_autoupdate_preview', { ok: false, error: e.message }); }
   });
 
-  socket.on('run_yemot_autoupdate', async ({ ext } = {}) => {
+  socket.on('run_yemot_autoupdate', async ({ ext, kind } = {}) => {
     try {
-      const { tts000, tts001, tts002, extIni } = buildYemotAutoFiles();
+      const { tts000, tts001, tts002, extIni } = buildYemotAutoFiles(kind);
       await yemotUploadFile(`ivr/${ext}/000.tts`, tts000, '000.tts');
       await yemotUploadFile(`ivr/${ext}/001.tts`, tts001, '001.tts');
-      await yemotUploadFile(`ivr/${ext}/002.tts`, tts002, '002.tts');
+      if (tts002 !== undefined) await yemotUploadFile(`ivr/${ext}/002.tts`, tts002, '002.tts');
       await yemotUploadFile(`ivr/${ext}/ext.ini`, extIni, 'ext.ini');
       socket.emit('yemot_autoupdate_status', { stage: 'done', msg: 'עודכן בהצלחה ✅' });
     } catch(e) { socket.emit('yemot_autoupdate_status', { stage: 'error', msg: 'שגיאה: ' + e.message }); }
@@ -2315,6 +2362,55 @@ app.get('/yemot', async (req, res) => {
   return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
 });
 
+// ניהול-תוכניות (הפעלה/השבתה) דרך IVR — **רק לאדמין** (לא לפי allowedRelays/allowedActions הרגילים,
+// כי זו יכולת משמעותית-יותר מהדלקת-ממסר בודד — שינוי-תצורה, לא רק שליטה-רגעית). מוגבל **רק**
+// לתוכניות שסומנו p.ivr===true בממשק — לא כל תוכנית קיימת, כדי שרשימת-הבחירה בטלפון תישאר קצרה
+// וממוקדת, ולא תיחשף תוכניות-פנימיות שלא נועדו לניהול-טלפוני.
+app.get('/yemot/program', async (req, res) => {
+  const progNumStr=req.query.ProgNum||'',actionDigit=req.query.Action||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
+  if(hangup) return res.send('');
+  if(!progNumStr||!actionDigit||!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
+  const callerId=yemotPhoneMap[callerPhone];
+  if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
+  const perm=yemotPermissions[callerId]||{};
+  if(!perm.isAdmin) return res.send('id_list_message=t-פעולה זו מוגבלת למנהל בלבד&go_to_folder=hangup&');
+  const seqId=parseInt(progNumStr,10);
+  const p=schedulerPrograms.find(x=>x.seqId===seqId&&x.ivr&&!x.parentProgId);
+  const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
+  if(!p||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  try{
+    p.active=setActive;
+    saveConfigLocal();
+    io.emit('program_updated',{id:p.id,active:p.active});
+    addServerLog({type:'info',msg:`📞 [IVR] תוכנית "${p.name}" ${setActive?'הופעלה':'הושבתה'} ע"י מנהל (ID ${callerId})`,user:'IVR'});
+    return res.send(ymResponse(`תוכנית ${p.name} ${setActive?'הופעלה':'הושבתה'} בהצלחה`));
+  }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
+});
+
+// ניהול-תיזמוני-מצב (הפעלה/השבתה) דרך IVR — **רק לאדמין**, ורק תזמונים שסומנו sm.ivr===true.
+// השבתה כאן **לא** מבטלת מעבר-מצב שכבר קורה עכשיו — רק מונעת הפעלות-עתידיות (אותה סמנטיקה
+// בדיוק כמו ה-checkbox "פעיל" בממשק).
+app.get('/yemot/schedule', async (req, res) => {
+  const schedNumStr=req.query.SchedNum||'',actionDigit=req.query.Action||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
+  if(hangup) return res.send('');
+  if(!schedNumStr||!actionDigit||!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
+  const callerId=yemotPhoneMap[callerPhone];
+  if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
+  const perm=yemotPermissions[callerId]||{};
+  if(!perm.isAdmin) return res.send('id_list_message=t-פעולה זו מוגבלת למנהל בלבד&go_to_folder=hangup&');
+  const schedId=parseInt(schedNumStr,10);
+  const sm=scheduledModes.find(x=>x.id===schedId&&x.ivr);
+  const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
+  if(!sm||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  try{
+    sm.active=setActive;
+    saveConfigLocal();
+    io.emit('scheduled_modes',scheduledModes);
+    addServerLog({type:'info',msg:`📞 [IVR] תזמון-מצב "${sm.name}" ${setActive?'הופעל':'הושבת'} ע"י מנהל (ID ${callerId})`,user:'IVR'});
+    return res.send(ymResponse(`תזמון ${sm.name} ${setActive?'הופעל':'הושבת'} בהצלחה`));
+  }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
+});
+
 app.get('/dashboard', (req, res) => res.redirect('/smart_home_v3.html'));
 
 app.get('/status', (req, res) => {
@@ -2352,4 +2448,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 21;
+const IDX_BOTTOM_MARK = 22;
