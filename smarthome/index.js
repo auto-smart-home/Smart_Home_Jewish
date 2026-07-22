@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 28;
+const IDX_TOP_MARK = 29;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2361,6 +2361,19 @@ function ymResponse(text){
 
 const IVR_ACK_TIMEOUT_MS = 3000;
 
+// רשת-דיבוג לכל בקשות-ה-IVR: רושמת ליומן (הנראה בממשק) בדיוק מה ימות שלחה (כל ה-query) ובדיוק
+// מה השרת החזיר (הטקסט המלא) — בלי זה אין שום דרך לדעת אם התקלה בכלל מגיעה לשרת, ואם כן, מה
+// בדיוק חוזר ממנו. חשוב לצפייה-אחרי-שיחת-בדיקה: היומן (טאב הראשי) יראה שתי שורות לכל בקשה.
+app.use(['/yemot', '/yemot/program', '/yemot/schedule', '/program', '/schedule'], (req, res, next) => {
+  addServerLog({ type: 'info', msg: `📞 [IVR-בקשה] ${req.path} query=${JSON.stringify(req.query)}`, user: 'IVR' });
+  const origSend = res.send.bind(res);
+  res.send = (body) => {
+    addServerLog({ type: 'info', msg: `📞 [IVR-תגובה] ${req.path} -> ${body}`, user: 'IVR' });
+    return origSend(body);
+  };
+  next();
+});
+
 app.get('/yemot', async (req, res) => {
   const relayDigits=req.query.Relay||'',actionDigit=req.query.Action||'',durationStr=req.query.Duration||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
@@ -2504,4 +2517,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 28;
+const IDX_BOTTOM_MARK = 29;
