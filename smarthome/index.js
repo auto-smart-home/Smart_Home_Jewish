@@ -2447,7 +2447,7 @@ app.get('/yemot/schedule', async (req, res) => {
   if(!sm) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   // Action=3: בדיקת-סטטוס בלבד — לא נוגעת בשום דבר, רק מדווחת מה המצב-הנוכחי.
   if(actionDigit==='3'){
-    return res.send(ymResponse(`תזמון ${sm.name} כרגע ${sm.active?'פעיל':'מושבת'}`));
+    return res.send(ymResponse(`תזמון`));
   }
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
   if(setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
