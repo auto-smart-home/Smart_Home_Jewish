@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 31;
+const IDX_TOP_MARK = 32;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -483,7 +483,7 @@ function buildYemotAutoFiles(kind) {
       'type=api',
       'rate=0',
       'voice=Osnat',
-      `api_link=${YEMOT_API_LINK_URL}/program`,
+      `api_link=${YEMOT_API_LINK_URL}`, // ניסוי: אותו נתיב-בדיוק כמו ממסרים, מבדילים לפי שם-הפרמטר (ProgNum) — ראו dispatchIvrRequest
       'api_hangup_send=No',
       `api_000=ProgNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
       'api_001=Action,,1,1,5,No,yes,yes,,1.2.3,3,',
@@ -505,7 +505,7 @@ function buildYemotAutoFiles(kind) {
       'type=api',
       'rate=0',
       'voice=Osnat',
-      `api_link=${YEMOT_API_BASE_URL}/schedule`,
+      `api_link=${YEMOT_API_LINK_URL}`, // ניסוי: אותו נתיב-בדיוק כמו ממסרים, מבדילים לפי שם-הפרמטר (SchedNum) — ראו dispatchIvrRequest
       'api_hangup_send=No',
       `api_000=SchedNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
       'api_001=Action,,1,1,5,No,yes,yes,,1.2.3,3,',
@@ -2413,7 +2413,18 @@ async function handleRelayIvrRequest(req, res) {
   }
   return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
 }
-app.get('/yemot', handleRelayIvrRequest);
+// /yemot הוא עכשיו endpoint אוניברסלי — מכריע לפי **הפרמטרים**, לא לפי הנתיב, לאיזו לוגיקה להפנות.
+// זה בדיוק הניסוי שהוצע: לנתב הכל (ממסרים/תוכניות/תיזמונים) לאותו נתיב-בדיוק שכבר-מוכח-עובד
+// (/yemot), ולתת לשרת להבדיל לפי שם-הפרמטר (SchedNum/ProgNum/Relay) — מבודד לחלוטין את המשתנה
+// "נתיב-אחר" מהתמונה.
+function dispatchIvrRequest(req, res, next) {
+  if (req.query.SchedNum !== undefined) return handleScheduleIvrRequest(req, res);
+  if (req.query.ProgNum !== undefined) return handleProgramIvrRequest(req, res);
+  if (req.query.Relay !== undefined) return handleRelayIvrRequest(req, res);
+  if (req.query.hangup === 'yes') return res.send('');
+  return next ? next() : res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
+}
+app.get('/yemot', (req, res) => dispatchIvrRequest(req, res));
 
 // ניהול-תוכניות (הפעלה/השבתה) דרך IVR — **רק לאדמין** (לא לפי allowedRelays/allowedActions הרגילים,
 // כי זו יכולת משמעותית-יותר מהדלקת-ממסר בודד — שינוי-תצורה, לא רק שליטה-רגעית). מוגבל **רק**
@@ -2491,12 +2502,10 @@ app.get('/schedule', handleScheduleIvrRequest);
 // כדי שהמערכת תעבוד **בכל מקרה**, בלי תלות בהתנהגות-הזו: "/" עצמו בודק את ה-query-parameters
 // (לא את הנתיב) כדי להחליט לאיזו-לוגיקה להפנות — SchedNum→תיזמונים, ProgNum→תוכניות, Relay→ממסרים.
 // אם אין אף אחד מהם (בקשה רגילה לדף-הבית) — ממשיכים הלאה (next) ליומן/סטטי הרגיל.
-app.get('/', (req, res, next) => {
-  if (req.query.SchedNum !== undefined) return handleScheduleIvrRequest(req, res);
-  if (req.query.ProgNum !== undefined) return handleProgramIvrRequest(req, res);
-  if (req.query.Relay !== undefined) return handleRelayIvrRequest(req, res);
-  return next();
-});
+// "/" עצמו — משתמש באותה dispatchIvrRequest (ראו הגדרתה למעלה, ליד /yemot) — אבל אם באמת אין
+// שום פרמטר-IVR בבקשה (למשל טעינת-הדף-הרגילה), ממשיכים הלאה (next) ליומן/סטטי הרגיל, לא עונים
+// עם הודעת-שגיאה-של-ימות במקרה הזה.
+app.get('/', (req, res, next) => dispatchIvrRequest(req, res, next));
 
 app.get('/dashboard', (req, res) => res.redirect('/smart_home_v3.html'));
 
@@ -2535,4 +2544,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 31;
+const IDX_BOTTOM_MARK = 32;
