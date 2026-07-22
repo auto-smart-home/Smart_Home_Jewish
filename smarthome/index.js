@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 22;
+const IDX_TOP_MARK = 24;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -435,27 +435,48 @@ function getControllerForRelay(globalRelayId) {
 // ── IVR URL — כעת מצביע לדומיין המקומי (Cloudflare Tunnel) ─
 const YEMOT_API_LINK_URL = process.env.YEMOT_API_LINK_URL || 'https://smarthome.example.com/yemot';
 
+// שתי הפונקציות האלה הן **מקור-האמת היחיד** לסדר-הפריטים ברשימת-הבחירה הטלפונית (תוכניות/
+// תיזמונים) — גם בונה-ה-TTS (buildYemotAutoFiles) וגם ה-endpoints שמפרשים-לחיצה (/yemot/program,
+// /yemot/schedule) *חייבים* לקרוא לאותה פונקציה בדיוק, כדי שה"מיקום" (1,2,3...) שהמתקשר שומע
+// יתאים תמיד למיקום שהשרת יפרש. אין שום מספר-IVR-נפרד שנשמר — הכל נגזר-מחדש כל פעם, מסודר
+// לפי seqId/id (יציב, לא תלוי בסדר-ההוספה-לרשימה).
+function getIvrProgramsOrdered() {
+  return schedulerPrograms.filter(p => p.ivr && !p.parentProgId).sort((a,b) => a.seqId - b.seqId);
+}
+function getIvrSchedulesOrdered() {
+  return scheduledModes.filter(sm => sm.ivr).sort((a,b) => a.id - b.id);
+}
+
+// כל שורה בקובץ-TTS בשורה-נפרדת-משלה, ומסתיימת ב"שתי-נקודות" (לא נקודה בודדת) — זה מאט את
+// קצב-ההקראה של ימות בין פריט-לפריט (למשל בין ממסר לממסר, או בין הוראה להוראה) — בלי זה, ימות
+// קורא הכל ברצף-אחד-מהיר, קשה למתקשר לעקוב אחרי רשימה-ארוכה של ממסרים/תוכניות.
+function buildTtsLines(lines) {
+  return lines.map(l => l.replace(/\.+$/, '') + '..').join('\n');
+}
+
 // בונה את קבצי-ה-TTS/ext.ini עבור שלושה סוגי-תפריט אפשריים בשלוחת-IVR:
-// 'relay' (ברירת-מחדל, הקיים) — ממסר←פעולה←משך, על כל הממסרים.
-// 'program' — ניהול-תוכניות (הפעלה/השבתה), **רק** על תוכניות שמסומנות p.ivr===true, לפי seqId שלהן
-//   (אותו מספר-# שכבר מוצג בכרטיס בטאב תוכניות — לא מספר-IVR נפרד).
-// 'schedule' — ניהול-תיזמוני-מצב (הפעלה/השבתה), **רק** על תזמונים שמסומנים sm.ivr===true, לפי ה-id
-//   הפשוט שלהם (כבר מספר-רץ-קטן, מוצג עכשיו גם בממשק ליד כל שורת-תזמון).
+// 'relay' (ברירת-מחדל, הקיים) — ממסר←פעולה←משך, על כל הממסרים (ממוספר לפי ה-ID האמיתי של הממסר,
+//   ללא שינוי — שם זה סביר כי ה-ID של ממסר קבוע-ולא-משתנה, לא כמו seqId/id שיכולים להיות "גדולים").
+// 'program'/'schedule' — ניהול תוכניות/תיזמוני-מצב (הפעלה/השבתה), **רק** על פריטים שסומנו
+//   ivr===true — אבל **הספרה-שנאמרת-ונלחצת היא מיקום פשוט (1,2,3...) ברשימה המסוננת**, לא ה-
+//   seqId/id האמיתי (שיכול להיות "לא-נקי", כמו 9602/9604) — השרת ממיר את המיקום ל-ID האמיתי
+//   בעצמו (ראו getIvrProgramsOrdered/getIvrSchedulesOrdered למעלה, ו-/yemot/program|schedule למטה).
 function buildYemotAutoFiles(kind) {
   kind = kind || 'relay';
 
   if (kind === 'program') {
-    const ivrProgs = schedulerPrograms.filter(p => p.ivr && !p.parentProgId);
-    const progKeys = ivrProgs.map(p => p.seqId).join('.');
+    const ivrProgs = getIvrProgramsOrdered();
+    const maxDigits = String(ivrProgs.length || 1).length;
+    const posKeys = ivrProgs.map((p,i) => i+1).join('.');
     const tts000 = ivrProgs.length
-      ? 'שלום, להלן רשימת התוכניות הזמינות לניהול. ' + ivrProgs.map(p => `ל${p.name} הקש ${p.seqId}`).join('. ') + '.'
+      ? buildTtsLines(['שלום, להלן רשימת התוכניות הזמינות לניהול', ...ivrProgs.map((p,i) => `ל${p.name} הקש ${i+1}`)])
       : 'לא הוגדרו תוכניות זמינות לניהול טלפוני.';
-    const tts001 = 'להפעלת התוכנית הקש 1. להשבתת התוכנית הקש 2.';
+    const tts001 = buildTtsLines(['להפעלת התוכנית הקש 1', 'להשבתת התוכנית הקש 2']);
     const extIni = [
       'type=api',
       `api_link=${YEMOT_API_LINK_URL}/program`,
       'api_hangup_send=No',
-      `api_000=ProgNum,,3,1,7,No,yes,yes,,${progKeys},3,`,
+      `api_000=ProgNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
       'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
       'api_end_goto=/',
       '',
@@ -464,17 +485,18 @@ function buildYemotAutoFiles(kind) {
   }
 
   if (kind === 'schedule') {
-    const ivrModes = scheduledModes.filter(sm => sm.ivr);
-    const modeKeys = ivrModes.map(sm => sm.id).join('.');
+    const ivrModes = getIvrSchedulesOrdered();
+    const maxDigits = String(ivrModes.length || 1).length;
+    const posKeys = ivrModes.map((sm,i) => i+1).join('.');
     const tts000 = ivrModes.length
-      ? 'שלום, להלן רשימת תזמוני-המצב הזמינים לניהול. ' + ivrModes.map(sm => `ל${sm.name} הקש ${sm.id}`).join('. ') + '.'
+      ? buildTtsLines(['שלום, להלן רשימת תזמוני-המצב הזמינים לניהול', ...ivrModes.map((sm,i) => `ל${sm.name} הקש ${i+1}`)])
       : 'לא הוגדרו תזמוני-מצב זמינים לניהול טלפוני.';
-    const tts001 = 'להפעלת התזמון הקש 1. להשבתת התזמון הקש 2.';
+    const tts001 = buildTtsLines(['להפעלת התזמון הקש 1', 'להשבתת התזמון הקש 2']);
     const extIni = [
       'type=api',
       `api_link=${YEMOT_API_LINK_URL}/schedule`,
       'api_hangup_send=No',
-      `api_000=SchedNum,,3,1,7,No,yes,yes,,${modeKeys},3,`,
+      `api_000=SchedNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
       'api_001=Action,,1,1,5,No,yes,yes,,1.2,3,',
       'api_end_goto=/',
       '',
@@ -482,13 +504,12 @@ function buildYemotAutoFiles(kind) {
     return { tts000, tts001, extIni };
   }
 
-  // kind === 'relay' (ברירת-מחדל, ההתנהגות המקורית — ללא שינוי)
+  // kind === 'relay' (ברירת-מחדל)
   const relayIds = getOrderedRelayIds();
   const relayKeys = relayIds.join('.');
-  const tts000 = 'שלום, להלן רשימת המתגים הקיימים. '
-    + relayIds.map(id => `ל${schedulerRelayNames[id]} הקש ${id}`).join('. ') + '.';
-  const tts001 = 'לבחירת הדלקה הקש 1. לבחירת כיבוי הקש 2.';
-  const tts002 = 'כעת הקישו את מספר הדקות לפעולה, או הקישו 0 לפעולה קבועה בלי הגבלת זמן.';
+  const tts000 = buildTtsLines(['שלום, להלן רשימת המתגים הקיימים', ...relayIds.map(id => `ל${schedulerRelayNames[id]} הקש ${id}`)]);
+  const tts001 = buildTtsLines(['לבחירת הדלקה הקש 1', 'לבחירת כיבוי הקש 2']);
+  const tts002 = buildTtsLines(['כעת הקישו את מספר הדקות לפעולה, או הקישו 0 לפעולה קבועה בלי הגבלת זמן']);
   const extIni = [
     'type=api',
     `api_link=${YEMOT_API_LINK_URL}`,
@@ -2374,8 +2395,11 @@ app.get('/yemot/program', async (req, res) => {
   if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
   const perm=yemotPermissions[callerId]||{};
   if(!perm.isAdmin) return res.send('id_list_message=t-פעולה זו מוגבלת למנהל בלבד&go_to_folder=hangup&');
-  const seqId=parseInt(progNumStr,10);
-  const p=schedulerPrograms.find(x=>x.seqId===seqId&&x.ivr&&!x.parentProgId);
+  // ProgNum הוא ה"מיקום" (1,2,3...) שנאמר-ונלחץ בטלפון — לא seqId ישירות. ממירים דרך **אותה** פונקציית-
+  // סידור בדיוק שבנתה את ה-TTS (getIvrProgramsOrdered) — כדי שהמיקום-שנשמע יתאים תמיד למיקום-שמתפרש.
+  const pos=parseInt(progNumStr,10);
+  const ivrProgs=getIvrProgramsOrdered();
+  const p=(pos>=1&&pos<=ivrProgs.length)?ivrProgs[pos-1]:null;
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
   if(!p||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   try{
@@ -2398,8 +2422,11 @@ app.get('/yemot/schedule', async (req, res) => {
   if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
   const perm=yemotPermissions[callerId]||{};
   if(!perm.isAdmin) return res.send('id_list_message=t-פעולה זו מוגבלת למנהל בלבד&go_to_folder=hangup&');
-  const schedId=parseInt(schedNumStr,10);
-  const sm=scheduledModes.find(x=>x.id===schedId&&x.ivr);
+  // SchedNum הוא ה"מיקום" (1,2,3...) — לא ה-id הפנימי (שיכול להיות "לא-נקי", כמו 9602/9604).
+  // אותה עקרונית-המרה בדיוק כמו ב-/yemot/program, דרך getIvrSchedulesOrdered.
+  const pos=parseInt(schedNumStr,10);
+  const ivrModes=getIvrSchedulesOrdered();
+  const sm=(pos>=1&&pos<=ivrModes.length)?ivrModes[pos-1]:null;
   const setActive=actionDigit==='1'?true:actionDigit==='2'?false:null;
   if(!sm||setActive===null) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
   try{
@@ -2448,4 +2475,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 22;
+const IDX_BOTTOM_MARK = 24;
