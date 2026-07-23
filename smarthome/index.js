@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 35;
+const IDX_TOP_MARK = 36;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -339,6 +339,7 @@ function buildIvrUsersList() {
       id, phone,
       name: perm.name || `מתקשר ${id}`,
       isAdmin: !!perm.isAdmin,
+      priority: !!perm.priority,
       allowedRelays: perm.allowedRelays || [],
       allowedActions: perm.allowedActions || ['ON','OFF'],
       maxDurationMinOn: perm.maxDurationMinOn ?? 0,
@@ -1072,7 +1073,7 @@ io.on('connection', (socket) => {
         if (!u.phone || !u.id) return;
         newPhoneMap[u.phone] = u.id;
         newPermissions[u.id] = {
-          name: u.name, isAdmin: !!u.isAdmin,
+          name: u.name, isAdmin: !!u.isAdmin, priority: !!u.priority,
           allowedRelays: u.isAdmin ? [] : (u.allowedRelays || []),
           allowedActions: u.isAdmin ? ['ON','OFF'] : (u.allowedActions || []),
           maxDurationMinOn: u.isAdmin ? 0 : (u.maxDurationMinOn ?? 0),
@@ -1757,7 +1758,14 @@ async function processIvrPendingTimers(){
   if(!due.length) return;
   ivrPendingTimers=ivrPendingTimers.filter(t=>t.dueAt>now);
   for(const t of due){
-    try{await publishRelay(t.relayId,t.revertAction,`IVR — סיום משך, ID ${t.callerId}`);addServerLog({type:'info',msg:`📞 [IVR — סיום משך] ${t.label} → ${t.revertAction}`,user:'מערכת'});}
+    try{
+      await publishRelay(t.relayId,t.revertAction,`IVR — סיום משך, ID ${t.callerId}`);
+      addServerLog({type:'info',msg:`📞 [IVR — סיום משך] ${t.label} → ${t.revertAction}`,user:'מערכת'});
+      // ניקוי-בעלות: רק אם עדיין שייכת ל**אותה** רשומת-IVR-וירטואלית — לא למחוק בטעות בעלות של
+      // תוכנית-אחרת שכבר תפסה את הממסר בינתיים (בדיוק עיקרון-הזהירות כמו ב-runOnceCleanup).
+      const virtualOwnerId=`ivr_owner_${t.callerId}`;
+      if(relayOwner[t.relayId]&&relayOwner[t.relayId].progId===virtualOwnerId) delete relayOwner[t.relayId];
+    }
     catch(err){console.error('❌ שגיאה IVR timer:',err.message);}
   }
   saveConfigLocal();
@@ -2385,6 +2393,14 @@ app.use(['/', '/yemot', '/yemot/program', '/yemot/schedule', '/program', '/sched
   next();
 });
 
+// ממיר epoch-ms מוחלט ל"שניות-מאז-חצות-מקומי-של-היום" — אותה מוסכמה בדיוק כמו endSec של תוכניות
+// רגילות (יכול לעבור 86400 אם חוצה-חצות, בדיוק כמו endSec של תוכנית-לילה שממשיכה למחר).
+function computeEndSecFromEpoch(epochMs) {
+  const nowIL = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+  const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+  return Math.round((epochMs - dayStartMs) / 1000);
+}
+
 async function handleRelayIvrRequest(req, res) {
   const relayDigits=req.query.Relay||'',actionDigit=req.query.Action||'',durationStr=req.query.Duration||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
   if(hangup) return res.send('');
@@ -2401,17 +2417,41 @@ async function handleRelayIvrRequest(req, res) {
       if(!(perm.allowedRelays||[]).includes(relayId)||!(perm.allowedActions||[]).includes(action)||(maxDur!==0&&(durationMin===0||durationMin>maxDur)))
         return res.send('id_list_message=t-אינך מורשה, נסה שוב&go_to_folder=hangup&');
     }
+    // בעלות: פקודת-IVR משתתפת עכשיו בהיררכיית-הבעלות הרגילה (relayOwner), בדיוק כמו תוכנית —
+    // כדי שתוכל "להחזיק" ממסר מפני-כיבוי-מוקדם ע"י תוכנית-אחרת. "קבלת עדיפות" בהרשאות-המשתמש
+    // (perm.priority) הופכת את זה לעדיפות-קבועה (מנצחת גם תוכניות-בלי-עדיפות); בלעדיה, ההכרעה
+    // מול תוכנית-אחרת היא הרגילה — "מי-מסתיים-מאוחר-יותר-מנצח". מזהה-הבעלים הוא וירטואלי
+    // (לא progId אמיתי) — ivr_owner_<ID>, כדי שלא יתבלבל עם תוכנית אמיתית.
+    const nowSecForOwner = getNowSecIL();
+    const virtualOwnerId = `ivr_owner_${callerId}`;
+    if(action==='OFF'){
+      const heldByOther = checkRelayOwnerBlock({relayId, progId: virtualOwnerId, isPriority: !!perm.priority, fireSec: nowSecForOwner}, nowSecForOwner);
+      if(heldByOther) return res.send(ymResponse(`לא ניתן לכבות את ${relayName} כרגע — בשליטת "${heldByOther.blockedBy}"`));
+    }
     try{
       const isOn=action==='ON';
       const ackPromise=waitForRelayAck(relayId,IVR_ACK_TIMEOUT_MS);
       await publishRelay(relayId,action,`IVR — ID ${callerId}`);
       const ackReceived=await ackPromise;
+      let dueAt=null;
       if(durationMin>0){
         const timerId=`ivr_${Date.now()}_${Math.round(Math.random()*1e6)}`;
-        const startedAt=Date.now(),dueAt=startedAt+durationMin*60000;
+        const startedAt=Date.now();
+        dueAt=startedAt+durationMin*60000;
         ivrPendingTimers.push({id:timerId,relayId,revertAction:isOn?'OFF':'ON',startedAt,dueAt,label:`${relayName} (IVR — ID ${callerId})`,callerId});
         ivrTodayEvents.push({id:timerId,relayId,callerId,startedAt,dueAt,dateKey:new Date(startedAt).toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'})});
         saveConfigLocal();io.emit('ivr_today_events',ivrTodayEvents);
+      }
+      // עדכון-בעלות בפועל — אחרי שהפקודה-האמיתית כבר הצליחה, בדיוק אותו עיקרון-"מי-חזק-יותר" כמו fireEvent
+      if(action==='ON'){
+        const endSecForOwner = dueAt!==null ? computeEndSecFromEpoch(dueAt) : null;
+        const existing=relayOwner[relayId];
+        const candidate={progId:virtualOwnerId,name:`${relayName} (IVR — ID ${callerId})`,priority:!!perm.priority,endSec:endSecForOwner};
+        const existingExpired=existing&&existing.endSec!==null&&existing.endSec<=nowSecForOwner;
+        const existingIsStronger=existing&&!existingExpired&&existing.progId!==candidate.progId&&existing.endSec!==null&&((existing.priority&&!candidate.priority)||(!existing.priority&&!candidate.priority&&candidate.endSec!==null&&existing.endSec>candidate.endSec));
+        if(!existingIsStronger) relayOwner[relayId]=candidate;
+      } else if(relayOwner[relayId]){
+        delete relayOwner[relayId];
       }
       const msg=!ackReceived?`${relayName}: הפקודה נשלחה, ממתין לאישור`
         :durationMin>0?`${relayName}: ${isOn?'הודלק':'כובה'} בהצלחה, יחזור אוטומטית בעוד ${durationMin} דקות`
@@ -2552,4 +2592,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 35;
+const IDX_BOTTOM_MARK = 36;
