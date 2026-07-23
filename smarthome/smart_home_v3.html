@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-21-P (המשך: תיבת-סימון IVR נוספה גם לממסרים בטאב ממסרים (r.ivr), עם כפתורי סמן-הכל/בטל-הכל בראש הטאב. הרשימה-האוטומטית-לשלוחת-ממסרים (kind=relay) מסננת עכשיו רק ממסרים מסומנים - עקבי עם תוכניות/תיזמונים. חשוב: זה רק מסנן מה נכלל ב-TTS/ext.ini שנבנה - לא נוגע בבדיקת-ההרשאות-בזמן-אמת הקיימת (/yemot עדיין בודקת רק allowedRelays, לא ivr) כדי לא לשבור פונקציונליות-קיימת של מי שכבר משתמש ב-IVR-לממסרים.) -->
+<!-- BUILD_MARKER: v2026-07-22-Q (טאב IVR: נוסף checkbox "קבלת עדיפות" (⭐) לכל משתמש-IVR בהרשאות - עצמאי מ-isAdmin. פקודת-הדלקה-למשך שמגיעה ממשתמש-כזה תקבל עדיפות-קבועה מול תוכניות-בלי-עדיפות (ראו index.js תואם: handleRelayIvrRequest עכשיו רושם/מכבד relayOwner).) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -4483,6 +4483,7 @@ function renderIvrUsers(){
       ${u.isAdmin
         ? `<span class="perm-chip granted">🔑 אדמין — גישה מלאה</span>`
         : relays.map(r=>`<span class="perm-chip ${u.allowedRelays.includes(r.id)?'granted':'denied'}">${r.name}</span>`).join('')}
+      ${u.priority?`<span class="perm-chip granted">⭐ קבלת עדיפות</span>`:''}
     </div>
     ${!u.isAdmin?`<div class="perm-chips" style="margin-top:4px">
       <span class="perm-chip ${u.allowedActions.includes('ON')?'granted':'denied'}">הדלקה${u.allowedActions.includes('ON')?(u.maxDurationMinOn?` (מקס\u2019 ${u.maxDurationMinOn} דק')`:' (ללא תקרת זמן)'):''}</span>
@@ -4511,7 +4512,7 @@ function renderIvrCallLog(){
 function editIvrUser(idx){
   const u = idx >= 0 ? {...ivrUsers[idx], allowedRelays:[...ivrUsers[idx].allowedRelays], allowedActions:[...ivrUsers[idx].allowedActions]} : {
     id: ivrUsers.length ? Math.max(...ivrUsers.map(x=>x.id))+1 : 1,
-    name:'', phone:'', isAdmin:false, allowedRelays:[], allowedActions:['ON','OFF'], maxDurationMinOn:0, maxDurationMinOff:0
+    name:'', phone:'', isAdmin:false, priority:false, allowedRelays:[], allowedActions:['ON','OFF'], maxDurationMinOn:0, maxDurationMinOff:0
   };
   const overlay = document.createElement('div');
   overlay.id = 'ivr-edit-overlay';
@@ -4525,6 +4526,10 @@ function editIvrUser(idx){
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
       <input type="checkbox" id="eiv-admin" ${u.isAdmin?'checked':''} onchange="document.getElementById('eiv-nonadmin-block').style.display=this.checked?'none':'flex'">
       <span style="font-size: 15px;font-weight:600">🔑 אדמין (גישה מלאה לכל הממסרים, ללא תקרת זמן)</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="כל פקודת-הדלקה-למשך שמגיעה מהמשתמש הזה תקבל עדיפות-קבועה מול תוכניות-בלי-עדיפות שמנסות לכבות את אותו ממסר באמצע הזמן">
+      <input type="checkbox" id="eiv-priority" ${u.priority?'checked':''}>
+      <span style="font-size: 15px;font-weight:600">⭐ קבלת עדיפות (הפקודות שלו מנצחות תוכניות-בלי-עדיפות)</span>
     </label>
     <div id="eiv-nonadmin-block" style="display:${u.isAdmin?'none':'flex'};flex-direction:column;gap:10px">
       <div style="font-size: 15px;font-weight:600">ממסרים מותרים:</div>
@@ -4553,9 +4558,10 @@ function saveIvrUser(idx){
   const phone = document.getElementById('eiv-phone').value.trim();
   if(!name || !phone){ toast('נא למלא שם וטלפון'); return; }
   const isAdmin = document.getElementById('eiv-admin').checked;
+  const priority = document.getElementById('eiv-priority').checked;
   const user = {
     id: idx>=0 ? ivrUsers[idx].id : ivrUsers.length ? Math.max(...ivrUsers.map(x=>x.id))+1 : 1,
-    name, phone, isAdmin,
+    name, phone, isAdmin, priority,
     allowedRelays: isAdmin ? [] : relays.filter(r=>document.getElementById('eiv-relay-'+r.id)?.checked).map(r=>r.id),
     allowedActions: isAdmin ? ['ON','OFF'] : [
       ...(document.getElementById('eiv-act-on').checked ? ['ON'] : []),
