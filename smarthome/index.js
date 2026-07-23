@@ -13,13 +13,13 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // לקבוע DEBUG_OFFSET_MS לפער הרצוי (במילישניות) בין "עכשיו-אמיתי" ל"עכשיו-מדומה". דוגמה: קפיצה
 // קדימה 2 שעות ו-11 דקות: (2*60*60*1000)+(11*60*1000). אפס = בלי הזחה בכלל (מצב-רגיל).
 // **להסיר/לאפס (0) לפני פרודקשן!**
-const DEBUG_OFFSET_MS = 37585154; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
+const DEBUG_OFFSET_MS = 0; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
 function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 34;
+const IDX_TOP_MARK = 35;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1675,7 +1675,13 @@ async function schedulerTick(){
   // הייתה "שוכחת" שהיא בכלל התחילה, ברגע שהשעון עבר 02:00, ולעולם לא מכבה את עצמה. שומרים גם את
   // מפתחות-אתמול (לא רק היום), ומוחקים רק דברים ישנים משני ימים.
   _actuallyFired.forEach(k=>{if(!k.endsWith(todayKey)&&!k.endsWith(_yesterdayKeyForPrune))_actuallyFired.delete(k);});
-  if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey)_firedRunOnceToday.delete(id);});
+  // תיקון קריטי נוסף — **אותה בעיה בדיוק** (מפתח-חוצה-חצות נמחק מוקדם-מדי) קיימת גם כאן, ולא
+  // תוקנה עד עכשיו: תוכנית runOnce עם "למשך" שחוצה חצות (למשל 22:00+5שע=03:00 למחרת) נרשמת
+  // ל-_firedRunOnceToday עם _todayKey=אתמול. בטיק-הראשון-של-היום-החדש, todayKey כבר "היום", אז
+  // הניקוי-הישן (שבדק רק p._todayKey!==todayKey) מחק אותה **לפני** שסריקת-האתמול-שבהמשך-הפונקציה
+  // הספיקה להשתמש בה כדי לזהות "עדיין-חייבים-לכבות-את-זה" (runOnceStillOwedToday) — וכך הכיבוי-
+  // הסופי-לפי-משך התבטל בשקט, והממסר נשאר דלוק לצמיתות. שומרים גם אתמול, בדיוק כמו למעלה.
+  if(_firedRunOnceToday.size>0)_firedRunOnceToday.forEach((p,id)=>{if(p._todayKey!==todayKey&&p._todayKey!==_yesterdayKeyForPrune)_firedRunOnceToday.delete(id);});
   // ה-cache של getRunOnceTargetDateKeyServer מחשב "מהיום-האמיתי-קדימה" — צריך להתאפס בכל יום, אחרת
   // אחרי כמה ימים הוא ימשיך להחזיר תאריך-יעד שכבר עבר (מחושב-פעם-אחת מ"היום" הישן). בניגוד ללקוח
   // (שמתאפס ממילא בכל טעינת-דף), השרת רץ ברצף לאורך זמן, אז צריך איפוס-יזום.
@@ -2546,4 +2552,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 34;
+const IDX_BOTTOM_MARK = 35;
