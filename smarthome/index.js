@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 36;
+const IDX_TOP_MARK = 37;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -831,7 +831,7 @@ io.on('connection', (socket) => {
       const timerId = `manual_${Date.now()}_${Math.round(Math.random()*1e6)}`;
       const startedAt = Date.now(), dueAt = startedAt + m * 60000;
       ivrPendingTimers.push({ id: timerId, relayId, revertAction: 'OFF', startedAt, dueAt, label: `${relayName} (טיימר ידני)`, callerId: null });
-      ivrTodayEvents.push({ id: timerId, relayId, callerId: null, startedAt, dueAt, dateKey: new Date(startedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) });
+      ivrTodayEvents.push({ id: timerId, relayId, callerId: null, startedAt, dueAt, action: 'ON', dateKey: new Date(startedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) });
       saveConfigLocal();
       io.emit('ivr_today_events', ivrTodayEvents);
       addServerLog({ type: 'info', msg: `⏱️ טיימר ידני: ${relayName} → ON, יחזור אוטומטית בעוד ${m} דקות`, user: userName || 'משתמש' });
@@ -2439,7 +2439,7 @@ async function handleRelayIvrRequest(req, res) {
         const startedAt=Date.now();
         dueAt=startedAt+durationMin*60000;
         ivrPendingTimers.push({id:timerId,relayId,revertAction:isOn?'OFF':'ON',startedAt,dueAt,label:`${relayName} (IVR — ID ${callerId})`,callerId});
-        ivrTodayEvents.push({id:timerId,relayId,callerId,startedAt,dueAt,dateKey:new Date(startedAt).toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'})});
+        ivrTodayEvents.push({id:timerId,relayId,callerId,startedAt,dueAt,action:isOn?'ON':'OFF',dateKey:new Date(startedAt).toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'})});
         saveConfigLocal();io.emit('ivr_today_events',ivrTodayEvents);
       }
       // עדכון-בעלות בפועל — אחרי שהפקודה-האמיתית כבר הצליחה, בדיוק אותו עיקרון-"מי-חזק-יותר" כמו fireEvent
@@ -2592,4 +2592,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 36;
+const IDX_BOTTOM_MARK = 37;
