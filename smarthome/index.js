@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 37;
+const IDX_TOP_MARK = 38;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2474,6 +2474,18 @@ function dispatchIvrRequest(req, res, next) {
 }
 app.get('/yemot', (req, res) => dispatchIvrRequest(req, res));
 
+// שלוחת-קיצור: הפרמטרים-הקבועים (ממסר/פעולה/משך) חיים **בתוך הנתיב עצמו**, לא בשאילתה — כדי
+// שלא יהיה בכלל "?" קיים-מראש ב-api_link שיתנגש עם הפרמטרים-האוטומטיים שימות מוסיפה בעצמה
+// (ApiPhone האמיתי של המתקשר, ApiCallId וכו') — זו בדיוק הבעיה שהתגלתה: ימות מוסיפה אותם עם "?"
+// שני, לא "&", מה שהופך את כל מחרוזת-השאילתה לפגומה. עם הנתיב הזה, ה-api_link הוא בלי "?" בכלל,
+// אז ה"?" הראשון-והיחיד תמיד יהיה זה שימות עצמה מוסיפה — בלי שום התנגשות אפשרית.
+// דוגמה ל-api_link לשימוש בשלוחת-קיצור (בלי שום api_XXX — אין הקשות בכלל, רק נכנסים ומבוצע מיד):
+//   api_link=https://YOUR_DOMAIN/yemot/quick/15/1/15   (ממסר 15, הדלקה, ל-15 דקות)
+app.get('/yemot/quick/:relay/:action/:duration', (req, res) => {
+  const mergedQuery = { ...req.query, Relay: req.params.relay, Action: req.params.action, Duration: req.params.duration };
+  return handleRelayIvrRequest({ query: mergedQuery }, res);
+});
+
 // ניהול-תוכניות (הפעלה/השבתה) דרך IVR — **רק לאדמין** (לא לפי allowedRelays/allowedActions הרגילים,
 // כי זו יכולת משמעותית-יותר מהדלקת-ממסר בודד — שינוי-תצורה, לא רק שליטה-רגעית). מוגבל **רק**
 // לתוכניות שסומנו p.ivr===true בממשק — לא כל תוכנית קיימת, כדי שרשימת-הבחירה בטלפון תישאר קצרה
@@ -2592,4 +2604,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 37;
+const IDX_BOTTOM_MARK = 38;
