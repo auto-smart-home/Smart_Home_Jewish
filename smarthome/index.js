@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 38;
+const IDX_TOP_MARK = 39;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1450,10 +1450,12 @@ function checkRelayOwnerBlockSim(simOwner,event,nowSec){
 function computeModeTimeline(rangeStartMs, rangeEndMs, startModeId) {
   const timeline = [];
   for (let d = new Date(rangeStartMs); d.getTime() <= rangeEndMs; d.setDate(d.getDate()+1)) {
-    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dateIL = israelCalendarDayStart(d.getTime());
     for (const sm of scheduledModes) {
-      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
-      if (epoch !== null && epoch >= rangeStartMs && epoch < rangeEndMs) {
+      const epochSelf = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epochSelf === null) continue;
+      const epoch = toTrueEpoch(epochSelf, dateIL);
+      if (epoch >= rangeStartMs && epoch < rangeEndMs) {
         timeline.push({ epochMs: epoch, toModeId: sm.toModeId, sm });
       }
     }
@@ -1980,6 +1982,53 @@ function computeModeSwitchImpactGlobal(newModeId, opts) {
 // התזמון לא חל בתאריך הזה בכלל (ימים/תאריך-עברי לא מתאימים, או zman לא-רלוונטי). זו בדיוק אותה
 // לוגיקת-הסינון שהייתה בתוך processScheduledModes, רק מופרדת כדי שאפשר יהיה להשתמש בה גם ליום
 // אחר מ"היום" (חיוני ל-runBootReconciliation, שצריך לסרוק את **כל הימים** שבתוך פער-הקריסה).
+// ממיר epoch-ms כלשהו ל-Date שמייצג את **תחילת-היום-שלו לפי-לוח-השנה-הישראלי** — קריטי כשהתהליך
+// עצמו לא בהכרח רץ באזור-זמן-ישראל (למשל קונטיינר-Docker עם TZ=UTC כברירת-מחדל): שימוש נאיבי
+// ב-new Date(epochMs).getFullYear()/getMonth()/getDate() היה עלול להחזיר את **היום-הלועזי-הלא-
+// נכון** ספציפית בשעות שבהן זמן-ישראל וזמן-התהליך חוצים חצות בנקודות-שונות (למשל 00:00-03:00
+// בקיץ הישראלי = 21:00-00:00 UTC של האתמול).
+// הערה חשובה: ה-Date המוחזר נבנה עם new Date(y,m,d) הרגיל — הרכיבים (getFullYear/getMonth/getDate/
+// getDay) תמיד נכונים ועקביים-עם-עצמם (זה כל מה ש-computeScheduledModeFireEpoch/computeTodayEvents
+// צריכות — אותה מוסכמה בדיוק שכבר קיימת בכל הקובץ). אבל ה-epoch הגולמי (result.getTime()) **אינו**
+// בהכרח שווה לחצות-אמיתי-בישראל אם התהליך לא רץ ב-Asia/Jerusalem — לכן, בכל מקום שמשווים תוצאה
+// הנגזרת-מזה מול epoch-אמיתי-ומוחלט (Date.now(), lastTick וכו') יש להשתמש גם ב-toTrueEpoch למטה.
+function israelCalendarDayStart(epochMs) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem', year:'numeric', month:'2-digit', day:'2-digit'
+  }).formatToParts(new Date(epochMs));
+  const get = t => parseInt(parts.find(p=>p.type===t).value, 10);
+  return new Date(get('year'), get('month')-1, get('day'));
+}
+
+// ה-epoch-האמיתי-והמוחלט של "00:00:00 בישראל" ביום-הקלנדרי (y,m,d) — תיקון-איטרטיבי דרך
+// Intl.DateTimeFormat (לא string-parsing עמום), ללא-תלות באזור-הזמן-של-התהליך-המריץ.
+function trueIsraelMidnightEpoch(y, m, d) {
+  let guess = Date.UTC(y, m-1, d, 0, 0, 0);
+  for (let i=0;i<3;i++){
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone:'Asia/Jerusalem', year:'numeric',month:'2-digit',day:'2-digit',
+      hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false
+    }).formatToParts(new Date(guess));
+    const get = t => parseInt(parts.find(p=>p.type===t).value,10);
+    const gotUTC = Date.UTC(get('year'), get('month')-1, get('day'), get('hour')%24, get('minute'), get('second'));
+    const wantUTC = Date.UTC(y, m-1, d, 0, 0, 0);
+    const err = wantUTC - gotUTC;
+    if (err===0) break;
+    guess += err;
+  }
+  return guess;
+}
+
+// ממיר epoch "עצמי-עקבי" (כזה שנבנה דרך new Date(y,m,d,...) הרגיל — נכון-ועקבי-עם-עצמו לצורך
+// חישובי fireSec/dow פנימיים, אבל לא בהכרח "אמיתי" אם התהליך לא ב-Asia/Jerusalem) ל-epoch-אמיתי-
+// ומוחלט, כדי שאפשר יהיה להשוות אותו בבטחה מול Date.now()/lastTick וכיו"ב. dateIL הוא ה-Date
+// (מ-israelCalendarDayStart) ששימש לחישוב ה-selfConsistentEpoch המקורי.
+function toTrueEpoch(selfConsistentEpoch, dateIL) {
+  const naiveMidnight = new Date(dateIL.getFullYear(), dateIL.getMonth(), dateIL.getDate()).getTime();
+  const trueMidnight = trueIsraelMidnightEpoch(dateIL.getFullYear(), dateIL.getMonth()+1, dateIL.getDate());
+  return selfConsistentEpoch - (naiveMidnight - trueMidnight);
+}
+
 function computeScheduledModeFireEpoch(sm, dateIL) {
   if (!sm.active) return null;
   const dow = dateIL.getDay();
@@ -2073,17 +2122,19 @@ function processScheduledModes() {
 function gapHasAnyScheduledActivity(fromMs, toMs) {
   // תזמוני-מצב: סורקים כל יום בתוך הפער
   for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
-    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dateIL = israelCalendarDayStart(d.getTime());
     for (const sm of scheduledModes) {
-      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
-      if (epoch !== null && epoch > fromMs && epoch <= toMs) return true;
+      const epochSelf = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epochSelf === null) continue;
+      const epoch = toTrueEpoch(epochSelf, dateIL);
+      if (epoch > fromMs && epoch <= toMs) return true;
     }
   }
   // תוכניות רגילות: משתמשים ב-computeTodayEvents הקיים (זהה למה ש-schedulerTick כבר עושה),
   // לכל יום בתוך הפער, ובודקים אם יש אירוע (fireSec) שנופל בתוך הפער.
   for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
-    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const dayStart = dateIL.getTime();
+    const dateIL = israelCalendarDayStart(d.getTime());
+    const dayStart = toTrueEpoch(dateIL.getTime(), dateIL);
     const dow = dateIL.getDay();
     const todayKey = dateIL.toDateString();
     const zmanim = getZmanim(dateIL);
@@ -2104,10 +2155,12 @@ function gapHasAnyScheduledActivity(fromMs, toMs) {
 function computeCorrectModeAfterGap(fromMs, toMs, startModeId) {
   const timeline = []; // { epochMs, toModeId, sm }
   for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
-    const dateIL = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dateIL = israelCalendarDayStart(d.getTime());
     for (const sm of scheduledModes) {
-      const epoch = computeScheduledModeFireEpoch(sm, dateIL);
-      if (epoch !== null && epoch > fromMs && epoch <= toMs) {
+      const epochSelf = computeScheduledModeFireEpoch(sm, dateIL);
+      if (epochSelf === null) continue;
+      const epoch = toTrueEpoch(epochSelf, dateIL);
+      if (epoch > fromMs && epoch <= toMs) {
         timeline.push({ epochMs: epoch, toModeId: sm.toModeId, sm });
       }
     }
@@ -2174,7 +2227,7 @@ function computeStaleRelaysFromOldMode(originalMode, correctModeNow) {
 function applyMissedRegularPrograms(gapFromMs, nowMs) {
   const nowDate = new Date(nowMs);
   const nowIL = new Date(nowDate.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+  const dayStartMs = toTrueEpoch(new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime(), nowIL);
   const nowSec = Math.round((nowMs - dayStartMs) / 1000);
 
   // אוספים אירועים של "היום" וגם "אתמול" (לתוכניות חוצות-חצות) — בדיוק כמו שני-החלקים ב-schedulerTick.
@@ -2184,7 +2237,7 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
     .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000, _dayKey: todayKey, _dayStartMs: dayStartMs }));
 
   const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
-  const yDayStartMs = new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime();
+  const yDayStartMs = toTrueEpoch(new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime(), yIL);
   const yKey = yIL.toDateString();
   const zmanimY = getZmanim(yIL);
   const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
@@ -2237,14 +2290,14 @@ let _hasRunBootReconciliation = false;
 function reestablishRelayOwnership(nowMs) {
   try {
     const nowIL = new Date(new Date(nowMs).toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-    const dayStartMs = new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime();
+    const dayStartMs = toTrueEpoch(new Date(nowIL.getFullYear(), nowIL.getMonth(), nowIL.getDate()).getTime(), nowIL);
     const todayKey = nowIL.toDateString();
     const zmanimToday = getZmanim(nowIL);
     const eventsToday = computeTodayEvents(nowIL, zmanimToday, nowIL.getDay(), todayKey)
       .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000 }));
 
     const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
-    const yDayStartMs = new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime();
+    const yDayStartMs = toTrueEpoch(new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime(), yIL);
     const yKey = yIL.toDateString();
     const zmanimY = getZmanim(yIL);
     const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
@@ -2604,4 +2657,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 38;
+const IDX_BOTTOM_MARK = 39;
