@@ -13,13 +13,13 @@ const { HOLIDAY_CALENDAR } = require('./calendar_data.js');
 // לקבוע DEBUG_OFFSET_MS לפער הרצוי (במילישניות) בין "עכשיו-אמיתי" ל"עכשיו-מדומה". דוגמה: קפיצה
 // קדימה 2 שעות ו-11 דקות: (2*60*60*1000)+(11*60*1000). אפס = בלי הזחה בכלל (מצב-רגיל).
 // **להסיר/לאפס (0) לפני פרודקשן!**
-const DEBUG_OFFSET_MS = 0; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
+const DEBUG_OFFSET_MS = 51942240; // הגעה ל-2026-07-24 19:21 (יום שישי) — קדימה מ"עכשיו"
 function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 39;
+const IDX_TOP_MARK = 40;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2132,6 +2132,23 @@ function gapHasAnyScheduledActivity(fromMs, toMs) {
   }
   // תוכניות רגילות: משתמשים ב-computeTodayEvents הקיים (זהה למה ש-schedulerTick כבר עושה),
   // לכל יום בתוך הפער, ובודקים אם יש אירוע (fireSec) שנופל בתוך הפער.
+  // **קריטי**: תוכנית-מחזורים (או כל תוכנית אחרת) שהעוגן-שלה (למשל שקיעה+200 דק') הוא **אתמול**
+  // בערב, אבל ממשיכה-לרוץ לתוך שעות-הלילה-המוקדמות-של-**היום** — computeTodayEvents(היום) לא
+  // "יודעת" עליה בכלל (היא מחשבת עוגן-חדש-משלה, ל-**הערב-של-היום**, לא ממשיכה-את-אתמול)! בלי
+  // לסרוק גם את **אתמול** (בדיוק כמו ש-applyMissedRegularPrograms/reestablishRelayOwnership כבר
+  // עושות, ומדוע הן כן זיהו את זה נכון) — נקודת-מעבר-מחזור בשעות-הלילה-המוקדמות (למשל 04:11)
+  // הייתה בלתי-נראית-לגמרי לבדיקה הזו, וגורמת לפספוס-שקט של תיקון-נדרש-באמת.
+  {
+    const dateILFrom = israelCalendarDayStart(fromMs);
+    const yIL = new Date(dateILFrom); yIL.setDate(yIL.getDate()-1);
+    const yDayStart = toTrueEpoch(yIL.getTime(), yIL);
+    const yZmanim = getZmanim(yIL);
+    const yEvents = computeTodayEvents(yIL, yZmanim, yIL.getDay(), yIL.toDateString());
+    for (const ev of yEvents) {
+      const epoch = yDayStart + ev.fireSec*1000;
+      if (epoch > fromMs && epoch <= toMs) return true;
+    }
+  }
   for (let d = new Date(fromMs); d.getTime() <= toMs; d.setDate(d.getDate()+1)) {
     const dateIL = israelCalendarDayStart(d.getTime());
     const dayStart = toTrueEpoch(dateIL.getTime(), dateIL);
@@ -2657,4 +2674,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 39;
+const IDX_BOTTOM_MARK = 40;
