@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 40;
+const IDX_TOP_MARK = 41;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2267,7 +2267,10 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
   allEvents.forEach(e => { if (e._epochMs > gapFromMs && e._epochMs <= nowMs) relaysInGap.add(e.relayId); });
   if (!relaysInGap.size) return { appliedCount: 0 };
 
-  let appliedCount = 0;
+  // חשוב: appliedCount נקבע כאן, **מיד וסינכרונית** — לא בתוך ה-callback המתוזמן-בפיזור (runStaggered
+  // תמיד דוחה דרך setTimeout, אפילו עם 0 מילישניות, אז כל ניסיון-לספור-שם היה תמיד נותן 0 בזמן
+  // שה-return מתבצע, גם כשבפועל כן נשלחות פקודות-תיקון רגע-אחר-כך — בדיוק ההודעה-המטעה שנצפתה ביומן).
+  const appliedCount = relaysInGap.size;
   const _catchupTodayKey = todayKey;
   runStaggered([...relaysInGap], relayId => {
     const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
@@ -2275,7 +2278,6 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
     relayEvents.sort((a,b) => a._epochMs - b._epochMs);
     const last = relayEvents[relayEvents.length - 1];
     const correctState = last.action; // 'ON' או 'OFF' — האחרון-כרונולוגית מנצח
-    appliedCount++;
     publishRelay(relayId, correctState, 'התאמה אחרי הפעלה מחדש').then(() => {
       io.emit('scheduler_fired', { progName: last.name, relayId, action: correctState });
       addServerLog({ type: 'info', msg: `🔄 [התאמה] "${last.name}" — ${schedulerRelayNames[relayId]||`ממסר ${relayId}`} → ${correctState} (הוחמץ בזמן שהשרת היה למטה)`, user: 'מערכת' });
@@ -2674,4 +2676,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 40;
+const IDX_BOTTOM_MARK = 41;
