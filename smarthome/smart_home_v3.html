@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-Y (סבב-תיקונים ממוקד ב-V2 לפי 7 בעיות ספציפיות: 1) text2/muted הועמקו עוד (8.7/6.2 -> 10.6/8.7 יחס-ניגודיות, כ-25% חיזוק) 2) כפתור "ניהול מצבים" - טקסט-לבן-קשיח על רקע-מוחלף לא-מכוסה 3) זמני-השעות בכותרת-הזמנים ירשו --muted במקום --text2 4) גוש-quiet-gap בציר-המינימלי היה עם רקע-כהה-קשיח+טקסט-לבן-קשיח, שניהם הפכו ל-var() 5) opacity של תוכנית-לא-פעילה (0.4) היה זהה בשני הסגנונות - הוספו --inactive-opacity/--dim-opacity תלויי-תמה (0.4/0.5 כהה, 0.68/0.75 בהיר) כי אותה שקיפות פוגעת הרבה יותר בטקסט-כהה-על-רקע-בהיר 6) תפריטי-הסינון בטאב תוכניות קיבלו מסגרת מודגשת יותר + ספירת-תוכניות חוזקה ל-text2 7) מחוון-גרסה הוסר ממנו opacity:0.85 שהחליש-שוב צבע-שכבר-על-הגבול.) -->
+<!-- BUILD_MARKER: v2026-07-27-Z (3 תיקונים ממוקדים בציר-הזמן ל-V2: 1) tl-day-header-normal (רקע-יום-רגיל) היה #f5f0e8 קשיח, בעוד הכותרת-הדביקה-של-שמות-הממסרים מעליו היא var(--surface2) - שני גוונים-שונים צמודים. נוסף --tl-day-header-bg תלוי-תמה: V1 נשאר #f5f0e8 (לא נוגע בקיים), V2 הופך לזהה בדיוק ל-surface2 (#ece5d6). 2) הטקסט "━━ דולק" (renderTimeline, בלוק-ריק-עם-המשך-דולק) היה rgba ירוק-שקוף חלקית + opacity:0.5 נוסף מה-class - הוכפל-להיחלש. שניהם תוקנו: color=var(--on-color) מלא, class-opacity הוסר. 3) רקע-בלוק-כבוי היה #2a3142 קשיח (כהה, שריד מ-V1) - הוחלף ל-var(--surface2).) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -30,6 +30,7 @@
     --shadow-color: rgba(0,0,0,0.35);
     --inactive-opacity: 0.4;
     --dim-opacity: 0.5;
+    --tl-day-header-bg: #f5f0e8;
   }
   /* V2 — סגנון-בהיר, נבחר ע"י המשתמש מתוך 6 דוגמיות: חם/קרם-בז' (עץ-חם). אותם משתני-CSS
      בדיוק, רק ערכים-שונים — שום markup/קוד אחר לא צריך "לדעת" על זה בכלל, כי הכל כבר var(--x). */
@@ -54,6 +55,7 @@
     --shadow-color: rgba(80,60,30,0.14);
     --inactive-opacity: 0.68;
     --dim-opacity: 0.75;
+    --tl-day-header-bg: #ece5d6;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Heebo', sans-serif; min-height: 100vh; direction: rtl; }
@@ -375,7 +377,7 @@
   }
   .tl-table tr:last-child td { border-bottom: none; }
   .tl-day-row td { padding: 0 !important; }
-  .tl-day-header-normal  { background: #f5f0e8; border-top: 3px solid #c8b89a; border-bottom: 2px solid #c8b89a; }
+  .tl-day-header-normal  { background: var(--tl-day-header-bg); border-top: 3px solid #c8b89a; border-bottom: 2px solid #c8b89a; }
   .tl-day-header-shabbat { background: #f9741a; border-top: 3px solid #c2500a; border-bottom: 2px solid #c2500a; }
   .tl-day-header-special { background: #92400e; border-top: 3px solid #d97706; border-bottom: 2px solid #d97706; }
   .tl-day-label-normal  { font-size: 15px; font-weight: 700; color: #3b2200; }
@@ -391,7 +393,7 @@
   .tl-time-label { font-size: 13px; color: var(--text2); min-height: 32px; display: flex; flex-direction: column; justify-content: center; font-weight: 500; }
   .tl-time-sub { font-size: 12px; color: var(--muted); }
   .tl-cell-inner { min-height: 26px; padding: 1px; display: flex; flex-direction: column; gap: 1px; }
-  .tl-empty-cell { min-height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; opacity: 0.5; }
+  .tl-empty-cell { min-height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
   .tl-prog-block {
     border-radius: 4px; padding: 2px 6px; font-size: 12px; font-weight: 600;
     color: rgba(10,20,10,0.90); cursor: pointer; transition: opacity 0.15s, transform 0.1s;
@@ -1042,7 +1044,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 85;
+const BUILD_TOP_MARK = 86;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4250,10 +4252,10 @@ function renderTimeline(){
           const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
           const bgStyle=isOn
             ?'background:rgba(34,197,94,0.35);border-right:4px solid rgba(34,197,94,0.75);'
-            :'background:#2a3142;';
+            :'background:var(--surface2);';
           html+=`<td style="${bgStyle}"><div class="tl-cell-inner">`;
           if(fireEvents.length===0&&endEvents.length===0){
-            html+=`<div class="tl-empty-cell" style="color:${isOn?'rgba(34,197,94,0.8)':'rgba(148,163,184,0.35)'}">${isOn?'━━ דולק':'·'}</div>`;
+            html+=`<div class="tl-empty-cell" style="color:${isOn?'var(--on-color)':'var(--muted)'};font-weight:${isOn?'700':'400'}">${isOn?'━━ דולק':'·'}</div>`;
           }
           // הצג אירועים ידניים לאותו בלוק
           const dayDateKey = ilDateKey(dayDate);
@@ -5419,7 +5421,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 85;
+BUILD_BOTTOM_MARK = 86;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
