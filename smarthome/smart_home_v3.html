@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-S (תוכנית חדשה: "פעולה מחזורית" (repeatSameAction) - חלופה בלעדית ל-cycleOn, חוזרת על אותה פעולה (לא הפוך) כל X דקות (משתמש-חוזר ב-cycleOnMin) עד תום ה"למשך" - למניעת שינוי-ידני-באמצע. checkbox חדש ליד מחזורי-הפסקה, בלעדי הדדי, שדה-cycleOnMin משותף עם label דינמי. עודכן גם ב-getRelayEventPairs הלקוח (לתצוגת-ציר-זמן) וגם בשרת (index.js). נבדק: 12 פולסים נכונים בשרת, 0 רגרסיות בבדיקת-1-מצב.) -->
+<!-- BUILD_MARKER: v2026-07-27-T (סגנון-תצוגה חדש: V2, בהיר (אפור-בהיר/לבן) - לצד V1 (כהה, קיים) - ללא דריסה. מומש כולו דרך משתני-CSS (--bg,--surface,--text וכו) שכבר היו קיימים בכל הממשק - הוספת body.theme-light{} עם ערכים-חלופיים מספיקה, בלי לגעת ב-markup. תוקנו גם 3 מקומות עם צבע-כהה-קשיח (conflict-modal, modal-overlay, login-overlay, ivr-edit-overlay) להשתמש ב-var(--overlay-bg)/var(--shadow-color) חדשים, כדי שלא יישארו כהים-קשיחים במצב-הבהיר. כפתורי V1/V2 בטופבר ליד יציאה, נשמר ב-localStorage (per-device, לא per-user), מיושם מיידית עם טעינת-הדף (סקריפט-מוקדם, מונע הבזק-של-סגנון-לא-נכון). נבדק ויזואלית עם Playwright: מסך-כניסה ולוח-בקרה, שני הסגנונות, כולל הדגשת-כפתור-פעיל נכונה.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -26,6 +26,30 @@
     --muted: #8a9ab8;
     --on-color: #34d399;
     --off-color: #2a3245;
+    --overlay-bg: rgba(8,12,20,0.92);
+    --shadow-color: rgba(0,0,0,0.35);
+  }
+  /* V2 — סגנון-בהיר (אפור-בהיר/לבן), לנוחות-קריאה למי שהרקע-הכהה לא נעים לו. אותם משתני-CSS
+     בדיוק, רק ערכים-שונים — שום markup/קוד אחר לא צריך "לדעת" על זה בכלל, כי הכל כבר var(--x). */
+  body.theme-light {
+    --bg: #eef0f4;
+    --surface: #ffffff;
+    --surface2: #f4f5f8;
+    --surface3: #e8eaf0;
+    --border: rgba(20,30,60,0.10);
+    --border2: rgba(20,30,60,0.18);
+    --accent: #3763d1;
+    --accent2: #0d9668;
+    --accent3: #7c4fe0;
+    --warn: #b45f06;
+    --danger: #d0342c;
+    --text: #1c2333;
+    --text2: #4a5468;
+    --muted: #6b7688;
+    --on-color: #0d9668;
+    --off-color: #d7dbe4;
+    --overlay-bg: rgba(60,66,82,0.45);
+    --shadow-color: rgba(30,40,70,0.12);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Heebo', sans-serif; min-height: 100vh; direction: rtl; }
@@ -416,13 +440,13 @@
   .perm-chip.denied { background: var(--surface2); color: var(--muted); border-color: var(--border); }
 
   /* MODAL */
-  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: flex-start; justify-content: center; padding: 6px 10px 10px; overflow-y: auto; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: var(--overlay-bg); z-index: 200; align-items: flex-start; justify-content: center; padding: 6px 10px 10px; overflow-y: auto; }
   .modal-overlay.open { display: flex; }
 
   /* Modal חוסם להתראת קונפליקטי עדיפות בייבוא — נפרד מה-modal הרגיל של הוספת/עריכת תוכנית */
   .conflict-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:300; align-items:center; justify-content:center; padding:16px; }
   .conflict-modal-overlay.open { display:flex; }
-  .conflict-modal { background:#1c1c22; border:1px solid #d33; border-radius:10px; max-width:560px; width:100%; max-height:80vh; overflow-y:auto; padding:20px; box-shadow:0 10px 40px rgba(0,0,0,0.5); }
+  .conflict-modal { background:var(--surface); border:1px solid var(--danger); border-radius:10px; max-width:560px; width:100%; max-height:80vh; overflow-y:auto; padding:20px; box-shadow:0 10px 40px var(--shadow-color); color:var(--text); }
   .conflict-modal h3 { color:#ff5757; margin:0 0 12px; font-size:18px; }
   .conflict-modal .cf-row { background:rgba(255,87,87,0.08); border:1px solid rgba(255,87,87,0.3); border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5; }
   .conflict-modal .cf-row b { color:#ff8b8b; }
@@ -456,9 +480,18 @@
 </style>
 </head>
 <body>
+<script>
+  // מיישמים את סגנון-התצוגה-השמור **מיד**, לפני שכל שאר-הדף נטען, כדי למנוע "הבזק" של הסגנון-הלא-נכון
+  (function(){
+    try {
+      var saved = localStorage.getItem('smarthome_theme');
+      if (saved === 'light') document.body.classList.add('theme-light');
+    } catch(e) {}
+  })();
+</script>
 
 <!-- LOGIN OVERLAY -->
-<div id="login-overlay" style="position:fixed;inset:0;background:rgba(8,12,20,0.97);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px">
+<div id="login-overlay" style="position:fixed;inset:0;background:var(--overlay-bg);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px">
   <div style="font-size: 30px;font-weight:800;color:var(--accent)">🏠 בית חכם</div>
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;width:300px;display:flex;flex-direction:column;gap:14px">
     <div style="font-size: 18px;font-weight:600;text-align:center;margin-bottom:4px">כניסה למערכת</div>
@@ -495,6 +528,10 @@
   <div class="status-pill" id="controller-pill-second" title="קומה שנייה — KC868-A8">
     <div class="status-dot" id="controller-dot-second" style="background:#6b7280"></div>
     <span id="controller-text-second">קומה ב׳...</span>
+  </div>
+  <div id="theme-toggle" style="display:flex;align-items:center;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:2px" title="בחירת סגנון תצוגה">
+    <button onclick="setTheme('dark')" id="theme-btn-dark" style="border:none;border-radius:16px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">V1</button>
+    <button onclick="setTheme('light')" id="theme-btn-light" style="border:none;border-radius:16px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">V2</button>
   </div>
   <div id="user-pill" style="display:flex;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px;cursor:pointer" onclick="doLogout()">
     <span id="user-pill-name" style="font-size: 15px;font-weight:600"></span>
@@ -1001,7 +1038,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 79;
+const BUILD_TOP_MARK = 80;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4410,7 +4447,7 @@ function editUser(idx) {
   };
   const overlay = document.createElement('div');
   overlay.id = 'user-edit-overlay';
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(8,12,20,0.92);z-index:8000;display:flex;align-items:center;justify-content:center';
+  overlay.style.cssText='position:fixed;inset:0;background:var(--overlay-bg);z-index:8000;display:flex;align-items:center;justify-content:center';
   const relayChecks = relays.map(r=>`<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="eu-relay-${r.id}" ${u.relays.includes(r.id)?'checked':''}><span style="font-size: 15px">${r.name}</span></label>`).join('');
   const permChecks = [
     ['eu-canAdd','canAddPrograms','הוסף תוכנית'],
@@ -4562,7 +4599,7 @@ function editIvrUser(idx){
   };
   const overlay = document.createElement('div');
   overlay.id = 'ivr-edit-overlay';
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(8,12,20,0.92);z-index:8000;display:flex;align-items:center;justify-content:center';
+  overlay.style.cssText='position:fixed;inset:0;background:var(--overlay-bg);z-index:8000;display:flex;align-items:center;justify-content:center';
   const relayChecks = relays.map(r=>`<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="eiv-relay-${r.id}" ${u.allowedRelays.includes(r.id)?'checked':''}><span style="font-size: 15px">${r.name}</span></label>`).join('');
   overlay.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:380px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
     <div style="font-size: 18px;font-weight:700">${idx<0?'הוסף מתקשר':'עריכת מתקשר'}</div>
@@ -5078,6 +5115,24 @@ function refreshHaStates() {
 }
 
 // ── TOAST ─────────────────────────────────────────────────
+// סגנון-תצוגה (V1=כהה, ברירת-מחדל / V2=בהיר) — נשמר לוקאלית, לא תלוי-משתמש (מכשיר/דפדפן-ספציפי,
+// כי לרוב זו העדפה של מי-שיושב-מול-המסך-הזה, לא של חשבון-המשתמש).
+function setTheme(theme){
+  document.body.classList.toggle('theme-light', theme==='light');
+  try { localStorage.setItem('smarthome_theme', theme); } catch(e){}
+  const dark=document.getElementById('theme-btn-dark'), light=document.getElementById('theme-btn-light');
+  if(!dark||!light) return;
+  dark.style.background = theme==='dark' ? 'var(--accent)' : 'transparent';
+  dark.style.color = theme==='dark' ? '#fff' : 'var(--muted)';
+  light.style.background = theme==='light' ? 'var(--accent)' : 'transparent';
+  light.style.color = theme==='light' ? '#fff' : 'var(--muted)';
+}
+(function(){
+  let saved='dark';
+  try { saved = localStorage.getItem('smarthome_theme') || 'dark'; } catch(e){}
+  setTheme(saved);
+})();
+
 function toast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg;t.className='toast show';
@@ -5358,7 +5413,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 79;
+BUILD_BOTTOM_MARK = 80;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
