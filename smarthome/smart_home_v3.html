@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-23-R (תיקון-שורש: פקודת-IVR/טיימר-ידני עם כיוון-כיבוי (לא רק הדלקה) הוצגה בציר-הזמן (גם רגיל וגם מינימלי, כי שניהם חולקים את _getRelayEvents) עם צבע הפוך - השרת לא שלח את שדה-הפעולה בכלל (ivrTodayEvents), והלקוח קבע state:true קשיח לכל אירוע-ידני, בהנחה-שגויה שזה תמיד הדלקה. עכשיו: השרת שולח action:ON/OFF בפועל, rebuildIvrManualEvents מעביר את זה הלאה, ו-_getRelayEvents קובע state לפי e.action במקום ערך-קבוע. נבדק: פקודת-כיבוי-למשך-דקה מוצגת עכשיו כבוי בחלון, ודלוק אחרי-כן (חזרה טבעית). 0 רגרסיות בבדיקת-1-מצב.) -->
+<!-- BUILD_MARKER: v2026-07-27-S (תוכנית חדשה: "פעולה מחזורית" (repeatSameAction) - חלופה בלעדית ל-cycleOn, חוזרת על אותה פעולה (לא הפוך) כל X דקות (משתמש-חוזר ב-cycleOnMin) עד תום ה"למשך" - למניעת שינוי-ידני-באמצע. checkbox חדש ליד מחזורי-הפסקה, בלעדי הדדי, שדה-cycleOnMin משותף עם label דינמי. עודכן גם ב-getRelayEventPairs הלקוח (לתצוגת-ציר-זמן) וגם בשרת (index.js). נבדק: 12 פולסים נכונים בשרת, 0 רגרסיות בבדיקת-1-מצב.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -842,18 +842,23 @@
           <span id="duration-preview" style="font-size: 13px;color:var(--accent3)"></span>
         </div>
       </div>
-      <!-- מחזורי הפסקה -->
+      <!-- מחזורי הפסקה / פעולה מחזורית -->
       <div id="cycle-section" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface2)">
         <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer;margin-bottom:8px">
-          <input type="checkbox" id="prog-cycle-on" onchange="updateProgForm()"> מחזורי הפסקה (לדוגמה: מזגן)
+          <input type="checkbox" id="prog-cycle-on" onchange="onCycleModeChange('cycleOn')"> מחזורי הפסקה (לדוגמה: מזגן)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size: 14px;cursor:pointer;margin-bottom:8px" title="שולחת את אותה פעולה שוב-ושוב (לא הפוך) — כדי \"לתקן\" שינוי-ידני-באמצע (למשל: מישהו הדליק ידנית, והמערכת תכבה שוב תוך כמה דקות), בלי צורך לבנות כמה תוכניות לשעות שונות">
+          <input type="checkbox" id="prog-repeat-action" onchange="onCycleModeChange('repeatAction')"> 🔁 פעולה מחזורית (חוזרת על עצמה, לא הפוך)
         </label>
         <div id="cycle-inputs" style="display:none;flex-direction:column;gap:8px">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-            <span style="font-size:12px;color:var(--text2)">פעולה למשך</span>
+            <span id="cycle-on-label" style="font-size:12px;color:var(--text2)">פעולה למשך</span>
             <input class="form-input" type="number" id="prog-cycle-on-min" value="20" min="1" max="180" style="width:60px" oninput="updateProgForm()"> דק'
-            <span style="font-size:12px;color:var(--text2)">→ הפסקה למשך</span>
-            <input class="form-input" type="number" id="prog-cycle-off-min" value="10" min="1" max="180" style="width:60px" oninput="updateProgForm()"> דק'
-            <span style="font-size:12px;color:var(--text2)">— חזרה על המחזור</span>
+            <span id="cycle-off-wrap" style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:12px;color:var(--text2)">→ הפסקה למשך</span>
+              <input class="form-input" type="number" id="prog-cycle-off-min" value="10" min="1" max="180" style="width:60px" oninput="updateProgForm()"> דק'
+            </span>
+            <span id="cycle-toggle-suffix" style="font-size:12px;color:var(--text2)">— חזרה על המחזור</span>
           </div>
           <div id="cycle-preview" style="font-size: 12px;color:var(--accent3)"></div>
 
@@ -996,7 +1001,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 78;
+const BUILD_TOP_MARK = 79;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -2053,6 +2058,16 @@ function getRelayEventPairs(p, relayId, refDate){
   if(start === null || start === undefined) return [];
   const totalEnd=getRelayEndMin(p,relayId,refDate);
   if(totalEnd===null) return [{fireMin:start,endMin:null,action:p.action}];
+  // "פעולה מחזורית" — אותה פעולה חוזרת-על-עצמה (לא הפוך), כל p.cycleOnMin דקות, עד תום ה"למשך".
+  // אותו עיקרון-תיקון בדיוק כמו בשרת — כל פולס endMin:null (אין "סגירה" עצמית, ההופעה-הבאה בתור
+  // פשוט דורסת שוב את אותה פעולה, בלי אירוע-היפוך).
+  if(p.repeatSameAction && p.cycleOnMin){
+    const interval=p.cycleOnMin;
+    const pairs=[];
+    let s=start, i=0;
+    while(s<totalEnd){ pairs.push({fireMin:s, endMin:null, action:p.action, segType:'single', cycleIdx:i}); s+=interval; i++; }
+    return pairs.length ? pairs : [{fireMin:start,endMin:totalEnd,action:p.action}];
+  }
   if(!p.cycleOn || !p.cycleOnMin || !p.cycleOffMin){
     return [{fireMin:start,endMin:totalEnd,action:p.action}];
   }
@@ -2473,6 +2488,7 @@ function renderPrograms(){
           ${p.relay.length>1?`<span class="prog-chip">מרווח: ${p.delay}שנ'</span>`:''}
           ${p.durationOn&&(p.durationH||p.durationM)?`<span class="prog-chip" style="color:var(--accent3);border-color:rgba(167,139,250,0.28)">⏱ למשך ${p.durationH?p.durationH+'שע ':' '}${p.durationM?p.durationM+'דק':''}</span>`:''}
           ${p.cycleOn&&p.cycleOnMin&&p.cycleOffMin?`<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🔁 מחזורים: ${p.cycleOnMin}/${p.cycleOffMin} דק'</span>`:''}
+          ${p.repeatSameAction&&p.cycleOnMin?`<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🔁 חוזר כל ${p.cycleOnMin} דק'</span>`:''}
           ${p.calType&&p.calType!=='none'&&p.calLabel?`<span class="prog-chip" style="color:var(--warn);border-color:rgba(245,158,11,0.28)">📅 ${p.calLabel}</span>`:''}
           ${p.ivr?'<span class="prog-chip" style="color:var(--accent2);border-color:rgba(52,211,153,0.28)">🎙️ IVR</span>':''}
           ${cfWith?`<span class="prog-chip conflict-c" onclick="scrollToProg(${cfWith})">⚠ התנגשות עם #${cfWith}</span>`:''}
@@ -2842,6 +2858,7 @@ function openAddProgram(editId){
   document.getElementById('prog-duration-h').value=0;
   document.getElementById('prog-duration-m').value=30;
   document.getElementById('prog-cycle-on').checked=false;
+  document.getElementById('prog-repeat-action').checked=false;
   document.getElementById('prog-cycle-on-min').value=20;
   document.getElementById('prog-cycle-off-min').value=10;
   document.getElementById('prog-child-on').checked=false;
@@ -2878,6 +2895,7 @@ function openAddProgram(editId){
     document.getElementById('prog-duration-m').value=p.durationM||30;
     // מחזורי הפסקה
     document.getElementById('prog-cycle-on').checked=!!p.cycleOn;
+    document.getElementById('prog-repeat-action').checked=!!p.repeatSameAction;
     document.getElementById('prog-cycle-on-min').value=p.cycleOnMin||20;
     document.getElementById('prog-cycle-off-min').value=p.cycleOffMin||10;
     // תוכנית-בת
@@ -2928,6 +2946,15 @@ function closeConflictModal(){
 }
 
 function closeModal(){document.getElementById('modal-overlay').classList.remove('open');editingProgId=null;}
+function onCycleModeChange(which){
+  if(which==='cycleOn' && document.getElementById('prog-cycle-on').checked){
+    document.getElementById('prog-repeat-action').checked=false;
+  }
+  if(which==='repeatAction' && document.getElementById('prog-repeat-action').checked){
+    document.getElementById('prog-cycle-on').checked=false;
+  }
+  updateProgForm();
+}
 function updateProgForm(){
   const t=document.getElementById('prog-type-select').value;
   document.getElementById('time-section').style.display=t==='time'?'':'none';
@@ -2948,10 +2975,14 @@ function updateProgForm(){
     const timeStr=(h>0?`${h} שעות `:'')+(m>0?`${m} דקות`:'');
     document.getElementById('duration-preview').textContent=timeStr?`→ לאחר ${timeStr}: ${reverseAction}`:'';
   }
-  // Cycle (מחזורי הפסקה)
+  // Cycle (מחזורי הפסקה) / פעולה מחזורית — שני מצבים בלעדיים, אותו שדה prog-cycle-on-min משמש את שניהם
   const cycleOn=document.getElementById('prog-cycle-on').checked;
+  const repeatAction=document.getElementById('prog-repeat-action').checked;
   const cycleInputs=document.getElementById('cycle-inputs');
-  cycleInputs.style.display=cycleOn?'flex':'none';
+  cycleInputs.style.display=(cycleOn||repeatAction)?'flex':'none';
+  document.getElementById('cycle-off-wrap').style.display=cycleOn?'flex':'none';
+  document.getElementById('cycle-toggle-suffix').style.display=cycleOn?'inline':'none';
+  document.getElementById('cycle-on-label').textContent=repeatAction?'לחזור על הפעולה כל':'פעולה למשך';
   if(cycleOn&&durOn){
     const onMin=parseInt(document.getElementById('prog-cycle-on-min').value)||0;
     const offMin=parseInt(document.getElementById('prog-cycle-off-min').value)||0;
@@ -2960,6 +2991,14 @@ function updateProgForm(){
     document.getElementById('cycle-preview').textContent=cycleLen>0
       ?`→ ${cycles} מחזורים מלאים של ${onMin} דק' פעולה + ${offMin} דק' הפסקה (סה"כ ${totalMin} דק')`
       :'';
+  } else if(repeatAction&&durOn){
+    const intervalMin=parseInt(document.getElementById('prog-cycle-on-min').value)||0;
+    const repeats=intervalMin>0?Math.floor(totalMin/intervalMin)+1:0;
+    document.getElementById('cycle-preview').textContent=intervalMin>0
+      ?`→ אותה פעולה תחזור על עצמה כ-${repeats} פעמים, כל ${intervalMin} דק', לאורך ${totalMin} דק' (למניעת שינוי-ידני-באמצע)`
+      :'';
+  } else {
+    document.getElementById('cycle-preview').textContent='';
   }
   // Child program
   const childOn=document.getElementById('prog-child-on').checked;
@@ -3067,6 +3106,7 @@ function saveProgram(){
     durationH: parseInt(document.getElementById('prog-duration-h').value)||0,
     durationM: parseInt(document.getElementById('prog-duration-m').value)||0,
     cycleOn: document.getElementById('prog-cycle-on').checked,
+    repeatSameAction: document.getElementById('prog-repeat-action').checked,
     cycleOnMin: parseInt(document.getElementById('prog-cycle-on-min').value)||0,
     cycleOffMin: parseInt(document.getElementById('prog-cycle-off-min').value)||0,
   };
@@ -5318,7 +5358,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 78;
+BUILD_BOTTOM_MARK = 79;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
