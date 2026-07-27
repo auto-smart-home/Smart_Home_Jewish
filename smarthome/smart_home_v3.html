@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-T (סגנון-תצוגה חדש: V2, בהיר (אפור-בהיר/לבן) - לצד V1 (כהה, קיים) - ללא דריסה. מומש כולו דרך משתני-CSS (--bg,--surface,--text וכו) שכבר היו קיימים בכל הממשק - הוספת body.theme-light{} עם ערכים-חלופיים מספיקה, בלי לגעת ב-markup. תוקנו גם 3 מקומות עם צבע-כהה-קשיח (conflict-modal, modal-overlay, login-overlay, ivr-edit-overlay) להשתמש ב-var(--overlay-bg)/var(--shadow-color) חדשים, כדי שלא יישארו כהים-קשיחים במצב-הבהיר. כפתורי V1/V2 בטופבר ליד יציאה, נשמר ב-localStorage (per-device, לא per-user), מיושם מיידית עם טעינת-הדף (סקריפט-מוקדם, מונע הבזק-של-סגנון-לא-נכון). נבדק ויזואלית עם Playwright: מסך-כניסה ולוח-בקרה, שני הסגנונות, כולל הדגשת-כפתור-פעיל נכונה.) -->
+<!-- BUILD_MARKER: v2026-07-27-U (עדכון-פלטה: V2 (סגנון-בהיר) הוחלף מ-אפור-כחלחל לפלטה חמה/קרם-בז שהמשתמש בחר מתוך 6 דוגמיות שהוצגו - בונה טופבר+כרטיסים אמיתיים לכל דוגמית, לא רק ריבועי-צבע. כל 14 משתני-ה-CSS עודכנו בהתאם (כולל overlay-bg/shadow-color שהתווספו קודם).) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -29,27 +29,27 @@
     --overlay-bg: rgba(8,12,20,0.92);
     --shadow-color: rgba(0,0,0,0.35);
   }
-  /* V2 — סגנון-בהיר (אפור-בהיר/לבן), לנוחות-קריאה למי שהרקע-הכהה לא נעים לו. אותם משתני-CSS
+  /* V2 — סגנון-בהיר, נבחר ע"י המשתמש מתוך 6 דוגמיות: חם/קרם-בז' (עץ-חם). אותם משתני-CSS
      בדיוק, רק ערכים-שונים — שום markup/קוד אחר לא צריך "לדעת" על זה בכלל, כי הכל כבר var(--x). */
   body.theme-light {
-    --bg: #eef0f4;
-    --surface: #ffffff;
-    --surface2: #f4f5f8;
-    --surface3: #e8eaf0;
-    --border: rgba(20,30,60,0.10);
-    --border2: rgba(20,30,60,0.18);
-    --accent: #3763d1;
-    --accent2: #0d9668;
-    --accent3: #7c4fe0;
-    --warn: #b45f06;
-    --danger: #d0342c;
-    --text: #1c2333;
-    --text2: #4a5468;
-    --muted: #6b7688;
-    --on-color: #0d9668;
-    --off-color: #d7dbe4;
-    --overlay-bg: rgba(60,66,82,0.45);
-    --shadow-color: rgba(30,40,70,0.12);
+    --bg: #f2ede3;
+    --surface: #fffdf9;
+    --surface2: #ece5d6;
+    --surface3: #e3dac6;
+    --border: rgba(90,70,30,0.14);
+    --border2: rgba(90,70,30,0.24);
+    --accent: #a6641f;
+    --accent2: #3f8a5c;
+    --accent3: #96587a;
+    --warn: #b8650a;
+    --danger: #c23b2e;
+    --text: #2e2618;
+    --text2: #5c4f3a;
+    --muted: #8a7c62;
+    --on-color: #3f8a5c;
+    --off-color: #ded2b8;
+    --overlay-bg: rgba(58,46,32,0.45);
+    --shadow-color: rgba(80,60,30,0.14);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Heebo', sans-serif; min-height: 100vh; direction: rtl; }
@@ -1038,7 +1038,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 80;
+const BUILD_TOP_MARK = 81;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5413,7 +5413,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 80;
+BUILD_BOTTOM_MARK = 81;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
