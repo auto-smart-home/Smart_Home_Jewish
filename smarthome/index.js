@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 41;
+const IDX_TOP_MARK = 42;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1251,6 +1251,19 @@ function getRelayEventPairs(p, baseMin, relayId) {
   const start=getRelayFireMin(p,baseMin,relayId);
   const totalEnd=getRelayEndMin(p,start);
   if (totalEnd===null) return [{fireMin:start,endMin:null,action:p.action,segType:'single'}];
+  // "פעולה מחזורית" (לא הפוך, כמו מחזורי-הפסקה — חוזרת על **אותה** פעולה שוב-ושוב) — משתמשת-חוזרת
+  // באותו שדה cycleOnMin (בתור "כל כמה דקות לחזור"), אבל היא בלעדית מול cycleOn הרגיל (ה-UI כבר
+  // אוכף את זה, אבל בודקים explicit כאן גם-כן ליתר-ביטחון). כל "פולס" הוא ירי-עצמאי-ללא-סגירה-
+  // עצמו (endMin:null) — אין כאן שום "היפוך", רק חזרה-מחדש-על-אותה-הפקודה, למקרה שמישהו שינה-
+  // ידנית באמצע; הפעולה-הבאה-בתור פשוט תדרוס את זה שוב בעצמה, בלי צורך ב"אירוע-סיום" נפרד.
+  if (p.repeatSameAction && p.cycleOnMin) {
+    const interval = p.cycleOnMin;
+    const pairs = [];
+    let s = start, i = 0;
+    while (s < totalEnd) { pairs.push({fireMin:s, endMin:null, action:p.action, segType:'single', cycleIdx:i}); s += interval; i++; }
+    if (!pairs.length) return [{fireMin:start,endMin:totalEnd,action:p.action,segType:'single'}];
+    return pairs;
+  }
   if (!p.cycleOn||!p.cycleOnMin||!p.cycleOffMin) return [{fireMin:start,endMin:totalEnd,action:p.action,segType:'single'}];
   const onMin=p.cycleOnMin,offMin=p.cycleOffMin,cycleLen=onMin+offMin;
   const totalMin=totalEnd-start,fullCycles=Math.floor(totalMin/cycleLen);
@@ -2676,4 +2689,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 41;
+const IDX_BOTTOM_MARK = 42;
