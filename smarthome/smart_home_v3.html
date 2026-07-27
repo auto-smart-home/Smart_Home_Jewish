@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-AB (המשך-תיקון-2-צבעים-בכותרת-יום: הבעיה לא הייתה תלוית-אזור-זמן - ה-TD העוטף (position:sticky) לא קיבל background משלו, רק ה-div-הפנימי קיבל hdrClass. אם ה-div לא ממלא-בדיוק את גובה-ה-td (למשל בגלל sticky+flex-wrap), נחשף רקע-ברירת-המחדל-של-הטבלה מתחתיו - זה ה"לבן" השני שהמשתמש ראה. תוקן: גם ה-td עצמו (וגם td-י-הממסרים הריקים לידו) מקבלים עכשיו את hdrClass כ-class, לא רק ה-div שבתוכו - כיסוי-מלא בלי-תלות-בגובה-פנימי.) -->
+<!-- BUILD_MARKER: v2026-07-27-AC (תיקון-באג-אמיתי: בציר-המינימלי, כל בלוק קיבל z-index=si+1 (si=אינדקס-הקטע-בתוך-היום, לא-מוגבל) - בעמודה עם תוכנית-מחזורים-אינטנסיבית (הרבה קטעים ביום) si יכול לעבור את z-index=89 של הכותרת-הדביקה (#tl-min-header-wrap), וגורם לבלוק לצייר מעל-הכותרת בדיוק בנקודת-הגלילה שבה הוא חוצה אותה חזותית - בדיוק התופעה שהתמונה הראתה ("רק בעמודות עם מחזורים, רק באמצע-גלילה"). תוקן: z-index=(si%20)+1 - מוגבל תמיד ל-1-20, לעולם לא יכול לעבור את 89, ללא-תלות בכמות-הקטעים ביום.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1046,7 +1046,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 88;
+const BUILD_TOP_MARK = 89;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4099,7 +4099,7 @@ function renderTimelineMinimal(){
         // מתחת לסף-הכיתוב: קו דק בלי טקסט (רק ריחוף/tooltip מראה את הזמן המדויק) — לא נעלם, לא נדחס-בכוח
         const showText = h >= TEXT_MIN_HEIGHT_PX;
         const content = showText ? startStr+'–'+endStr : '';
-        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:${textColor};border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
+        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${(si%20)+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:${textColor};border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
       });
       html += '</div>';
     });
@@ -5423,7 +5423,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 88;
+BUILD_BOTTOM_MARK = 89;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
