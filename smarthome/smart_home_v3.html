@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-U (עדכון-פלטה: V2 (סגנון-בהיר) הוחלף מ-אפור-כחלחל לפלטה חמה/קרם-בז שהמשתמש בחר מתוך 6 דוגמיות שהוצגו - בונה טופבר+כרטיסים אמיתיים לכל דוגמית, לא רק ריבועי-צבע. כל 14 משתני-ה-CSS עודכנו בהתאם (כולל overlay-bg/shadow-color שהתווספו קודם).) -->
+<!-- BUILD_MARKER: v2026-07-27-V (חיזוק-רקע V2 (bg כהה-יותר, #eae2d0), ותיקון כ-15 מקומות עם צבע-קשיח (לא var()) שהיו מכוונים רק לרקע-כהה - טקסטים בהירים-מדי (אדום/צהוב/סגול/כחול פסטליים) שהיו נשטפים על רקע-בהיר, בעיקר במודל בדיקת-מעבר-מצב, מודל-קונפליקטים, שגיאת-כניסה, וסימולטור. כולם עברו ל-var(--danger)/var(--warn)/var(--accent)/var(--accent3)/var(--muted), כך שיתאימו אוטומטית לשני הסגנונות.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -32,7 +32,7 @@
   /* V2 — סגנון-בהיר, נבחר ע"י המשתמש מתוך 6 דוגמיות: חם/קרם-בז' (עץ-חם). אותם משתני-CSS
      בדיוק, רק ערכים-שונים — שום markup/קוד אחר לא צריך "לדעת" על זה בכלל, כי הכל כבר var(--x). */
   body.theme-light {
-    --bg: #f2ede3;
+    --bg: #eae2d0;
     --surface: #fffdf9;
     --surface2: #ece5d6;
     --surface3: #e3dac6;
@@ -447,12 +447,12 @@
   .conflict-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:300; align-items:center; justify-content:center; padding:16px; }
   .conflict-modal-overlay.open { display:flex; }
   .conflict-modal { background:var(--surface); border:1px solid var(--danger); border-radius:10px; max-width:560px; width:100%; max-height:80vh; overflow-y:auto; padding:20px; box-shadow:0 10px 40px var(--shadow-color); color:var(--text); }
-  .conflict-modal h3 { color:#ff5757; margin:0 0 12px; font-size:18px; }
+  .conflict-modal h3 { color:var(--danger); margin:0 0 12px; font-size:18px; }
   .conflict-modal .cf-row { background:rgba(255,87,87,0.08); border:1px solid rgba(255,87,87,0.3); border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5; }
-  .conflict-modal .cf-row b { color:#ff8b8b; }
+  .conflict-modal .cf-row b { color:var(--danger); }
   .conflict-modal .cf-ok-btn { display:block; width:100%; margin-top:14px; padding:11px; background:#d33; color:#fff; border:none; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; }
   .conflict-modal .cf-ok-btn:hover { background:#e44; }
-  .ms-row { display:flex; align-items:center; gap:8px; padding:7px 4px; font-size:14px; color:#ddd; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; }
+  .ms-row { display:flex; align-items:center; gap:8px; padding:7px 4px; font-size:14px; color:var(--text); border-bottom:1px solid var(--border); cursor:pointer; }
   .ms-row input[type=checkbox] { width:16px; height:16px; cursor:pointer; flex-shrink:0; }
   .modal { background: var(--surface); border: 1px solid var(--border2); border-radius: 16px; padding: 22px; width: 640px; max-width: 98vw; direction: rtl; margin: auto; flex-shrink: 0; position: relative; }
   .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 16px; }
@@ -500,7 +500,7 @@
     </select>
     <input id="login-password" type="password" placeholder="סיסמה" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size: 16px;font-family:inherit;direction:ltr" onkeydown="if(event.key==='Enter')doLogin()">
     <button onclick="doLogin()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:12px;font-size: 17px;font-weight:700;cursor:pointer;font-family:inherit">כניסה</button>
-    <div id="login-error" style="color:#f87171;font-size: 15px;text-align:center;display:none">סיסמה שגויה, נסה שוב</div>
+    <div id="login-error" style="color:var(--danger);font-size: 15px;text-align:center;display:none">סיסמה שגויה, נסה שוב</div>
   </div>
 </div>
 
@@ -508,7 +508,7 @@
 <div class="topbar">
   <div class="topbar-left">
     <div class="topbar-title">בית <span>חכם</span></div>
-    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:#facc15;opacity:0.85;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
+    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:var(--warn);opacity:0.85;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
     <div class="mode-pill">
       <span style="font-size: 12px;color:var(--muted)">מצב:</span>
       <span class="ml" id="active-mode-label">רגיל</span>
@@ -1038,7 +1038,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 81;
+const BUILD_TOP_MARK = 82;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1559,7 +1559,7 @@ function connectMQTT() {
   });
 
   socket.on('simulate_schedule_result', ({ ok, events, error }) => {
-    if(!ok){ document.getElementById('sim-results').innerHTML = `<div style="color:#ef4444;padding:12px">❌ ${error}</div>`; return; }
+    if(!ok){ document.getElementById('sim-results').innerHTML = `<div style="color:var(--danger);padding:12px">❌ ${error}</div>`; return; }
     renderSimResults(events);
   });
 
@@ -2314,16 +2314,16 @@ socket.on('mode_switch_review', (data) => {
   const body = document.getElementById('mode-switch-modal-body');
   let html = '';
   if (staleRelays.length) {
-    html += `<h4 style="color:#fbbf24;margin:14px 0 8px">ממסרים דלוקים ממצב קודם</h4>
-      <p style="font-size:13px;color:#999;margin:0 0 10px">מסומן = יכבה. בטל סימון כדי להשאיר דלוק.</p>`;
+    html += `<h4 style="color:var(--warn);margin:14px 0 8px">ממסרים דלוקים ממצב קודם</h4>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 10px">מסומן = יכבה. בטל סימון כדי להשאיר דלוק.</p>`;
     staleRelays.forEach(r => {
       html += `<label class="ms-row"><input type="checkbox" class="ms-stale-cb" value="${r.relayId}" checked>
-        ${r.relayName} <span style="color:#888">— כעת בשליטת "${r.ownerProgName}"</span></label>`;
+        ${r.relayName} <span style="color:var(--muted)">— כעת בשליטת "${r.ownerProgName}"</span></label>`;
     });
   }
   if (missedPrograms.length) {
-    html += `<h4 style="color:#60a5fa;margin:18px 0 8px">תוכניות שפספסו את זמנן במצב החדש</h4>
-      <p style="font-size:13px;color:#999;margin:0 0 10px">מסומן = יופעל כעת. ברירת מחדל — לא להפעיל.</p>`;
+    html += `<h4 style="color:var(--accent);margin:18px 0 8px">תוכניות שפספסו את זמנן במצב החדש</h4>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 10px">מסומן = יופעל כעת. ברירת מחדל — לא להפעיל.</p>`;
     missedPrograms.forEach(m => {
       html += `<label class="ms-row"><input type="checkbox" class="ms-missed-cb" value="${m.progId}">
         ${m.relayName} ← "${m.progName}"${m.isPriority?' (עדיפות)':''}</label>`;
@@ -4184,7 +4184,7 @@ function renderTimeline(){
       }
       */
       const modeName = modeChanged ? ((modes.find(m=>m.id===blockEffMode)||{}).name || `מצב ${blockEffMode}`) : '';
-      const modeTagHtml = modeChanged ? `<div style="font-size:12px;color:#facc15;font-weight:800;margin-top:2px;letter-spacing:0.2px">🔀 ${modeName}</div>` : '';
+      const modeTagHtml = modeChanged ? `<div style="font-size:12px;color:var(--warn);font-weight:800;margin-top:2px;letter-spacing:0.2px">🔀 ${modeName}</div>` : '';
       // רקע צהוב-בהיר — רק על תא-העמודה-הימנית (השעה) של בלוק ששייך למצב אחר, לא על כל השורה
       const modeTdStyle = modeChanged ? 'background:rgba(250,204,21,0.14);' : '';
       if(!b.hasEvents||b.empty){
@@ -4330,7 +4330,7 @@ function renderTimeline(){
    } catch(e) {
      console.error(`❌ renderTimeline נכשל ליום ${dayDate.toDateString()}:`, e);
      if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בהצגת ציר-הזמן ליום ${dayDate.toLocaleDateString('he-IL')}: ${e.message}`);
-     html += `<tr><td colspan="${relays.length+1}" style="color:#ef4444;padding:8px">⚠️ שגיאה בהצגת היום הזה — ראה יומן</td></tr>`;
+     html += `<tr><td colspan="${relays.length+1}" style="color:var(--danger);padding:8px">⚠️ שגיאה בהצגת היום הזה — ראה יומן</td></tr>`;
    }
   }
   html+='</tbody>';
@@ -5413,7 +5413,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 81;
+BUILD_BOTTOM_MARK = 82;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
@@ -5424,18 +5424,18 @@ updateBuildVersionIndicator();
   </div>
 </div>
 <div class="conflict-modal-overlay" id="mode-switch-modal-overlay">
-  <div class="conflict-modal" style="border-color:#3b6fa0">
-    <h3 style="color:#60a5fa">🔀 בדיקת השפעת מעבר מצב</h3>
+  <div class="conflict-modal" style="border-color:var(--accent)">
+    <h3 style="color:var(--accent)">🔀 בדיקת השפעת מעבר מצב</h3>
     <div id="mode-switch-modal-body"></div>
     <div style="display:flex;gap:8px;margin-top:14px">
-      <button class="cf-ok-btn" style="background:#2E5C8A" onclick="applyModeSwitchChoice(false)">אישור הבחירות שסומנו</button>
-      <button class="cf-ok-btn" style="background:#555" onclick="applyModeSwitchChoice(true)">השתמש בברירת המחדל (כבה הכל, אל תפעיל כלום)</button>
+      <button class="cf-ok-btn" style="background:var(--accent)" onclick="applyModeSwitchChoice(false)">אישור הבחירות שסומנו</button>
+      <button class="cf-ok-btn" style="background:var(--muted)" onclick="applyModeSwitchChoice(true)">השתמש בברירת המחדל (כבה הכל, אל תפעיל כלום)</button>
     </div>
   </div>
 </div>
 <div class="conflict-modal-overlay" id="sim-modal-overlay" style="display:none">
-  <div class="conflict-modal" style="border-color:#7c5cbf;max-width:900px;width:95%">
-    <h3 style="color:#a78bfa">🧪 סימולציית תזמון</h3>
+  <div class="conflict-modal" style="border-color:var(--accent3);max-width:900px;width:95%">
+    <h3 style="color:var(--accent3)">🧪 סימולציית תזמון</h3>
     <p style="color:var(--muted);font-size:13px;margin:4px 0 12px">
       מריץ בשרת, על כל התוכניות הפעילות האמיתיות שלך, מה היה קורה בטווח שתבחר — כולל מחזורים,
       תוכניות-בת, אירועים-שחוצי-חצות, וחסימות-בעלות-ממסר. <b>לא שולח שום פקודה אמיתית</b> ולא נוגע במצב הקיים.
