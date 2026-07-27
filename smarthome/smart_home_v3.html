@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-W (תיקון-שורש לבעיית-הניגודיות ב-V2: --muted היה 3.17:1 מול הרקע (WCAG דורש 4.5 לטקסט-רגיל) - זה משתנה שמשמש עשרות מקומות (תוויות, timestamps, chips) ברחבי האפליקציה, אז זו הייתה הסיבה השורשית ל"עוד הרבה מקומות אפור". חושב contrast-ratio בפועל (נוסחת-WCAG מלאה) לכל צבעי-האקסנט, ותוקנו muted/accent/accent2/warn לערכים-כהים-יותר עם מרווח-ביטחון (4.4-5.9:1). גם תוקן .prog-chip.shabbat ו-.tl-prog-block.t-manual שהיו עם צבע-טקסט קשיח שלא מתחשב ברקע-שקוף-מתחתיו.) -->
+<!-- BUILD_MARKER: v2026-07-27-X (המשך-תיקון-ניגודיות ב-V2: --text2 הועמק משמעותית (5.5->8.7 יחס-ניגודיות) ו-muted הוזז-מעלה בהתאם - כי text2 משמש נרחב (log, prog-chip של ממסרים, section-title, quick-btn) ואפילו contrast=6.18 הרגיש "אפור" בהשוואה ל-text הראשי. גם: .log-entry .action ו-.section-title עברו מ-text2 ל-text (תוכן-עיקרי, לא-רק-תווית-משנית), ותוקן צבע-רקע-קשיח-ישן (rgba כחול מ-V1) בתג-שם-המשתמש ביומן.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -44,8 +44,8 @@
     --warn: #9c5407;
     --danger: #c23b2e;
     --text: #2e2618;
-    --text2: #5c4f3a;
-    --muted: #655843;
+    --text2: #453923;
+    --muted: #5c4f3a;
     --on-color: #2f7248;
     --off-color: #ded2b8;
     --overlay-bg: rgba(58,46,32,0.45);
@@ -214,7 +214,7 @@
     font-size: 13px; cursor: pointer; font-family: 'Heebo', sans-serif; transition: all 0.2s;
   }
   .add-btn-top:hover { background: rgba(79,142,247,0.22); }
-  .section-title { font-size: 15px; font-weight: 700; color: var(--text2); letter-spacing: 0.3px; }
+  .section-title { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: 0.3px; }
   .toolbar-group { display: flex; gap: 6px; }
   .icon-btn {
     display: flex; align-items: center; gap: 4px; padding: 6px 12px;
@@ -424,7 +424,7 @@
   .log-entry:last-child { border-bottom: none; }
   .log-entry .ts { color: var(--accent); font-size: 13px; white-space: nowrap; min-width: 62px; }
   .log-entry .log-date { color: var(--text2); font-size: 12px; white-space: nowrap; }
-  .log-entry .action { color: var(--text2); flex: 1; }
+  .log-entry .action { color: var(--text); flex: 1; }
   .log-entry.sent .action { color: var(--on-color); }
   .log-entry.recv .action { color: var(--warn); }
   .log-entry.danger .action { color: var(--danger); }
@@ -1038,7 +1038,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 83;
+const BUILD_TOP_MARK = 84;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4798,7 +4798,7 @@ function renderLog(){
     ?visible.map(e=>`<div class="log-entry ${e.type}">
       <span class="ts">${e.time}</span>
       <span class="log-date">${e.date}</span>
-      ${e.user&&e.user!=='מערכת'?`<span style="font-size: 12px;color:var(--accent);background:rgba(100,140,255,0.1);border-radius:4px;padding:1px 5px">${e.user}</span>`:''}
+      ${e.user&&e.user!=='מערכת'?`<span style="font-size: 12px;color:var(--accent);background:var(--surface2);border-radius:4px;padding:1px 5px">${e.user}</span>`:''}
       <span class="action">${e.msg}</span>
     </div>`).join('')
     :'<div class="log-entry"><span class="ts">—</span><span class="action">ממתין לפעולות...</span></div>';
@@ -5413,7 +5413,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 83;
+BUILD_BOTTOM_MARK = 84;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
