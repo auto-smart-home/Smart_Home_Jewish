@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-X (המשך-תיקון-ניגודיות ב-V2: --text2 הועמק משמעותית (5.5->8.7 יחס-ניגודיות) ו-muted הוזז-מעלה בהתאם - כי text2 משמש נרחב (log, prog-chip של ממסרים, section-title, quick-btn) ואפילו contrast=6.18 הרגיש "אפור" בהשוואה ל-text הראשי. גם: .log-entry .action ו-.section-title עברו מ-text2 ל-text (תוכן-עיקרי, לא-רק-תווית-משנית), ותוקן צבע-רקע-קשיח-ישן (rgba כחול מ-V1) בתג-שם-המשתמש ביומן.) -->
+<!-- BUILD_MARKER: v2026-07-27-Y (סבב-תיקונים ממוקד ב-V2 לפי 7 בעיות ספציפיות: 1) text2/muted הועמקו עוד (8.7/6.2 -> 10.6/8.7 יחס-ניגודיות, כ-25% חיזוק) 2) כפתור "ניהול מצבים" - טקסט-לבן-קשיח על רקע-מוחלף לא-מכוסה 3) זמני-השעות בכותרת-הזמנים ירשו --muted במקום --text2 4) גוש-quiet-gap בציר-המינימלי היה עם רקע-כהה-קשיח+טקסט-לבן-קשיח, שניהם הפכו ל-var() 5) opacity של תוכנית-לא-פעילה (0.4) היה זהה בשני הסגנונות - הוספו --inactive-opacity/--dim-opacity תלויי-תמה (0.4/0.5 כהה, 0.68/0.75 בהיר) כי אותה שקיפות פוגעת הרבה יותר בטקסט-כהה-על-רקע-בהיר 6) תפריטי-הסינון בטאב תוכניות קיבלו מסגרת מודגשת יותר + ספירת-תוכניות חוזקה ל-text2 7) מחוון-גרסה הוסר ממנו opacity:0.85 שהחליש-שוב צבע-שכבר-על-הגבול.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -28,6 +28,8 @@
     --off-color: #2a3245;
     --overlay-bg: rgba(8,12,20,0.92);
     --shadow-color: rgba(0,0,0,0.35);
+    --inactive-opacity: 0.4;
+    --dim-opacity: 0.5;
   }
   /* V2 — סגנון-בהיר, נבחר ע"י המשתמש מתוך 6 דוגמיות: חם/קרם-בז' (עץ-חם). אותם משתני-CSS
      בדיוק, רק ערכים-שונים — שום markup/קוד אחר לא צריך "לדעת" על זה בכלל, כי הכל כבר var(--x). */
@@ -44,12 +46,14 @@
     --warn: #9c5407;
     --danger: #c23b2e;
     --text: #2e2618;
-    --text2: #453923;
-    --muted: #5c4f3a;
+    --text2: #362c1a;
+    --muted: #453923;
     --on-color: #2f7248;
     --off-color: #ded2b8;
     --overlay-bg: rgba(58,46,32,0.45);
     --shadow-color: rgba(80,60,30,0.14);
+    --inactive-opacity: 0.68;
+    --dim-opacity: 0.75;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Heebo', sans-serif; min-height: 100vh; direction: rtl; }
@@ -89,7 +93,7 @@
     background-color: var(--surface);
     background-image: linear-gradient(90deg, rgba(79,142,247,0.08), rgba(52,211,153,0.08));
     border-bottom: 1px solid var(--border); padding: 2px 18px; margin-bottom:0;
-    display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted);
+    display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text2);
   }
   .zmanim-item { display: flex; align-items: center; gap: 5px; }
   .zmanim-bar { position: sticky; z-index: 95; }
@@ -241,8 +245,8 @@
     transition: opacity 0.2s, border-color 0.2s;
   }
   .prog-card:hover { border-color: var(--border2); }
-  .prog-card.inactive { opacity: 0.4; }
-  .prog-card.dim { opacity: 0.5; }
+  .prog-card.inactive { opacity: var(--inactive-opacity); }
+  .prog-card.dim { opacity: var(--dim-opacity); }
   .prog-card.priority { border-right: 3px solid var(--danger); }
   .prog-num {
     font-size: 13px; font-weight: 700; color: var(--text2);
@@ -508,13 +512,13 @@
 <div class="topbar">
   <div class="topbar-left">
     <div class="topbar-title">בית <span>חכם</span></div>
-    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:var(--warn);opacity:0.85;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
+    <span id="build-version-indicator" title="בדיקת שלמות קבצים: תחילת+סוף smart_home_v3.html . תחילת+סוף index.js — ארבעתם אמורים להיות זהים" style="font-size:10px;color:var(--warn);font-weight:700;margin-inline-start:4px;font-family:monospace">?.?.?.?</span>
     <div class="mode-pill">
       <span style="font-size: 12px;color:var(--muted)">מצב:</span>
       <span class="ml" id="active-mode-label">רגיל</span>
       <select id="mode-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size: 14px;font-family:inherit;cursor:pointer"></select>
       <button class="mode-pill-btn" onclick="confirmModeChange()">אישור</button>
-      <button class="mode-pill-btn" onclick="openScheduledModesModal()" style="background:var(--surface2)">🕐 ניהול מצבים</button>
+      <button class="mode-pill-btn" onclick="openScheduledModesModal()" style="background:var(--surface2);color:var(--text)">🕐 ניהול מצבים</button>
     </div>
   </div>
   <div class="status-pill" id="status-pill">
@@ -596,13 +600,13 @@
         <button class="icon-btn" onclick="repairSharedChildren()" title="מתקן תוכניות-בת ש'משותפות' בטעות בין כמה הורים (נתונים ישנים משכפול-ישן) — יוצר בת עצמאית לכל הורה">🔧 תיקון תוכניות-בת משותפות</button>
         <button class="icon-btn" onclick="openSimModal()" title="מריץ בשרת, על כל התוכניות האמיתיות, מה היה קורה בטווח-תאריכים נבחר — כולל מחזורים/תוכניות-בת/חציית-חצות/חסימות — בלי לשלוח שום פקודה אמיתית">🧪 סימולציית תזמון</button>
         <span style="width:1px;background:var(--border);align-self:stretch;margin:0 2px"></span>
-        <select id="prog-filter-mode" class="form-input" style="width:auto;padding:3px 8px;font-size:13px" onchange="renderPrograms()"></select>
-        <select id="prog-filter-status" class="form-input" style="width:auto;padding:3px 8px;font-size:13px" onchange="renderPrograms()">
+        <select id="prog-filter-mode" class="form-input" style="width:auto;padding:3px 8px;font-size:13px;border-color:var(--border2);background:var(--surface)" onchange="renderPrograms()"></select>
+        <select id="prog-filter-status" class="form-input" style="width:auto;padding:3px 8px;font-size:13px;border-color:var(--border2);background:var(--surface)" onchange="renderPrograms()">
           <option value="all">הכל (פעילות+מושבתות)</option>
           <option value="active">רק פעילות</option>
           <option value="inactive">רק מושבתות</option>
         </select>
-        <span id="prog-filter-count" style="font-size:12px;color:var(--muted)"></span>
+        <span id="prog-filter-count" style="font-size:12px;color:var(--text2);font-weight:600"></span>
       </div>
     </div>
     <div class="bulk-bar" id="bulk-bar">
@@ -1038,7 +1042,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 84;
+const BUILD_TOP_MARK = 85;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4082,14 +4086,16 @@ function renderTimelineMinimal(){
         let endStr = fmtEpochHM(s.endMs);
         if (endStr === '00:00' && s.endMs > s.startMs) endStr = '24:00'; // סוף-היום, לא התחלתו — מונע "00:00–00:00" מבלבל לקטע שנמשך עד חצות
         const clickable = s.kind === 'on' || s.kind === 'off-action' || s.kind === 'duration-end';
-        const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : '#2a3142') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
+        const isQuietGap = s.kind === 'gap' && !s.isOn;
+        const bg = s.kind === 'gap' ? (s.isOn ? 'rgba(52,211,153,0.35)' : 'var(--off-color)') : (s.isOn ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.65)');
+        const textColor = isQuietGap ? 'var(--text)' : '#fff';
         const cursorStyle = clickable ? 'cursor:pointer' : '';
         const onclickAttr = clickable ? ` onclick="openAddProgram(${s.progId});showTab('programs',null)"` : '';
         const title = s.label ? `${s.label} · ${startStr}–${endStr}` : `${startStr}–${endStr}`;
         // מתחת לסף-הכיתוב: קו דק בלי טקסט (רק ריחוף/tooltip מראה את הזמן המדויק) — לא נעלם, לא נדחס-בכוח
         const showText = h >= TEXT_MIN_HEIGHT_PX;
         const content = showText ? startStr+'–'+endStr : '';
-        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
+        html += `<div style="position:absolute;top:${top}px;left:0;right:0;height:${h}px;z-index:${si+1};background:${bg};${cursorStyle};display:flex;align-items:center;justify-content:center;font-size:10px;color:${textColor};border-bottom:1px solid rgba(0,0,0,0.35);overflow:hidden;direction:ltr"${onclickAttr} title="${title}">${content}</div>`;
       });
       html += '</div>';
     });
@@ -5413,7 +5419,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 84;
+BUILD_BOTTOM_MARK = 85;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
