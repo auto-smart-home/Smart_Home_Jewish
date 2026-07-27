@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-AA (תיקון-נוסף-בציר-זמן, אחרי צילום-מסך אמיתי: 1) נמצא מופע-שני-נשכח של הרקע-הכהה-הקשיח #2a3142 (renderTimeline, ענף b.empty/no-events - בדיוק "הבלוק הראשון של כל יום" שהמשתמש הראה בתמונה) 2) נוסף --tl-off-bg ייעודי: V1 נשאר #2a3142 (זהה-לקיים), V2 מקבל אפור-ניטרלי אמיתי #d3d3d3 (לא קרם כמו surface2, שהיה קרוב-מדי לרקע-הכללי ויצר את התלונה "צבע-כבוי כמו-הרקע") - הוחל בעקביות בכל 3 המקומות בשני-קבצי-הרינדור (רגיל+מינימלי) 3) גוש "הדלקה-רציפה" במינימלי היה rgba ירוק ב-35%/30% אטימות (חלש-מדי, לא-מתאים) יחד עם טקסט-לבן שנשען-על-הרוויה-הזו - שניהם חוזקו ל-75% אטימות, עקבי עם שאר-הגושים-הירוקים בקובץ.) -->
+<!-- BUILD_MARKER: v2026-07-27-AB (המשך-תיקון-2-צבעים-בכותרת-יום: הבעיה לא הייתה תלוית-אזור-זמן - ה-TD העוטף (position:sticky) לא קיבל background משלו, רק ה-div-הפנימי קיבל hdrClass. אם ה-div לא ממלא-בדיוק את גובה-ה-td (למשל בגלל sticky+flex-wrap), נחשף רקע-ברירת-המחדל-של-הטבלה מתחתיו - זה ה"לבן" השני שהמשתמש ראה. תוקן: גם ה-td עצמו (וגם td-י-הממסרים הריקים לידו) מקבלים עכשיו את hdrClass כ-class, לא רק ה-div שבתוכו - כיסוי-מלא בלי-תלות-בגובה-פנימי.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1046,7 +1046,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 87;
+const BUILD_TOP_MARK = 88;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4169,12 +4169,12 @@ function renderTimeline(){
         <span class="${subClass}" style="font-weight:600">${latDate}</span>
         ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
         ${badgeHtml}`;
-    let hdrCells = `<td style="padding:0;position:sticky;right:0;z-index:6">
+    let hdrCells = `<td class="${hdrClass}" style="padding:0;position:sticky;right:0;z-index:6">
       <div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap">
         ${dayLabelHtml}
       </div></td>`;
     relays.forEach(()=>{
-      hdrCells+=`<td style="padding:0"><div class="${hdrClass}" style="height:100%;min-height:28px"></div></td>`;
+      hdrCells+=`<td class="${hdrClass}" style="padding:0"><div class="${hdrClass}" style="height:100%;min-height:28px"></div></td>`;
     });
     html+=`<tr class="tl-day-row">${hdrCells}</tr>`;
     blocks.forEach(b=>{
@@ -5423,7 +5423,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 87;
+BUILD_BOTTOM_MARK = 88;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
