@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-27-AC (תיקון-באג-אמיתי: בציר-המינימלי, כל בלוק קיבל z-index=si+1 (si=אינדקס-הקטע-בתוך-היום, לא-מוגבל) - בעמודה עם תוכנית-מחזורים-אינטנסיבית (הרבה קטעים ביום) si יכול לעבור את z-index=89 של הכותרת-הדביקה (#tl-min-header-wrap), וגורם לבלוק לצייר מעל-הכותרת בדיוק בנקודת-הגלילה שבה הוא חוצה אותה חזותית - בדיוק התופעה שהתמונה הראתה ("רק בעמודות עם מחזורים, רק באמצע-גלילה"). תוקן: z-index=(si%20)+1 - מוגבל תמיד ל-1-20, לעולם לא יכול לעבור את 89, ללא-תלות בכמות-הקטעים ביום.) -->
+<!-- BUILD_MARKER: v2026-07-28-AD (תכונה חדשה: טריגרים-חיצוניים - כפתורי-קיר/מתגי-סצנה zigbee יכולים להפעיל ממסר/תוכנית/מצב, מוגדר-כולו מהממשק (טאב חדש), כולל מצב-לימוד שתופס-אוטומטית topic+action כשלוחצים על הכפתור הפיזי - בלי לגעת בקוד לכל התקן-חדש. שרת: מנוי zigbee2mqtt/#, התאמה מול externalTriggers, executeTriggerAction (ממסר/תוכנית/מצב, בדיוק אותה לוגיקה-פנימית-קיימת). נבדק שרת: 5 תרחישים (toggle/duration/program/mode/no-match) עברו נכון. נבדק לקוח: הטאב+המודל+זרימת-הלימוד נטענים בלי שגיאות-JS.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -565,6 +565,7 @@
     <button class="tab" onclick="showTab('users',this)">הרשאות</button>
     <button class="tab" onclick="showTab('ivr',this)">📞 IVR</button>
     <button class="tab" onclick="showTab('ha_devices',this)">⚙️ הגדרות התקנים</button>
+    <button class="tab" onclick="showTab('triggers',this)">🔘 טריגרים חיצוניים</button>
     <button class="tab" onclick="showTab('log',this)">יומן</button>
   </div>
 
@@ -838,6 +839,20 @@
     </div>
   </div>
 
+  <!-- EXTERNAL TRIGGERS TAB -->
+  <div id="tab-triggers" class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="section-title">🔘 טריגרים חיצוניים — כפתורי-קיר/מתגי-סצנה (Zigbee) שמפעילים ממסר/תוכנית/מצב</div>
+      <button onclick="openAddTrigger()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;cursor:pointer;font-family:inherit">+ הוסף טריגר</button>
+    </div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
+      כל טריגר מגדיר: "כשמגיעה הודעה מהתקן X עם ערך-שדה מסוים — בצע פעולה". אין צורך לדעת מראש
+      את שם-ה-topic/הערכים המדויקים — לחץ "הוסף טריגר" ואז "🎧 האזן ותפוס", לחץ על הכפתור הפיזי,
+      וזה יתמלא אוטומטית.
+    </div>
+    <div id="triggers-list"></div>
+  </div>
+
   <!-- LOG TAB -->
   <div id="tab-log" class="panel">
     <div class="log-toolbar">
@@ -1046,7 +1061,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 89;
+const BUILD_TOP_MARK = 90;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1213,6 +1228,8 @@ let activeModeId = 0;
 let currentUser = null; // המשתמש המחובר כרגע — מגיע מהשרת
 let serverConfig = {}; // הגדרות שרת (quickActions וכו')
 let _scheduledModes = []; // תזמוני החלפת מצב
+let _externalTriggers = []; // טריגרים-חיצוניים (כפתורי-קיר/מתגי-סצנה zigbee)
+let _triggerLearnActive = false;
 let mqttClient = null;
 let socket = null;
 let zmanim = {};
@@ -1579,6 +1596,20 @@ function connectMQTT() {
 
   socket.on('scheduled_modes_saved', ({ ok, count }) => {
     if (ok) toast(`✅ ${count} תזמוני מצב נשמרו`);
+  });
+
+  socket.on('external_triggers', (triggers) => {
+    _externalTriggers = triggers || [];
+    if (typeof renderTriggersList === 'function') renderTriggersList();
+  });
+  socket.on('external_triggers_saved', ({ ok, count }) => {
+    if (ok) toast(`✅ ${count} טריגרים נשמרו`);
+  });
+  socket.on('trigger_learn_result', ({ topic, payload }) => {
+    if (typeof onTriggerLearnResult === 'function') onTriggerLearnResult(topic, payload);
+  });
+  socket.on('trigger_learn_timeout', () => {
+    if (typeof onTriggerLearnTimeout === 'function') onTriggerLearnTimeout();
   });
 
   socket.on('mode_changed', ({ newModeId, label }) => {
@@ -4998,6 +5029,9 @@ function showTab(name,btn){
   if(name==='log' && currentUser?.role!=='admin' && !currentUser?.canViewLog){
     toast('⛔ אין הרשאה לצפייה ביומן'); return;
   }
+  if(name==='triggers' && currentUser?.role!=='admin' && !currentUser?.canViewHaDevices){
+    toast('⛔ אין הרשאה לטריגרים-חיצוניים'); return;
+  }
 
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -5267,6 +5301,188 @@ function openScheduledModesModal() {
   renderScheduledModes();
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// טריגרים-חיצוניים (כפתורי-קיר/מתגי-סצנה zigbee) — "האזן לנושא-MQTT מסוים,
+// כשהערך תואם, בצע פעולה" — הכל מוגדר מהממשק, לא בקוד.
+// ══════════════════════════════════════════════════════════════════════
+function renderTriggersList() {
+  const list = document.getElementById('triggers-list');
+  if (!list) return;
+  if (!_externalTriggers.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--muted)">אין עדיין טריגרים מוגדרים — לחץ "+ הוסף טריגר" כדי להתחיל.</div>';
+    return;
+  }
+  list.innerHTML = _externalTriggers.map((t, idx) => {
+    let actionDesc = '';
+    if (t.actionType === 'relay') {
+      const rName = relayName(t.relayId);
+      const actLabel = t.relayAction === 'TOGGLE' ? 'החלף-מצב' : (t.relayAction === 'ON' ? 'הדלק' : 'כבה');
+      actionDesc = `${actLabel} את "${rName}"${t.durationMin > 0 ? ` למשך ${t.durationMin} דק'` : ''}`;
+    } else if (t.actionType === 'program') {
+      const p = programs.find(x => x.id === t.progId);
+      actionDesc = `${t.progActive ? 'הפעל' : 'השבת'} את התוכנית "${p ? p.name : t.progId}"`;
+    } else if (t.actionType === 'mode') {
+      const m = modes.find(x => x.id === t.modeId);
+      actionDesc = `עבור למצב "${m ? m.name : t.modeId}"`;
+    }
+    return `<div class="prog-card" style="margin-bottom:8px;padding:12px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:700">${t.name}</div>
+        <div style="font-size:12px;color:var(--text2)">כש-<code>${t.mqttTopic}</code> → ${t.matchField}="${t.matchValue}" ← ${actionDesc}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button onclick="openAddTrigger(${idx})" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-family:inherit">✏️ ערוך</button>
+        <button onclick="deleteTrigger(${idx})" style="background:#7f1d1d;color:#fff;border:none;border-radius:6px;padding:6px 10px;cursor:pointer;font-family:inherit">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openAddTrigger(idx) {
+  const t = (typeof idx === 'number') ? { ..._externalTriggers[idx] } : {
+    name: '', mqttTopic: '', matchField: 'action', matchValue: '',
+    actionType: 'relay', relayId: relays[0]?.id, relayAction: 'ON', durationMin: 0,
+    progId: programs[0]?.id, progActive: true, modeId: modes[0]?.id,
+  };
+  const isEdit = typeof idx === 'number';
+  const overlay = document.createElement('div');
+  overlay.id = 'trigger-edit-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:var(--overlay-bg);z-index:8000;display:flex;align-items:center;justify-content:center';
+  const relayOptions = relays.map(r => `<option value="${r.id}" ${t.relayId===r.id?'selected':''}>${r.name}</option>`).join('');
+  const progOptions = programs.map(p => `<option value="${p.id}" ${t.progId===p.id?'selected':''}>${p.name}</option>`).join('');
+  const modeOptions = modes.map(m => `<option value="${m.id}" ${t.modeId===m.id?'selected':''}>${m.name}</option>`).join('');
+  overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;width:440px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px">
+    <div style="font-size:18px;font-weight:700">${isEdit ? 'עריכת טריגר' : 'הוספת טריגר חדש'}</div>
+
+    <input id="trig-name" class="form-input" placeholder="שם (למשל: כפתור-קיר-סלון)" value="${t.name}">
+
+    <div style="border:1px dashed var(--border2);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px">
+      <button onclick="startTriggerLearn()" id="trig-learn-btn" style="background:var(--accent3);color:#fff;border:none;border-radius:8px;padding:8px;font-weight:700;cursor:pointer;font-family:inherit">🎧 האזן ותפוס לחיצה (לחץ, ואז לחץ מיד על הכפתור הפיזי)</button>
+      <div id="trig-learn-status" style="font-size:12px;color:var(--muted)"></div>
+    </div>
+
+    <label style="font-size:13px;color:var(--text2)">נושא-MQTT (topic):</label>
+    <input id="trig-topic" class="form-input" placeholder="zigbee2mqtt/wall_switch_1" value="${t.mqttTopic||''}">
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label style="font-size:13px;color:var(--text2)">שם-שדה:</label>
+        <input id="trig-field" class="form-input" value="${t.matchField||'action'}"></div>
+      <div style="flex:1"><label style="font-size:13px;color:var(--text2)">ערך-תואם:</label>
+        <input id="trig-value" class="form-input" value="${t.matchValue||''}"></div>
+    </div>
+
+    <label style="font-size:13px;color:var(--text2);font-weight:600">מה לעשות כשזה קורה:</label>
+    <select id="trig-action-type" class="form-input" onchange="updateTriggerActionFields()">
+      <option value="relay" ${t.actionType==='relay'?'selected':''}>שליטה בממסר</option>
+      <option value="program" ${t.actionType==='program'?'selected':''}>הפעלה/השבתה של תוכנית</option>
+      <option value="mode" ${t.actionType==='mode'?'selected':''}>מעבר-מצב</option>
+    </select>
+
+    <div id="trig-fields-relay" style="display:flex;flex-direction:column;gap:6px">
+      <select id="trig-relay-id" class="form-input">${relayOptions}</select>
+      <select id="trig-relay-action" class="form-input">
+        <option value="ON" ${t.relayAction==='ON'?'selected':''}>הדלק</option>
+        <option value="OFF" ${t.relayAction==='OFF'?'selected':''}>כבה</option>
+        <option value="TOGGLE" ${t.relayAction==='TOGGLE'?'selected':''}>החלף-מצב (הפוך ממה-שהיה)</option>
+      </select>
+      <input id="trig-duration" class="form-input" type="number" min="0" placeholder="משך בדקות (0=קבוע)" value="${t.durationMin||0}">
+    </div>
+    <div id="trig-fields-program" style="display:none;flex-direction:column;gap:6px">
+      <select id="trig-prog-id" class="form-input">${progOptions}</select>
+      <select id="trig-prog-active" class="form-input">
+        <option value="true" ${t.progActive?'selected':''}>הפעל</option>
+        <option value="false" ${!t.progActive?'selected':''}>השבת</option>
+      </select>
+    </div>
+    <div id="trig-fields-mode" style="display:none;flex-direction:column;gap:6px">
+      <select id="trig-mode-id" class="form-input">${modeOptions}</select>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="saveTrigger(${isEdit ? idx : -1})" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer;font-family:inherit">שמור</button>
+      <button onclick="document.getElementById('trigger-edit-overlay').remove()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;font-family:inherit">ביטול</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  updateTriggerActionFields();
+}
+
+function updateTriggerActionFields() {
+  const type = document.getElementById('trig-action-type').value;
+  document.getElementById('trig-fields-relay').style.display = type === 'relay' ? 'flex' : 'none';
+  document.getElementById('trig-fields-program').style.display = type === 'program' ? 'flex' : 'none';
+  document.getElementById('trig-fields-mode').style.display = type === 'mode' ? 'flex' : 'none';
+}
+
+function startTriggerLearn() {
+  _triggerLearnActive = true;
+  const btn = document.getElementById('trig-learn-btn');
+  const status = document.getElementById('trig-learn-status');
+  if (btn) { btn.disabled = true; btn.textContent = '🎧 מאזין... לחץ על הכפתור הפיזי עכשיו (10 שניות)'; }
+  if (status) status.textContent = '';
+  socket.emit('start_trigger_learn_mode');
+}
+
+function onTriggerLearnResult(topic, payload) {
+  if (!_triggerLearnActive) return;
+  _triggerLearnActive = false;
+  const btn = document.getElementById('trig-learn-btn');
+  const status = document.getElementById('trig-learn-status');
+  if (btn) { btn.disabled = false; btn.textContent = '🎧 האזן ותפוס לחיצה (לחץ, ואז לחץ מיד על הכפתור הפיזי)'; }
+  const topicField = document.getElementById('trig-topic');
+  if (topicField) topicField.value = topic;
+  // ברירת-מחדל חכמה: אם יש שדה "action" בתשובה — זה כנראה הרלוונטי (הכי-נפוץ בכפתורי-קיר).
+  // אחרת, מציגים את כל השדות בסטטוס כדי שהמשתמש יבחר-ידנית מה-רלוונטי.
+  if (payload && payload.action !== undefined) {
+    document.getElementById('trig-field').value = 'action';
+    document.getElementById('trig-value').value = payload.action;
+  }
+  if (status) status.innerHTML = `✅ נתפס! השדות-המלאים-שהתקבלו: <code>${JSON.stringify(payload)}</code>`;
+}
+
+function onTriggerLearnTimeout() {
+  if (!_triggerLearnActive) return;
+  _triggerLearnActive = false;
+  const btn = document.getElementById('trig-learn-btn');
+  const status = document.getElementById('trig-learn-status');
+  if (btn) { btn.disabled = false; btn.textContent = '🎧 האזן ותפוס לחיצה (לחץ, ואז לחץ מיד על הכפתור הפיזי)'; }
+  if (status) status.textContent = '⚠️ לא נתפסה שום הודעה תוך 10 שניות — ודא שההתקן כבר מזווג ל-Zigbee2MQTT, ונסה שוב.';
+}
+
+function saveTrigger(idx) {
+  const name = document.getElementById('trig-name').value.trim();
+  const mqttTopic = document.getElementById('trig-topic').value.trim();
+  const matchField = document.getElementById('trig-field').value.trim();
+  const matchValue = document.getElementById('trig-value').value.trim();
+  if (!name || !mqttTopic || !matchField || !matchValue) {
+    toast('נא למלא שם, נושא-MQTT, שם-שדה, וערך-תואם'); return;
+  }
+  const actionType = document.getElementById('trig-action-type').value;
+  const trigger = { id: idx >= 0 ? _externalTriggers[idx].id : Date.now(), name, mqttTopic, matchField, matchValue, actionType };
+  if (actionType === 'relay') {
+    trigger.relayId = parseInt(document.getElementById('trig-relay-id').value);
+    trigger.relayAction = document.getElementById('trig-relay-action').value;
+    trigger.durationMin = parseInt(document.getElementById('trig-duration').value) || 0;
+  } else if (actionType === 'program') {
+    trigger.progId = parseInt(document.getElementById('trig-prog-id').value);
+    trigger.progActive = document.getElementById('trig-prog-active').value === 'true';
+  } else if (actionType === 'mode') {
+    trigger.modeId = parseInt(document.getElementById('trig-mode-id').value);
+  }
+  const updated = [..._externalTriggers];
+  if (idx >= 0) updated[idx] = trigger; else updated.push(trigger);
+  _externalTriggers = updated;
+  socket.emit('save_external_triggers', _externalTriggers);
+  renderTriggersList();
+  document.getElementById('trigger-edit-overlay').remove();
+}
+
+function deleteTrigger(idx) {
+  if (!confirm(`למחוק את הטריגר "${_externalTriggers[idx].name}"?`)) return;
+  _externalTriggers = _externalTriggers.filter((_, i) => i !== idx);
+  socket.emit('save_external_triggers', _externalTriggers);
+  renderTriggersList();
+}
+
 function renderScheduledModes() {
   const list = document.getElementById('sm-list');
   if (!list) return;
@@ -5423,7 +5639,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 89;
+BUILD_BOTTOM_MARK = 90;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
