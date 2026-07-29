@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-28-AD (תכונה חדשה: טריגרים-חיצוניים - כפתורי-קיר/מתגי-סצנה zigbee יכולים להפעיל ממסר/תוכנית/מצב, מוגדר-כולו מהממשק (טאב חדש), כולל מצב-לימוד שתופס-אוטומטית topic+action כשלוחצים על הכפתור הפיזי - בלי לגעת בקוד לכל התקן-חדש. שרת: מנוי zigbee2mqtt/#, התאמה מול externalTriggers, executeTriggerAction (ממסר/תוכנית/מצב, בדיוק אותה לוגיקה-פנימית-קיימת). נבדק שרת: 5 תרחישים (toggle/duration/program/mode/no-match) עברו נכון. נבדק לקוח: הטאב+המודל+זרימת-הלימוד נטענים בלי שגיאות-JS.) -->
+<!-- BUILD_MARKER: v2026-07-28-AE (נוסף favicon לכרטיסיית-הדפדפן - אותו אימוג'י-בית (🏠) שכבר מופיע במסך-הכניסה, דרך SVG inline כ-data-URI (בלי קובץ-נפרד/תלות-חיצונית).) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>בית חכם — KC868</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%A0%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <style>
   @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap');
@@ -1061,7 +1062,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 90;
+const BUILD_TOP_MARK = 91;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5639,7 +5640,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 90;
+BUILD_BOTTOM_MARK = 91;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
