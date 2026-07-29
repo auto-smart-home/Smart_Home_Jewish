@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 42;
+const IDX_TOP_MARK = 43;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -119,6 +119,7 @@ function loadConfigLocal() {
     if (cfg.haToken) { haToken = cfg.haToken; }
     if (cfg.haUrl) { haUrl = cfg.haUrl; }
     if (cfg.yemotPhoneMap) { yemotPhoneMap = cfg.yemotPhoneMap; }
+    if (cfg.externalTriggers) { externalTriggers = cfg.externalTriggers; console.log(`🔘 נטענו ${externalTriggers.length} טריגרים-חיצוניים`); }
     // מידע-טיימר-חזרה-ממתין (תזמון-מצב עם duration) — היה בזיכרון-בלבד קודם, ואבד לגמרי בקריסה.
     // בלי זה, שרת שקרס באמצע "חלון-חזרה-ממתינה" לא היה יודע בכלל שהיה אמור לחזור למצב-קודם.
     if (cfg.pendingRevertInfo) { _pendingRevertInfo = cfg.pendingRevertInfo; }
@@ -157,6 +158,7 @@ function saveConfigLocal() {
         haDevices,
         haToken,
         haUrl,
+        externalTriggers,
         pendingRevertInfo: _pendingRevertInfo,
         savedAt: new Date().toISOString(),
       };
@@ -543,6 +545,15 @@ function buildYemotAutoFiles(kind) {
 let schedulerPrograms = [];
 let schedulerActiveModeId = 0;
 let scheduledModes = []; // תזמוני החלפת מצב
+// טריגרים-חיצוניים: מיפוי "האזן לנושא-MQTT X, כשהשדה Y=ערך Z, בצע פעולה" — כדי שמתגי-קיר/כפתורי-
+// סצנה (zigbee) יוכלו להפעיל ממסר/תוכנית/מצב, בלי לגעת בקוד בכלל לכל התקן-חדש. כל טריגר:
+// {id, name, mqttTopic, matchField, matchValue, actionType:'relay'|'program'|'mode',
+//  relayId, relayAction, durationMin, progId, progActive, modeId}
+let externalTriggers = [];
+// מצב-לימוד זמני: כשמופעל (דרך הממשק), כל הודעת-MQTT-הבאה-שמגיעה נתפסת-ותשודרת-לממשק (כדי
+// שהמשתמש "ילחץ על הכפתור עכשיו" ויראה מיד את ה-topic/action המדויקים, בלי לדעת אותם מראש).
+let _triggerLearnModeActive = false;
+let _triggerLearnModeTimeout = null;
 let _previousModeId = null; // המצב לפני מעבר עם duration (לחזרה אוטומטית)
 // מתי קרה מעבר-המצב-האחרון — נדרש כדי לדעת "מאיפה להתחיל לחפש תוכניות-שהוחמצו" בכל מעבר-מצב-חדש
 // (ראו commitAutoModeSwitch: applyMissedRegularPrograms(lastTransition, now)). null עד המעבר-הראשון
@@ -588,6 +599,9 @@ function connectMQTT() {
       mqttClient.subscribe(`tele/${ctrl.topic}/LWT`);
       mqttClient.publish(`cmnd/${ctrl.topic}/STATUS`, '11');
     });
+    // מנוי-רחב לכל התקני-zigbee2mqtt (מתגי-קיר/כפתורי-סצנה/חיישנים) — כדי שטריגרים-חיצוניים
+    // (שמוגדרים מהממשק, לא בקוד) יוכלו לתפוס כל הודעה מכל התקן-כזה, בלי לדעת-מראש אילו יהיו.
+    mqttClient.subscribe('zigbee2mqtt/#');
     io.emit('mqtt_status', { connected: true });
     // רשת-הצלה: מריצים את בדיקת-ההתאמה-אחרי-הפעלה-מחדש רק **אחרי** שהחיבור ל-MQTT יציב (לא מיד
     // בעליית-התהליך) — זה בדיוק האיתות-בפועל ל"המערכת עלתה ומוכנה לשלוח פקודות אמיתיות". השהיה
@@ -597,6 +611,29 @@ function connectMQTT() {
 
   mqttClient.on('message', (topic, message) => {
     const payload = message.toString();
+
+    // ── טריגרים-חיצוניים (zigbee2mqtt) — נבדק לפני-הכל, לא-קשור לבקרי-Tasmota הרגילים ──
+    if (topic.startsWith('zigbee2mqtt/')) {
+      let payloadObj = null;
+      try { payloadObj = JSON.parse(payload); } catch(e) {}
+      // מצב-לימוד: תופסים את ההודעה-הבאה-שמגיעה ומשדרים אותה לממשק, כדי שהמשתמש יראה מיד
+      // את ה-topic/שדות בלי לדעת אותם מראש (במקום לחפש ב-Zigbee2MQTT עצמו).
+      if (_triggerLearnModeActive && payloadObj) {
+        _triggerLearnModeActive = false;
+        clearTimeout(_triggerLearnModeTimeout);
+        io.emit('trigger_learn_result', { topic, payload: payloadObj });
+        addServerLog({ type: 'info', msg: `🎧 [לימוד-טריגר] נתפס: ${topic} → ${JSON.stringify(payloadObj)}`, user: 'מערכת' });
+      }
+      // התאמה מול טריגרים-מוגדרים — מבצעים את הפעולה-המתאימה-הראשונה-שמתאימה (לא כולן, כדי
+      // למנוע הפעלה-כפולה-בטעות אם כמה טריגרים חופפים על-אותו topic/ערך בטעות-הגדרה)
+      if (payloadObj) {
+        const match = externalTriggers.find(t => t.mqttTopic === topic &&
+          String(payloadObj[t.matchField]) === String(t.matchValue));
+        if (match) executeTriggerAction(match).catch(e => console.error('❌ שגיאה בביצוע-טריגר:', e.message));
+      }
+      return; // הודעות zigbee2mqtt לא רלוונטיות לשום-לוגיקת-Tasmota-שבהמשך
+    }
+
     const ctrl = CONTROLLERS.find(c => topic.includes(c.topic));
     const ctrlName = ctrl ? ctrl.name : 'בקר';
 
@@ -716,6 +753,35 @@ async function publishRelay(relayId, state, originLabel = null) {
   });
 }
 
+// מבצע את הפעולה-שהוגדרה-לטריגר-חיצוני (כפתור-קיר/מתג-סצנה וכו') — מפעיל בדיוק את אותה
+// לוגיקה-פנימית שכבר קיימת לממסרים/תוכניות/מצבים, בלי כפילות-לוגיקה חדשה.
+async function executeTriggerAction(trigger) {
+  addServerLog({ type: 'info', msg: `🔘 [טריגר] "${trigger.name}" הופעל`, user: 'מערכת' });
+  if (trigger.actionType === 'relay') {
+    const relayId = trigger.relayId;
+    let action = trigger.relayAction; // 'ON' / 'OFF' / 'TOGGLE'
+    if (action === 'TOGGLE') action = relayState[relayId] === 'ON' ? 'OFF' : 'ON';
+    await publishRelay(relayId, action, `טריגר-חיצוני: ${trigger.name}`);
+    const durationMin = parseInt(trigger.durationMin, 10) || 0;
+    if (durationMin > 0) {
+      const timerId = `trig_${Date.now()}_${Math.round(Math.random()*1e6)}`;
+      const startedAt = Date.now(), dueAt = startedAt + durationMin*60000;
+      ivrPendingTimers.push({ id: timerId, relayId, revertAction: action==='ON'?'OFF':'ON',
+        startedAt, dueAt, label: `${schedulerRelayNames[relayId]||relayId} (טריגר: ${trigger.name})`, callerId: null });
+      saveConfigLocal();
+    }
+  } else if (trigger.actionType === 'program') {
+    const p = schedulerPrograms.find(x => x.id === trigger.progId);
+    if (p) {
+      p.active = !!trigger.progActive;
+      saveConfigLocal();
+      io.emit('program_updated', { id: p.id, active: p.active });
+    }
+  } else if (trigger.actionType === 'mode') {
+    commitAutoModeSwitch(trigger.modeId, `טריגר-חיצוני: ${trigger.name}`);
+  }
+}
+
 // ── USERS ────────────────────────────────────────────────
 const USERS = config.USERS || [];
 const EMERGENCY_PASSWORD = config.EMERGENCY_PASSWORD || null;
@@ -774,6 +840,7 @@ io.on('connection', (socket) => {
   socket.emit('ha_devices', haDevices);
   socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
   socket.emit('scheduled_modes', scheduledModes);
+  socket.emit('external_triggers', externalTriggers);
   // זמנים הלכתיים אמיתיים של היום — מאותו מקור-אמת שהשרת עצמו משתמש בו לתזמון בפועל.
   // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
   // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
@@ -1167,6 +1234,30 @@ io.on('connection', (socket) => {
     io.emit('scheduled_modes', scheduledModes);
     socket.emit('scheduled_modes_saved', { ok: true, count: scheduledModes.length });
     addServerLog({ type: 'info', msg: `🕐 נשמרו ${scheduledModes.length} תזמוני מצב`, user: 'מערכת' });
+  });
+
+  // ── טריגרים-חיצוניים (כפתורי-קיר/מתגי-סצנה zigbee) ──────────────────
+  socket.on('save_external_triggers', (triggers) => {
+    externalTriggers = triggers || [];
+    saveConfigLocal();
+    io.emit('external_triggers', externalTriggers);
+    socket.emit('external_triggers_saved', { ok: true, count: externalTriggers.length });
+    addServerLog({ type: 'info', msg: `🔘 נשמרו ${externalTriggers.length} טריגרים-חיצוניים`, user: 'מערכת' });
+  });
+
+  // מצב-לימוד: מאזינים ל-10 השניות-הבאות להודעת-zigbee2mqtt כלשהי (המשתמש אמור ללחוץ
+  // על הכפתור-הפיזי בזמן-הזה), ומדווחים בחזרה מה נתפס (או "לא-נתפס-כלום" בתום הזמן).
+  socket.on('start_trigger_learn_mode', () => {
+    _triggerLearnModeActive = true;
+    clearTimeout(_triggerLearnModeTimeout);
+    addServerLog({ type: 'info', msg: '🎧 מצב-לימוד-טריגר הופעל — לחץ על הכפתור-הפיזי עכשיו (10 שניות)', user: 'מערכת' });
+    _triggerLearnModeTimeout = setTimeout(() => {
+      if (_triggerLearnModeActive) {
+        _triggerLearnModeActive = false;
+        io.emit('trigger_learn_timeout');
+        addServerLog({ type: 'warning', msg: '⏱️ מצב-לימוד-טריגר הסתיים — לא נתפסה שום הודעה', user: 'מערכת' });
+      }
+    }, 10000);
   });
 
   socket.on('disconnect', () => { console.log('🖥️ ממשק התנתק'); });
@@ -2689,4 +2780,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 42;
+const IDX_BOTTOM_MARK = 43;
