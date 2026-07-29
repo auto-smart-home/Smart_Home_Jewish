@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 43;
+const IDX_TOP_MARK = 44;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -616,9 +616,13 @@ function connectMQTT() {
     if (topic.startsWith('zigbee2mqtt/')) {
       let payloadObj = null;
       try { payloadObj = JSON.parse(payload); } catch(e) {}
-      // מצב-לימוד: תופסים את ההודעה-הבאה-שמגיעה ומשדרים אותה לממשק, כדי שהמשתמש יראה מיד
-      // את ה-topic/שדות בלי לדעת אותם מראש (במקום לחפש ב-Zigbee2MQTT עצמו).
-      if (_triggerLearnModeActive && payloadObj) {
+      // מצב-לימוד: תופסים את ההודעה-הבאה-שמגיעה מהתקן-אמיתי, ומשדרים אותה לממשק. **חשוב**:
+      // מתעלמים-במפורש מ-zigbee2mqtt/bridge/* (למשל bridge/logging, bridge/state, bridge/info) —
+      // אלה נושאי-מערכת-פנימיים (יומן/סטטוס של הגשר עצמו), לא-של-שום-התקן-ספציפי. bridge/logging
+      // בפרט "מהדהד" כל פעולת-MQTT שקורית על הגשר כמחרוזת-JSON-מקוננת בתוך שדה "message" — בלי
+      // סינון-הזה, מצב-הלימוד היה כמעט-תמיד תופס את זה במקום את ה-topic-האמיתי-של-ההתקן.
+      const isBridgeMetaTopic = topic.startsWith('zigbee2mqtt/bridge/');
+      if (_triggerLearnModeActive && payloadObj && !isBridgeMetaTopic) {
         _triggerLearnModeActive = false;
         clearTimeout(_triggerLearnModeTimeout);
         io.emit('trigger_learn_result', { topic, payload: payloadObj });
@@ -626,7 +630,7 @@ function connectMQTT() {
       }
       // התאמה מול טריגרים-מוגדרים — מבצעים את הפעולה-המתאימה-הראשונה-שמתאימה (לא כולן, כדי
       // למנוע הפעלה-כפולה-בטעות אם כמה טריגרים חופפים על-אותו topic/ערך בטעות-הגדרה)
-      if (payloadObj) {
+      if (payloadObj && !isBridgeMetaTopic) {
         const match = externalTriggers.find(t => t.mqttTopic === topic &&
           String(payloadObj[t.matchField]) === String(t.matchValue));
         if (match) executeTriggerAction(match).catch(e => console.error('❌ שגיאה בביצוע-טריגר:', e.message));
@@ -2780,4 +2784,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 43;
+const IDX_BOTTOM_MARK = 44;
