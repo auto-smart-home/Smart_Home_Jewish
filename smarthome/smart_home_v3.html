@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-28-AE (נוסף favicon לכרטיסיית-הדפדפן - אותו אימוג'י-בית (🏠) שכבר מופיע במסך-הכניסה, דרך SVG inline כ-data-URI (בלי קובץ-נפרד/תלות-חיצונית).) -->
+<!-- BUILD_MARKER: v2026-07-28-AF (שיפור-ניגודיות ב-V2: כפתור הפעלה/כיבוי-תוכנית (.prog-active-toggle) - קודם היה ירוק-חלש מול אפור-מוטעם-דומה-מדי (--muted), קשה-להבחין מה פעיל. עכשיו: ירוק-בהיר-בולט עם glow לפעיל, אדום (--danger) עם glow לכבוי - הבדל-חד וברור. גם הוגדל מ-10px ל-14px לבולטות.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -260,10 +260,11 @@
     text-align: center; flex-shrink: 0;
   }
   .prog-active-toggle {
-    width: 10px; height: 10px; border-radius: 50%; background: var(--on-color);
-    flex-shrink: 0; cursor: pointer; border: none; transition: background 0.2s;
+    width: 14px; height: 14px; border-radius: 50%; background: #22c55e;
+    flex-shrink: 0; cursor: pointer; border: none; transition: all 0.2s;
+    box-shadow: 0 0 7px rgba(34,197,94,0.55);
   }
-  .prog-card.inactive .prog-active-toggle { background: var(--muted); }
+  .prog-card.inactive .prog-active-toggle { background: var(--danger); box-shadow: 0 0 7px rgba(194,59,46,0.45); }
   .prog-info { flex: 1; min-width: 0; }
   .prog-name-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
   .prog-name { font-size: 16px; font-weight: 600; color: var(--text); }
@@ -1062,7 +1063,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 91;
+const BUILD_TOP_MARK = 92;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5640,7 +5641,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 91;
+BUILD_BOTTOM_MARK = 92;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
