@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 44;
+const IDX_TOP_MARK = 46;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -845,6 +845,10 @@ io.on('connection', (socket) => {
   socket.emit('ha_settings', { haUrl, hasToken: !!haToken });
   socket.emit('scheduled_modes', scheduledModes);
   socket.emit('external_triggers', externalTriggers);
+  // **חלק מאותו תיקון**: מודיעים ללקוח-שמתחבר-כרגע מהו המצב-האמיתי-בפועל (לא סתם מקווים שהוא
+  // "כבר יודע" מ-localStorage מקומי, שיכול להיות ישן-משבוע-שעבר). בלי זה, גם אחרי שתיקנו שהשרת
+  // לא-ידרס-את-עצמו, הלקוח היה ממשיך-להציג/להשתמש בערך-הישן-שלו לנצח, כי שום דבר לא-היה-מתקן אותו.
+  socket.emit('mode_changed', { newModeId: schedulerActiveModeId, label: 'סנכרון עם חיבור לשרת' });
   // זמנים הלכתיים אמיתיים של היום — מאותו מקור-אמת שהשרת עצמו משתמש בו לתזמון בפועל.
   // הממשק משתמש בזה כדי לחשב מיקום נכון בציר-הזמן לתוכניות מבוססות-זמן-הלכתי,
   // במקום קבוע קשיח (ראו תיקון getProgMinutes בצד הלקוח).
@@ -1067,7 +1071,15 @@ io.on('connection', (socket) => {
     const newIds = new Set((programs || []).map(p => String(p.id)));
     Array.from(_firedToday).forEach(k => { const progId = k.split('_')[0]; if (!newIds.has(progId)) _firedToday.delete(k); });
     schedulerPrograms = programs || [];
-    schedulerActiveModeId = activeModeId || 0;
+    // **תיקון-קריטי**: לעולם לא לוקחים את schedulerActiveModeId מהלקוח! זה גרם לבאג-חמור-בשקט:
+    // דפדפן עם localStorage-ישן (למשל טאב-שנשאר-פתוח-מלפני-שבת, כשהמצב היה עדיין 0) שולח את
+    // הערך-הישן-שלו-בעצמו כל פעם שהוא מתחבר/מסתנכרן — והשרת "צייתן" דרס איתו את המצב-האמיתי-
+    // הנוכחי שלו (למשל 2, אחרי מעבר-מצב לגיטימי), **בלי שום לוג**, כי זו הקצאה-ישירה, לא קריאה
+    // ל-commitAutoModeSwitch (שכן-הייתה-רושמת את זה). זה בדיוק מה שקרה במוצאי-שבת: המצב-האמיתי
+    // (2, תקוע בגלל הבאג-האחר) "התחלף" בשקט ל-0 **ברגע-החיבור-של-הממשק**, לא בגלל שום תזמון-
+    // אמיתי. schedulerActiveModeId הוא state בבעלות-בלעדית-של-השרת — נטען מ-config בעלייה
+    // (loadConfigLocal), ומשתנה **רק** דרך commitAutoModeSwitch/confirm_mode_switch (ששניהם
+    // כן רושמים ליומן, ועושים גם את שאר-הפעולות-הנלוות כמו כיבוי-ממסרים-לא-רלוונטיים).
     if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; schedulerRelayIvr[r.id] = !!r.ivr; });
     if (fullConfig) serverConfig = fullConfig;
     socket.emit('sync_ack', { count: schedulerPrograms.length, firedRunOnceToday: Array.from(_firedRunOnceToday.values()) });
@@ -2477,6 +2489,19 @@ async function runBootReconciliation() {
     // רק "הנהלת-חשבונות" פנימית (לא שולחת שום פקודת-MQTT) — אין שום סיכון בהרצתה תמיד, ללא-תנאי.
     reestablishRelayOwnership(now);
 
+    // **תיקון-באג-קריטי**: חימוש-מחדש של טיימר-חזרה-ממתין (_pendingRevertInfo) — גם הוא **תמיד**
+    // רץ, בלי-קשר לגודל-הפער, מאותה סיבה בדיוק כמו reestablishRelayOwnership למעלה: ה-setTimeout
+    // בזיכרון נמחק-לגמרי בכל הפעלה-מחדש, ושום דבר אחר לא יוצר אותו-מחדש. **הבאג שהיה כאן**: החימוש-
+    // מחדש היה קיים רק בתוך הענף של "אם gapHasAnyScheduledActivity מחזירה true" — אבל אם הקריסה
+    // הייתה קצרה ובלי-שום-אירוע-בתוך-הפער-הצר-עצמו (למשל תזמון-מצב-עם-"למשך" שהתחיל שעות-לפני-
+    // הקריסה ואמור-לחזור שעות-אחרי, אבל הקריסה-עצמה קצרה) — הפונקציה יצאה-מוקדם (return) **לפני**
+    // שהחימוש-מחדש הזה בכלל הופעל! התוצאה: המערכת נשארת תקועה-לצמיתות במצב-הזמני, כי אף-דבר לא
+    // מחזיר אותה יותר. תוקן ע"י הוצאת-הקריאה-הזו **החוצה**, לפני כל return מוקדם אפשרי.
+    if (_pendingRevertInfo) {
+      armPendingRevertTimer(_pendingRevertInfo.revertToMode, _pendingRevertInfo.modeJustSetTo, _pendingRevertInfo.revertAtEpochMs);
+      addServerLog({ type: 'info', msg: `🔄 טיימר-חזרה-ממתין חומש-מחדש אחרי הפעלה-מחדש — יחזור למצב ${_pendingRevertInfo.revertToMode} ב-${new Date(_pendingRevertInfo.revertAtEpochMs).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})}`, user: 'מערכת' });
+    }
+
     if (lastTick === null) {
       addServerLog({ type: 'info', msg: '🔄 עלייה ראשונה (אין פעימה קודמת) — בעלויות-ממסרים שוחזרו, לא נדרשת התאמה נוספת', user: 'מערכת' });
       return;
@@ -2784,4 +2809,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 44;
+const IDX_BOTTOM_MARK = 46;
