@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 46;
+const IDX_TOP_MARK = 47;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2498,8 +2498,13 @@ async function runBootReconciliation() {
     // שהחימוש-מחדש הזה בכלל הופעל! התוצאה: המערכת נשארת תקועה-לצמיתות במצב-הזמני, כי אף-דבר לא
     // מחזיר אותה יותר. תוקן ע"י הוצאת-הקריאה-הזו **החוצה**, לפני כל return מוקדם אפשרי.
     if (_pendingRevertInfo) {
+      // חשוב: שומרים בלוקאלי **לפני** הקריאה — armPendingRevertTimer, כשהחזרה כבר-איחרה (מקרה
+      // שקרה בפועל!), קוראת מיד ל-clearPendingRevertAndMaybeApply שמאפסת את _pendingRevertInfo
+      // הגלובלי ל-null **תוך-כדי-הקריאה**. קריאה-חוזרת ל-_pendingRevertInfo (הגלובלי) בשורת-הלוג
+      // שאחריה הייתה קורסת בדיוק על זה ("Cannot read properties of null").
+      const { revertToMode: _prevRevertToMode, revertAtEpochMs: _prevRevertAt } = _pendingRevertInfo;
       armPendingRevertTimer(_pendingRevertInfo.revertToMode, _pendingRevertInfo.modeJustSetTo, _pendingRevertInfo.revertAtEpochMs);
-      addServerLog({ type: 'info', msg: `🔄 טיימר-חזרה-ממתין חומש-מחדש אחרי הפעלה-מחדש — יחזור למצב ${_pendingRevertInfo.revertToMode} ב-${new Date(_pendingRevertInfo.revertAtEpochMs).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})}`, user: 'מערכת' });
+      addServerLog({ type: 'info', msg: `🔄 טיימר-חזרה-ממתין חומש-מחדש אחרי הפעלה-מחדש — יחזור למצב ${_prevRevertToMode} ב-${new Date(_prevRevertAt).toLocaleString('he-IL',{timeZone:'Asia/Jerusalem'})}`, user: 'מערכת' });
     }
 
     if (lastTick === null) {
@@ -2809,4 +2814,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 46;
+const IDX_BOTTOM_MARK = 47;
