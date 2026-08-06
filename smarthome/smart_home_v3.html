@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-07-31-AG (תיקון-באג-אמיתי: getModeRevertMsIfEnded חיפשה עד-7-ימים-אחורה "את-המחזור-הכי-אחרון-שכבר-קרה" של תזמון-מצב-עם-"למשך", בלי לבדוק אם המחזור-ההוא בכלל-רלוונטי-להיום (חוצה-לתוכו). זה גרם לתוכנית ששייכת רק למצב-שמגיע-דרך-תזמון-כזה, ומתוזמנת **לפני** שעת-המעבר-עצמה (למשל 11:30, כשהמעבר-בפועל הוא 12:00 עם "למשך" 2 שעות) - להיעלם-לגמרי מהציר (גם רגיל וגם מינימלי), כי הפונקציה טעתה לחשוב שהחלון-הרלוונטי כבר-נסגר-אתמול. תוקן: מחזור מיום-אחר נחשב-רלוונטי רק אם הוא בפועל חוצה לתוך יום-הבדיקה. נבדק: 4 תרחישים (הבאג המקורי + 3 תרחישים-שכבר-עבדו-קודם) - כולם תקינים, ו-70,560 דגימות-רגרסיה מלאות על הקונפיג האמיתי - 0 אי-התאמות, 0 דליפות.) -->
+<!-- BUILD_MARKER: v2026-08-02-AH (טריגרים-חיצוניים: נוספה אפשרות "למשך" למעבר-מצב - שדות שעות/דקות במודל, שמשתמשים באותו מנגנון armPendingRevertTimer שכבר קיים לתזמוני-מצב-רגילים, כולל שרידות-מלאה אחרי קריסה/הפעלה-מחדש. נבדק: מצב-קודם נתפס-נכון, משך מחושב-נכון.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1063,7 +1063,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 93;
+const BUILD_TOP_MARK = 94;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5337,7 +5337,8 @@ function renderTriggersList() {
       actionDesc = `${t.progActive ? 'הפעל' : 'השבת'} את התוכנית "${p ? p.name : t.progId}"`;
     } else if (t.actionType === 'mode') {
       const m = modes.find(x => x.id === t.modeId);
-      actionDesc = `עבור למצב "${m ? m.name : t.modeId}"`;
+      const durTxt = (t.modeDurationH || t.modeDurationM) ? ` למשך ${t.modeDurationH||0} שעות ו-${t.modeDurationM||0} דק' (חוזר לבד)` : '';
+      actionDesc = `עבור למצב "${m ? m.name : t.modeId}"${durTxt}`;
     }
     return `<div class="prog-card" style="margin-bottom:8px;padding:12px;display:flex;justify-content:space-between;align-items:center">
       <div>
@@ -5409,6 +5410,11 @@ function openAddTrigger(idx) {
     </div>
     <div id="trig-fields-mode" style="display:none;flex-direction:column;gap:6px">
       <select id="trig-mode-id" class="form-input">${modeOptions}</select>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:13px;color:var(--text2);white-space:nowrap">למשך (0=קבוע, חוזר-לבד לפי תזמון-מצב אחר אם יש):</span>
+        <input id="trig-mode-duration-h" class="form-input" type="number" min="0" placeholder="שעות" value="${t.modeDurationH||0}" style="width:80px">
+        <input id="trig-mode-duration-m" class="form-input" type="number" min="0" max="59" placeholder="דקות" value="${t.modeDurationM||0}" style="width:80px">
+      </div>
     </div>
 
     <div style="display:flex;gap:8px;margin-top:8px">
@@ -5481,6 +5487,8 @@ function saveTrigger(idx) {
     trigger.progActive = document.getElementById('trig-prog-active').value === 'true';
   } else if (actionType === 'mode') {
     trigger.modeId = parseInt(document.getElementById('trig-mode-id').value);
+    trigger.modeDurationH = parseInt(document.getElementById('trig-mode-duration-h').value) || 0;
+    trigger.modeDurationM = parseInt(document.getElementById('trig-mode-duration-m').value) || 0;
   }
   const updated = [..._externalTriggers];
   if (idx >= 0) updated[idx] = trigger; else updated.push(trigger);
@@ -5653,7 +5661,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 93;
+BUILD_BOTTOM_MARK = 94;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
