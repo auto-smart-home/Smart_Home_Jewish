@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 47;
+const IDX_TOP_MARK = 48;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -782,7 +782,14 @@ async function executeTriggerAction(trigger) {
       io.emit('program_updated', { id: p.id, active: p.active });
     }
   } else if (trigger.actionType === 'mode') {
+    const prevModeId = schedulerActiveModeId; // חייבים-לתפוס-לפני-המעבר, כדי-לדעת-לאן-לחזור
     commitAutoModeSwitch(trigger.modeId, `טריגר-חיצוני: ${trigger.name}`);
+    const durationMin = (parseInt(trigger.modeDurationH, 10) || 0) * 60 + (parseInt(trigger.modeDurationM, 10) || 0);
+    if (durationMin > 0) {
+      // אותו-מנגנון-בדיוק כמו תזמון-מצב-עם-"למשך" (armPendingRevertTimer) — כולל שרידות-מלאה
+      // אחרי קריסה/הפעלה-מחדש, בזכות אותו התיקון שכבר בנינו ל-runBootReconciliation.
+      armPendingRevertTimer(prevModeId, trigger.modeId, Date.now() + durationMin * 60000);
+    }
   }
 }
 
@@ -2814,4 +2821,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 47;
+const IDX_BOTTOM_MARK = 48;
