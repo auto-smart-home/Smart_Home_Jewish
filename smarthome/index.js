@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 48;
+const IDX_TOP_MARK = 49;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -1412,6 +1412,20 @@ function runStaggered(items, fn, delayMs = RELAY_COMMAND_STAGGER_MS) {
   (items || []).forEach((item, idx) => { setTimeout(() => fn(item, idx), idx * delayMs); });
 }
 
+// **תור-אמיתי-רציף**: בניגוד ל-runStaggered (שמתזמן כל פריט בנפרד לפי idx*delayMs — כלומר אם
+// קוראים לה פעמיים-במקביל, שתי הקריאות "מתחרות" זו-בזו ופקודות-מהן-השתיים יכולות לצאת באותו-
+// רגע-ממש), הפונקציה הזו מבטיחה **בוודאות מוחלטת** שאף שתי-פקודות לא-יוצאות-בו-זמנית: כל פריט
+// ממתין (await) לסיום-המלא-בפועל של הפריט-הקודם (כולל הפרסום-ל-MQTT וכל תופעות-הלוואי שלו) ורק-
+// אז מוסיפים את ה-delay לפני הפריט-הבא. אם fn נכשלת על פריט מסוים, ממשיכים הלאה לפריט-הבא (לא-
+// עוצרים את כל-התור בגלל פריט-אחד-שנכשל) — אבל התור-עצמו נשאר תמיד רציף-לחלוטין.
+async function runSequential(items, fn, delayMs = RELAY_COMMAND_STAGGER_MS) {
+  for (let i = 0; i < (items || []).length; i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+    try { await fn(items[i], i); }
+    catch (e) { console.error('❌ שגיאה בתור-פקודות-רציף:', e.message); }
+  }
+}
+
 function getChildEventPairs(child,parent,parentBaseMin){
   if(!parent) return [];
   const parentRelay=(parent.relay||[])[0];
@@ -1936,34 +1950,41 @@ function clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo) {
   commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
 }
 
-function commitAutoModeSwitch(newModeId, label) {
+async function _commitAutoModeSwitchInner(newModeId, label) {
   if (newModeId === schedulerActiveModeId) return;
   try {
     const nowMsForSwitch = debugNow().getTime();
     const impact = computeModeSwitchImpactGlobal(newModeId);
     schedulerActiveModeId = newModeId;
     saveConfigLocal();
-    // כבה ממסרים ממצב קודם — בפיזור-זמן (לא כולם בבת-אחת)
-    runStaggered(impact.staleRelays, r => {
-      publishRelay(r.relayId, 'OFF').then(() => {
-        if (relayOwner[r.relayId]) delete relayOwner[r.relayId];
-        // חובה לשדר scheduler_fired — זהו האירוע היחיד שגורם לדפדפן לעדכן את מצב הממסר בזמן אמת (ראה fireEvent). בלעדיו הממשק נשאר "תקוע" עד רענון ידני.
-        io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב (${r.ownerProgName || 'תוכנית קודמת'})`, relayId: r.relayId, action: 'OFF' });
-      }).catch(() => {});
-    });
-    // הפעל תוכניות שהיו צריכות לדלוק כעת במצב החדש — בפיזור-זמן
+    io.emit('mode_changed', { newModeId, label });
+    addServerLog({ type: 'info', msg: `🕐 [תזמון מצב] עבר למצב ${newModeId} — ${label}`, user: 'מערכת' });
+
+    // **תור-אחד-משותף-ורציף**: קודם כל הכיבויים-מהמצב-הישן (staleRelays), ורק-אחרי-שכולם-הסתיימו-
+    // בפועל — ההדלקות של-המצב-החדש (missedPrograms). לא שני runStaggered נפרדים-שרצים-במקביל
+    // (הבעיה-שהייתה: כל אחד מתזמן-בעצמו לפי idx*5000, כך ששתי-הקריאות "מתחרות" ופקודות משתיהן
+    // יכולות לצאת ממש-באותו-רגע) — עכשיו זה תור-יחיד-אמיתי, פריט-אחרי-פריט, בלי-שום-חפיפה.
     const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
-    runStaggered(impact.missedPrograms, m => {
-      publishRelay(m.relayId, 'ON').then(() => {
-        relayOwner[m.relayId] = { progId: m.progId, name: m.progName, priority: m.isPriority, endSec: m.endSec };
-        // אותו תיקון: לשדר scheduler_fired כדי שהדפדפן יראה מיד שהממסר עלה בעקבות ההשלמה
-        io.emit('scheduler_fired', { progName: m.progName, relayId: m.relayId, action: 'ON' });
+    const combinedQueue = [
+      ...impact.staleRelays.map(r => ({ kind: 'stale', ...r })),
+      ...impact.missedPrograms.map(m => ({ kind: 'missed', ...m })),
+    ];
+    await runSequential(combinedQueue, async item => {
+      if (item.kind === 'stale') {
+        await publishRelay(item.relayId, 'OFF');
+        if (relayOwner[item.relayId]) delete relayOwner[item.relayId];
+        // חובה לשדר scheduler_fired — זהו האירוע היחיד שגורם לדפדפן לעדכן את מצב הממסר בזמן אמת (ראה fireEvent). בלעדיו הממשק נשאר "תקוע" עד רענון ידני.
+        io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב (${item.ownerProgName || 'תוכנית קודמת'})`, relayId: item.relayId, action: 'OFF' });
+      } else {
+        await publishRelay(item.relayId, 'ON');
+        relayOwner[item.relayId] = { progId: item.progId, name: item.progName, priority: item.isPriority, endSec: item.endSec };
+        io.emit('scheduler_fired', { progName: item.progName, relayId: item.relayId, action: 'ON' });
         // קריטי: לרשום את זה כ"ירה באמת" — אחרת הכיבוי-לפי-משך העתידי של התוכנית הזו יידלג בשקט
         // (schedulerTick בודק _actuallyFired לפני שהוא מרשה לאירוע-הסיום לירות, וההפעלה הזו לא עברה דרך fireEvent הרגיל)
-        if (m.fireSec !== undefined) _actuallyFired.add(`${m.progId}_${m.relayId}_${m.segType}_${m.cycleIdx??'x'}_${m.fireSec}_start_${_catchupTodayKey}`);
+        if (item.fireSec !== undefined) _actuallyFired.add(`${item.progId}_${item.relayId}_${item.segType}_${item.cycleIdx??'x'}_${item.fireSec}_start_${_catchupTodayKey}`);
         // תוכנית runOnce שהופעלה כהשלמה — כיבוי הדגל כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
-        if (m.runOnce) {
-          const p = schedulerPrograms.find(x => x.id === m.progId);
+        if (item.runOnce) {
+          const p = schedulerPrograms.find(x => x.id === item.progId);
           if (p && p.active) {
             p.active = false;
             _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
@@ -1971,24 +1992,38 @@ function commitAutoModeSwitch(newModeId, label) {
             saveConfigLocal();
           }
         }
-      }).catch(() => {});
+      }
     });
+
     // תוכנית-כיבוי (או הדלקה) שהוחמצה **בזמן-שהות-במצב-שרק-עכשיו-עוזבים** — staleRelays/missedPrograms
     // מבוססות-בעלות (relayOwner) בלבד, ולכן לא תופסות מקרה שבו הממסר מעולם לא היה "בבעלות" (למשל
     // הודלק/כובה ידנית תוך-כדי-השהות-במצב-הזמני — פעולה ידנית לא נוגעת ב-relayOwner בכלל!) — אבל
     // הלוח-זמנים-של-המצב-החדש עדיין "רוצה" משהו-אחר עכשיו. applyMissedRegularPrograms לא תלויה
     // ב-relayOwner בכלל — מחשבת ישירות מההיסטוריה (שני הכיוונים), ו"אחרון-כרונולוגית-מנצח" — כך
     // שהדלקה-מאוחרת-יותר (אחרי הכיבוי-שהוחמץ) עדיין מכבדת אוטומטית, בלי טיפול-מיוחד.
+    // **רצה רק אחרי-שהתור-למעלה הסתיים-לגמרי** (await), כדי שגם השלב-הזה לא-יחפוף עם הקודם.
     if (_lastModeTransitionAtMs !== null) {
-      try { applyMissedRegularPrograms(_lastModeTransitionAtMs, nowMsForSwitch); }
+      try {
+        const res = applyMissedRegularPrograms(_lastModeTransitionAtMs, nowMsForSwitch);
+        if (res && res.done) await res.done;
+      }
       catch(e) { console.error('❌ שגיאה בבדיקת-תוכניות-שהוחמצו (מעבר-מצב חי):', e.message); }
     }
     _lastModeTransitionAtMs = nowMsForSwitch;
-    io.emit('mode_changed', { newModeId, label });
-    addServerLog({ type: 'info', msg: `🕐 [תזמון מצב] עבר למצב ${newModeId} — ${label}`, user: 'מערכת' });
   } catch(e) {
     console.error('❌ שגיאה ב-commitAutoModeSwitch:', e.message);
   }
+}
+
+// **מנעול-גלובלי**: אם שתי-קריאות ל-commitAutoModeSwitch מגיעות קרוב-אחת-לשנייה ממקורות-שונים
+// (למשל טריגר-חיצוני ותזמון-מצב-רגיל שקפצו כמעט-יחד) — הן חייבות-לרוץ-אחת-אחרי-השנייה-לגמרי,
+// לא-במקביל. בלי זה, שתי-הקריאות היו-בונות-כל-אחת-תור-רציף-משלה, ושתי-התורים-האלה עצמם היו-
+// יכולים-לחפוף-זה-בזה (בדיוק אותה בעיה שתיקנו בתוך-קריאה-בודדת, רק ברמה-אחת-למעלה).
+let _modeSwitchChain = Promise.resolve();
+function commitAutoModeSwitch(newModeId, label) {
+  const run = () => _commitAutoModeSwitchInner(newModeId, label);
+  _modeSwitchChain = _modeSwitchChain.then(run, run);
+  return _modeSwitchChain;
 }
 
 // גרסה גלובלית של computeModeSwitchImpact (לא בתוך io.on)
@@ -2399,31 +2434,30 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
   // שה-return מתבצע, גם כשבפועל כן נשלחות פקודות-תיקון רגע-אחר-כך — בדיוק ההודעה-המטעה שנצפתה ביומן).
   const appliedCount = relaysInGap.size;
   const _catchupTodayKey = todayKey;
-  runStaggered([...relaysInGap], relayId => {
+  const done = runSequential([...relaysInGap], async relayId => {
     const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
     if (!relayEvents.length) return;
     relayEvents.sort((a,b) => a._epochMs - b._epochMs);
     const last = relayEvents[relayEvents.length - 1];
     const correctState = last.action; // 'ON' או 'OFF' — האחרון-כרונולוגית מנצח
-    publishRelay(relayId, correctState, 'התאמה אחרי הפעלה מחדש').then(() => {
-      io.emit('scheduler_fired', { progName: last.name, relayId, action: correctState });
-      addServerLog({ type: 'info', msg: `🔄 [התאמה] "${last.name}" — ${schedulerRelayNames[relayId]||`ממסר ${relayId}`} → ${correctState} (הוחמץ בזמן שהשרת היה למטה)`, user: 'מערכת' });
-      // אם זה "התחלה" שעדיין לא הגיע-זמן-הסיום-שלה (או שאין לה סיום) — לרשום _actuallyFired עם
-      // ה-fireSec ה**מקורי** וה-todayKey הנכון, כדי שהכיבוי/הפיכה-הטבעית-לפי-משך (isEndEvent) שתגיע
-      // בהמשך דרך ה-schedulerTick הרגיל לא תידלג בשקט (בדיוק אותו עיקרון כמו ב-commitAutoModeSwitch).
-      if (!last.isEndEvent && (last.endSec === null || last._dayStartMs + last.endSec*1000 > nowMs)) {
-        _actuallyFired.add(`${last.progId}_${relayId}_${last.segType}_${last.cycleIdx??'x'}_${last.fireSec}_start_${last._dayKey}`);
-        if (correctState === 'ON') {
-          relayOwner[relayId] = { progId: last.progId, name: last.name, priority: !!last.isPriority, endSec: last.endSec !== null ? last.endSec : null };
-        }
-        if (last.runOnce) {
-          const p = schedulerPrograms.find(x => x.id === last.progId);
-          if (p && p.active) { p.active = false; _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey }); io.emit('program_updated', { id: p.id, active: false }); saveConfigLocal(); }
-        }
+    await publishRelay(relayId, correctState, 'התאמה אחרי הפעלה מחדש');
+    io.emit('scheduler_fired', { progName: last.name, relayId, action: correctState });
+    addServerLog({ type: 'info', msg: `🔄 [התאמה] "${last.name}" — ${schedulerRelayNames[relayId]||`ממסר ${relayId}`} → ${correctState} (הוחמץ בזמן שהשרת היה למטה)`, user: 'מערכת' });
+    // אם זה "התחלה" שעדיין לא הגיע-זמן-הסיום-שלה (או שאין לה סיום) — לרשום _actuallyFired עם
+    // ה-fireSec ה**מקורי** וה-todayKey הנכון, כדי שהכיבוי/הפיכה-הטבעית-לפי-משך (isEndEvent) שתגיע
+    // בהמשך דרך ה-schedulerTick הרגיל לא תידלג בשקט (בדיוק אותו עיקרון כמו ב-commitAutoModeSwitch).
+    if (!last.isEndEvent && (last.endSec === null || last._dayStartMs + last.endSec*1000 > nowMs)) {
+      _actuallyFired.add(`${last.progId}_${relayId}_${last.segType}_${last.cycleIdx??'x'}_${last.fireSec}_start_${last._dayKey}`);
+      if (correctState === 'ON') {
+        relayOwner[relayId] = { progId: last.progId, name: last.name, priority: !!last.isPriority, endSec: last.endSec !== null ? last.endSec : null };
       }
-    }).catch(() => {});
+      if (last.runOnce) {
+        const p = schedulerPrograms.find(x => x.id === last.progId);
+        if (p && p.active) { p.active = false; _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey }); io.emit('program_updated', { id: p.id, active: false }); saveConfigLocal(); }
+      }
+    }
   });
-  return { appliedCount };
+  return { appliedCount, done };
 }
 
 
@@ -2538,24 +2572,28 @@ async function runBootReconciliation() {
       // ריק-לגמרי אחרי הפעלה-מחדש, ואין לה זיכרון-של-מה-היה-דולק לפני הקריסה. בתפעול-רגיל (בלי
       // קריסה) אין צורך בזה כלל — relayOwner אמין שם, ו-staleRelays כבר עושה את זה נכון בעצמה.
       const staleFromOldMode = computeStaleRelaysFromOldMode(originalMode, correctModeNow);
-      runStaggered(staleFromOldMode, relayId => {
-        publishRelay(relayId, 'OFF', 'התאמה אחרי הפעלה מחדש — יציאה ממצב קודם').then(() => {
-          if (relayOwner[relayId]) delete relayOwner[relayId];
-          io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב ${originalMode} (התאמה אחרי הפעלה מחדש)`, relayId, action: 'OFF' });
-          addServerLog({ type: 'info', msg: `🔄 [התאמה] ממסר ${schedulerRelayNames[relayId]||relayId} → OFF (שייך רק למצב הקודם ${originalMode}, אין ל-relayOwner זיכרון אחרי הפעלה-מחדש)`, user: 'מערכת' });
-        }).catch(() => {});
+      await runSequential(staleFromOldMode, async relayId => {
+        await publishRelay(relayId, 'OFF', 'התאמה אחרי הפעלה מחדש — יציאה ממצב קודם');
+        if (relayOwner[relayId]) delete relayOwner[relayId];
+        io.emit('scheduler_fired', { progName: `כיבוי אוטומטי — יציאה ממצב ${originalMode} (התאמה אחרי הפעלה מחדש)`, relayId, action: 'OFF' });
+        addServerLog({ type: 'info', msg: `🔄 [התאמה] ממסר ${schedulerRelayNames[relayId]||relayId} → OFF (שייך רק למצב הקודם ${originalMode}, אין ל-relayOwner זיכרון אחרי הפעלה-מחדש)`, user: 'מערכת' });
       });
-      commitAutoModeSwitch(correctModeNow, `התאמה אחרי הפעלה מחדש (${downMin} דקות)`);
+      await commitAutoModeSwitch(correctModeNow, `התאמה אחרי הפעלה מחדש (${downMin} דקות)`);
       // commitAutoModeSwitch כבר מטפלת בתוכניות-ON שהוחמצו במצב-החדש (missedPrograms) — אבל, כמו
       // בהמשך, זה מכסה רק כיוון-ON. מריצים גם את הבדיקה-הדו-כיוונית, ליתר ביטחון (idempotent — אם
-      // commitAutoModeSwitch כבר תיקן, זה פשוט ישלח את אותה פקודה שוב, לא מזיק).
-      try { applyMissedRegularPrograms(lastTick, now); } catch(e) { console.error('❌ שגיאה בבדיקה דו-כיוונית אחרי מעבר-מצב:', e.message); }
+      // commitAutoModeSwitch כבר תיקן, זה פשוט ישלח את אותה פקודה שוב, לא מזיק). ממתינים-לה (await)
+      // כדי ששום-פקודה-מהשלב-הזה לא-תחפוף עם commitAutoModeSwitch שלמעלה (שכבר-הסתיים-לגמרי).
+      try {
+        const res = applyMissedRegularPrograms(lastTick, now);
+        if (res && res.done) await res.done;
+      } catch(e) { console.error('❌ שגיאה בבדיקה דו-כיוונית אחרי מעבר-מצב:', e.message); }
     } else {
       addServerLog({ type: 'info', msg: `🔄 [התאמה] המצב (${originalMode}) לא השתנה בפועל — בודק תוכניות שהוחמצו בתוך אותו מצב`, user: 'מערכת' });
       // גם אם המצב לא השתנה, ייתכן שתוכניות-רגילות באותו מצב פוספסו (כיבוי או הדלקה כאחד — למשל
       // טיימר-כיבוי-אור-בלילה בזמן שהשרת היה למטה) — commitAutoModeSwitch מדלג כי "אין שינוי-מצב".
       try {
-        const { appliedCount } = applyMissedRegularPrograms(lastTick, now);
+        const { appliedCount, done } = applyMissedRegularPrograms(lastTick, now);
+        if (done) await done;
         if (!appliedCount) {
           addServerLog({ type: 'info', msg: '✅ לא נמצאו תוכניות-שהוחמצו לתיקון', user: 'מערכת' });
         }
@@ -2821,4 +2859,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 48;
+const IDX_BOTTOM_MARK = 49;
