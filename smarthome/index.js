@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 49;
+const IDX_TOP_MARK = 50;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -782,13 +782,34 @@ async function executeTriggerAction(trigger) {
       io.emit('program_updated', { id: p.id, active: p.active });
     }
   } else if (trigger.actionType === 'mode') {
-    const prevModeId = schedulerActiveModeId; // חייבים-לתפוס-לפני-המעבר, כדי-לדעת-לאן-לחזור
-    commitAutoModeSwitch(trigger.modeId, `טריגר-חיצוני: ${trigger.name}`);
     const durationMin = (parseInt(trigger.modeDurationH, 10) || 0) * 60 + (parseInt(trigger.modeDurationM, 10) || 0);
-    if (durationMin > 0) {
-      // אותו-מנגנון-בדיוק כמו תזמון-מצב-עם-"למשך" (armPendingRevertTimer) — כולל שרידות-מלאה
-      // אחרי קריסה/הפעלה-מחדש, בזכות אותו התיקון שכבר בנינו ל-runBootReconciliation.
-      armPendingRevertTimer(prevModeId, trigger.modeId, Date.now() + durationMin * 60000);
+    if (schedulerActiveModeId === trigger.modeId) {
+      // כבר-במצב-היעד (למשל: כבר במצב-חופשה, ולוחצים-שוב על אותו-כפתור) — commitAutoModeSwitch
+      // הייתה-ממילא-עושה no-op כאן, אז לא-קוראים-לה בכלל. אבל "למשך" עדיין-אמור-לפעול: לחיצה-חוזרת
+      // "מרעננת" את זמן-החזרה לעוד duration-מעכשיו — **לא** ל-revert-לעצמו (זה היה הבאג: prevModeId
+      // נתפס **אחרי** שכבר-היינו-שם, אז יצא revertToMode=trigger.modeId, מחיקת-כל-טיימר-לגיטימי-קודם
+      // ובלי-שום-תחליף-אמיתי — המערכת הייתה-נשארת-תקועה-לצמיתות).
+      if (durationMin > 0) {
+        if (_pendingRevertInfo && _pendingRevertInfo.modeJustSetTo === trigger.modeId) {
+          // יש כבר-שרשרת-חזרה-פעילה לאותו-מצב — משתמשים ב-revertToMode **שלה** (המצב-האמיתי-
+          // המקורי, מלפני-כל-הכניסות-החוזרות-האלה), לא במצב-הנוכחי. זה נותן "עוד duration מעכשיו,
+          // חוזר-בסוף לאותו-מקום-אמיתי" — בדיוק ההתנהגות שהתבקשה.
+          armPendingRevertTimer(_pendingRevertInfo.revertToMode, trigger.modeId, Date.now() + durationMin * 60000);
+          addServerLog({ type: 'info', msg: `🔘 [טריגר] "${trigger.name}" — כבר במצב ${trigger.modeId}, זמן-החזרה רוענן (עוד ${durationMin} דק', יחזור למצב ${_pendingRevertInfo.revertToMode})`, user: 'מערכת' });
+        } else {
+          // נכנסנו-למצב-הזה בלי-הגבלת-זמן (permanent) — אין שום "מצב-אמיתי-לחזור-אליו" ידוע, אז
+          // בכוונה **לא** יוצרים טיימר-מטעה (revert-לעצמו). המצב נשאר-קבוע כפי-שהיה מלכתחילה.
+          addServerLog({ type: 'info', msg: `🔘 [טריגר] "${trigger.name}" — כבר במצב ${trigger.modeId} (ללא-הגבלת-זמן) — אין מצב-קודם-ידוע, לא נוצר טיימר-חזרה`, user: 'מערכת' });
+        }
+      }
+    } else {
+      const prevModeId = schedulerActiveModeId; // חייבים-לתפוס-לפני-המעבר, כדי-לדעת-לאן-לחזור
+      await commitAutoModeSwitch(trigger.modeId, `טריגר-חיצוני: ${trigger.name}`);
+      if (durationMin > 0) {
+        // אותו-מנגנון-בדיוק כמו תזמון-מצב-עם-"למשך" (armPendingRevertTimer) — כולל שרידות-מלאה
+        // אחרי קריסה/הפעלה-מחדש, בזכות אותו התיקון שכבר בנינו ל-runBootReconciliation.
+        armPendingRevertTimer(prevModeId, trigger.modeId, Date.now() + durationMin * 60000);
+      }
     }
   }
 }
@@ -1102,41 +1123,43 @@ io.on('connection', (socket) => {
     socket.emit('mode_switch_review', { newModeId, ...computeModeSwitchImpactGlobal(newModeId) });
   });
 
-  socket.on('confirm_mode_switch', ({ newModeId, turnOffRelayIds, activateProgIds }) => {
+  socket.on('confirm_mode_switch', async ({ newModeId, turnOffRelayIds, activateProgIds }) => {
     schedulerActiveModeId = newModeId;
     saveConfigLocal();
-    (turnOffRelayIds || []).forEach(relayId => {
-      publishRelay(relayId, 'OFF').then(() => {
-        if (relayOwner[relayId]) delete relayOwner[relayId];
-        io.emit('scheduler_fired', { progName: 'כיבוי — מעבר מצב ידני', relayId, action: 'OFF' });
-      }).catch(() => {});
-    });
+    // **אותו-מנגנון-בדיוק כמו commitAutoModeSwitch**: תור-אחד-משולב-ורציף — קודם כל הכיבויים,
+    // ורק-אחרי-שכולם-הסתיימו-בפועל — ההדלקות. לפני-התיקון כאן היה .forEach() רגיל, בלי-שום-פיזור-
+    // זמן בכלל — כל הפקודות (כיבויים והדלקות כאחד) יצאו ממש-באותו-רגע.
+    const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
+    const offItems = (turnOffRelayIds || []).map(relayId => ({ kind: 'off', relayId }));
+    let onItems = [];
     if ((activateProgIds || []).length) {
       const impact = computeModeSwitchImpactGlobal(newModeId);
-      activateProgIds.forEach(progId => {
-        // filter — תוכנית יכולה לכלול מספר ממסרים
-        const matches = impact.missedPrograms.filter(m => String(m.progId) === String(progId));
-        const _catchupTodayKey = new Date(debugNow().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' })).toDateString();
-        matches.forEach(match => {
-          publishRelay(match.relayId, 'ON').then(() => {
-            relayOwner[match.relayId] = { progId: match.progId, name: match.progName, priority: match.isPriority, endSec: match.endSec };
-            io.emit('scheduler_fired', { progName: match.progName, relayId: match.relayId, action: 'ON' });
-            // אותו תיקון כמו במעבר האוטומטי — למנוע דילוג שקט על הכיבוי-לפי-משך העתידי
-            if (match.fireSec !== undefined) _actuallyFired.add(`${match.progId}_${match.relayId}_${match.segType}_${match.cycleIdx??'x'}_${match.fireSec}_start_${_catchupTodayKey}`);
-            // תוכנית runOnce שהופעלה כהשלמה — יש לכבות את הדגל בדיוק כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
-            if (match.runOnce) {
-              const p = schedulerPrograms.find(x => x.id === match.progId);
-              if (p && p.active) {
-                p.active = false;
-                _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
-                io.emit('program_updated', { id: p.id, active: false });
-                saveConfigLocal();
-              }
-            }
-          }).catch(() => {});
-        });
-      });
+      onItems = activateProgIds.flatMap(progId =>
+        impact.missedPrograms.filter(m => String(m.progId) === String(progId)).map(m => ({ kind: 'on', ...m })));
     }
+    await runSequential([...offItems, ...onItems], async item => {
+      if (item.kind === 'off') {
+        await publishRelay(item.relayId, 'OFF');
+        if (relayOwner[item.relayId]) delete relayOwner[item.relayId];
+        io.emit('scheduler_fired', { progName: 'כיבוי — מעבר מצב ידני', relayId: item.relayId, action: 'OFF' });
+      } else {
+        await publishRelay(item.relayId, 'ON');
+        relayOwner[item.relayId] = { progId: item.progId, name: item.progName, priority: item.isPriority, endSec: item.endSec };
+        io.emit('scheduler_fired', { progName: item.progName, relayId: item.relayId, action: 'ON' });
+        // אותו תיקון כמו במעבר האוטומטי — למנוע דילוג שקט על הכיבוי-לפי-משך העתידי
+        if (item.fireSec !== undefined) _actuallyFired.add(`${item.progId}_${item.relayId}_${item.segType}_${item.cycleIdx??'x'}_${item.fireSec}_start_${_catchupTodayKey}`);
+        // תוכנית runOnce שהופעלה כהשלמה — יש לכבות את הדגל בדיוק כמו בירייה רגילה, אחרת היא עלולה לירות שוב במחזור עתידי
+        if (item.runOnce) {
+          const p = schedulerPrograms.find(x => x.id === item.progId);
+          if (p && p.active) {
+            p.active = false;
+            _firedRunOnceToday.set(p.id, { ...p, _todayKey: _catchupTodayKey });
+            io.emit('program_updated', { id: p.id, active: false });
+            saveConfigLocal();
+          }
+        }
+      }
+    });
   });
 
   // ── Users ──
@@ -2859,4 +2882,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 49;
+const IDX_BOTTOM_MARK = 50;
