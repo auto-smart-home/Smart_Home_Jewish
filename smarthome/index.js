@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 50;
+const IDX_TOP_MARK = 51;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2143,6 +2143,9 @@ function computeModeSwitchImpactGlobal(newModeId, opts) {
   // הרחב — כל הממסרים של כל תוכנית שפספסה (לא רק הממסר הראשון)
   const missedProgIds = new Set(Object.values(missedCandidatesByRelay).map(ev => ev.progId));
   const missedPrograms = [];
+  const _addedMissedRelayIds = new Set(); // מונע כפילות: אותו relayId יכול להתאים ליותר-מאירוע-אחד
+  // (תוכנית-מחזורים עם כמה פולסים חופפים-בזמן, או התאמה גם ב"אתמול" וגם ב"היום" שממוזגים יחד) —
+  // בלי הגנה-זו, אותו ממסר-ופקודה נשלחים כמה-פעמים (בדיוק התופעה שדווחה: אותה פעולה חוזרת 3 פעמים).
   for (const ev of newModeEvents) {
     if (ev.action !== 'ON') continue;
     if (!missedProgIds.has(ev.progId)) continue;
@@ -2152,6 +2155,8 @@ function computeModeSwitchImpactGlobal(newModeId, opts) {
     if (lastOff && lastOff.fireSec > ev.fireSec) continue;
     // בדוק שהממסר הספציפי הזה לא כבוי כבר
     if (missedCandidatesByRelay[ev.relayId]?.progId !== ev.progId) continue;
+    if (_addedMissedRelayIds.has(ev.relayId)) continue;
+    _addedMissedRelayIds.add(ev.relayId);
     missedPrograms.push({
       relayId: ev.relayId,
       relayName: schedulerRelayNames[ev.relayId] || `ממסר ${ev.relayId}`,
@@ -2882,4 +2887,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 50;
+const IDX_BOTTOM_MARK = 51;
