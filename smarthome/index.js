@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 51;
+const IDX_TOP_MARK = 52;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2502,14 +2502,14 @@ function reestablishRelayOwnership(nowMs) {
     const todayKey = nowIL.toDateString();
     const zmanimToday = getZmanim(nowIL);
     const eventsToday = computeTodayEvents(nowIL, zmanimToday, nowIL.getDay(), todayKey)
-      .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000 }));
+      .map(e => ({ ...e, _epochMs: dayStartMs + e.fireSec*1000, _dayKey: todayKey, _dayStartMs: dayStartMs }));
 
     const yIL = new Date(nowIL); yIL.setDate(yIL.getDate()-1);
     const yDayStartMs = toTrueEpoch(new Date(yIL.getFullYear(), yIL.getMonth(), yIL.getDate()).getTime(), yIL);
     const yKey = yIL.toDateString();
     const zmanimY = getZmanim(yIL);
     const eventsYesterday = computeTodayEvents(yIL, zmanimY, yIL.getDay(), yKey)
-      .map(e => ({ ...e, _epochMs: yDayStartMs + e.fireSec*1000 }));
+      .map(e => ({ ...e, _epochMs: yDayStartMs + e.fireSec*1000, _dayKey: yKey, _dayStartMs: yDayStartMs }));
 
     const allEvents = [...eventsYesterday, ...eventsToday].filter(e => e._epochMs <= nowMs);
     const byRelay = {};
@@ -2523,12 +2523,24 @@ function reestablishRelayOwnership(nowMs) {
       if (last.action !== 'ON') return; // לא-דולק — אין בעלות-להחזיר
       // אם עדיין יש endSec ולא עבר — התחייבות-הזמן עוד בתוקף; אם endSec כבר עבר, הבעלות-הזו כבר
       // "פגה" בפועל (גם אם ה-OFF-event-הטבעי-שלה עוד לא הגיע ל-schedulerTick) — לא משחזרים אותה.
+      // **תיקון**: היה תמיד dayStartMs (של-היום), גם עבור אירוע שמקורו ב"אתמול" (תוכנית חוצת-חצות) —
+      // שגוי-ב-24-שעות-בדיוק במקרה הזה. עכשיו משתמשים ב-_dayStartMs האמיתי של-האירוע-עצמו.
       if (last.endSec !== null) {
-        const endEpochMs = dayStartMs + last.endSec*1000; // מבוסס תמיד על "היום" — תקין כי last כבר בעבר-הקרוב
+        const endEpochMs = last._dayStartMs + last.endSec*1000;
         if (endEpochMs <= nowMs) return;
       }
       relayOwner[relayId] = { progId: last.progId, name: last.name, priority: !!last.isPriority, endSec: last.endSec };
       restoredCount++;
+      // **תיקון-קריטי**: מסמנים גם את אירוע-ה"התחלה" הזה כ-_actuallyFired — אחרת, כשה"סיום-לפי-משך"
+      // הטבעי-שלו (isEndEvent) יגיע מאוחר-יותר דרך schedulerTick הרגיל, השורה `if(!_actuallyFired.has
+      // (startKey)) continue;` תדלג עליו **בשקט לגמרי (בלי שום לוג)** — כי _actuallyFired הוא זיכרון-
+      // בלבד, ונמחק-לגמרי בכל הפעלה-מחדש. בפועל: ממסר שכבר-היה-דולק-לפני-קריסה-קצרה נשאר דלוק
+      // **לצמיתות**, כי הכיבוי-הטבעי-שלו-בזמנו אף-פעם לא-מתבצע. זו הייתה בדיוק התופעה שדווחה
+      // ("אין ביומן זכר לניסיון-כיבוי בלילה") — לא הייתה שום שגיאה כי זה נכשל *לפני* כל בדיקת-
+      // חסימה/רישום, ב-continue שקט.
+      if (!last.isEndEvent) {
+        _actuallyFired.add(`${last.progId}_${relayId}_${last.segType}_${last.cycleIdx??'x'}_${last.fireSec}_start_${last._dayKey}`);
+      }
     });
     if (restoredCount > 0) {
       addServerLog({ type: 'info', msg: `🔄 [התאמה] שוחזרו ${restoredCount} בעלויות-ממסר (לפי היסטוריית-אירועים, ללא שליחת פקודות)`, user: 'מערכת' });
@@ -2887,4 +2899,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 51;
+const IDX_BOTTOM_MARK = 52;
