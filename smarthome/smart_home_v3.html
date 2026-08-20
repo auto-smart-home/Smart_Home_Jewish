@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD_MARKER: v2026-08-15-AI (תיקון-ציר-מינימלי: תוכנית ששייכת רק למצב-שמגיע-דרך-מעבר-מצב-מתוזמן (עם או בלי-"למשך"), ותוכנית-עצמה חוצה-חצות (זמן+משך>24 שעות, למשל 07:00+23:59min) - הוצגה כ-"פער-אנונימי-בלי-תווית" (kind=gap, לא kind=on) בזמן-החלון-שתפסה-כתרמיל, למרות שה-isOn חושב-נכון. הסיבה: relevantModes (סינון-גס-מקדים) חושב-בנפרד-לכל-יום-מוצג, כולל "יום-לפני" (dayBeforeRange) - אבל modeSegments אף-פעם-לא-מכסה את dayBeforeRange, אז relevantModes יצא-ריק-עבורו ונפל-לברירת-מחדל (activeModeId בלבד), מחריג-בטעות תוכניות-ממצבים-אחרים. תוקן: relevantModes מחושב פעם-אחת מכל-modeSegments (לא-מוגבל-ליום) - בטוח-לגמרי כי זה רק-סינון-מהיר, הבדיקה-המדויקת (overlapsMatchingMode) לא-השתנתה. נבדק: התרחיש-המדויק שדווח (עכשיו kind=on עם תווית נכונה), ציר-רגיל מאומת-כלא-מושפע (hasEvents כבר-היה-נכון שם), ושתי-רגרסיות (תוכנית-רגילה-לא-חוצה-חצות עדיין-תקינה, ותוכנית-ממצב-שלעולם-לא-פעיל עדיין-לא-מופיעה-false-positive).) -->
+<!-- BUILD_MARKER: v2026-08-15-AJ (המשך-תיקון-ציר: אותה-בעיה (תוכנית-חוצת-חצות שתופסת-תרמיל-במעבר-מצב מוצגת-בלי-תווית) הייתה קיימת גם בציר-הרגיל, לא רק במינימלי. שם carriedOverEnds (מנגנון-קיים לתוכניות-חוצות-חצות) תופס רק את בלוק-הסיום-המדויק, לא את כל-הבלוקים-שלפניו שבהם הממסר עדיין דולק בזכות ההמשך - הם נפלו ל-fireEvents/endEvents ריקים, ומוצגים כטקסט-גנרי-בלי-תווית. תוקן: continuingEvents חדש מייחס את כל-הבלוקים-בתוך-חלון-ההמשך-הפעיל לתוכנית הנכונה - בתנאי שגם isOn אמת לאותו בלוק-ספציפי (לא רק שהחלון-הגולמי-של-ההמשך עדיין-לא-נגמר - זה תפס-בטעות גם בלוקים-לפני-שמעבר-המצב-בכלל-קרה, בבדיקה-ראשונית של התיקון). נבדק: בלוק-לפני-המעבר נכון-לא-מיוחס (isOn=false), בלוק-אחרי-המעבר-ולפני-הסיום מיוחס-נכון לתוכנית, ושתי-הרגרסיות-הקודמות (תוכנית-רגילה, תוכנית-ממצב-לעולם-לא-פעיל) עדיין תקינות בתצוגה-המינימלית.) -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1063,7 +1063,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 95;
+const BUILD_TOP_MARK = 96;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4294,6 +4294,22 @@ function renderTimeline(){
             const em=Math.ceil(cp.endMin);
             if(em>=b.startMin && em<b.endMin) endEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null, action:cp.segAction, _carriedOver:true}});
           });
+          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
+          // **תיקון**: הבלוקים ש**לפני** בלוק-הסיום-עצמו (למשל 02:00-06:59, כשהסיום-בפועל הוא 06:59
+          // בדיוק) לא-קיבלו שום ייחוס — לא fireEvent (התוכנית "שייכת" רשמית לאתמול) ולא endEvent (הסיום
+          // עוד-לא-הגיע). התוצאה: "━━ דולק" גנרי-בלי-תווית, במקום בלוק-רגיל-עם-שם-התוכנית. בדיוק כמו
+          // שתוקן בתצוגה-המינימלית, רק שכאן זו הבעיה-המקבילה בציר-הרגיל. ממלאים continuingEvents לכל
+          // בלוק שנמצא **בתוך** החלון-הפעיל-של-ההמשך-מאתמול (לפני-הסיום-שלו) — **וגם** מוודאים ש-isOn
+          // אכן true עבור הבלוק-הספציפי-הזה (חובה! חלון-ה-endMin-הגולמי של ההמשך יכול להתפרש הרבה-
+          // לפני-שהמצב-בפועל-הפך-רלוונטי — למשל אם מעבר-המצב עצמו קורה רק באמצע-החלון-הגולמי-הזה).
+          const continuingEvents=[];
+          if(isOn){
+            (blocks.carriedOverEnds||[]).forEach(cp=>{
+              if(cp.rId!==r.id) return;
+              if(cp.segAction!=='ON') return; // רק המשך-דלוק רלוונטי-להצגה כאן (כיבוי מוצג ממילא כ"·" רגיל)
+              if(b.startMin<cp.endMin) continuingEvents.push({p:cp.p, seg:{endMin:cp.endMin, fireMin:null, action:cp.segAction, _carriedOver:true}});
+            });
+          }
           // תוכניות runOnce שפעלו היום — הצג בצבע מיוחד
           const todayStr = dayDate.toDateString();
           if(todayStr === new Date().toDateString()){
@@ -4306,13 +4322,18 @@ function renderTimeline(){
               });
             });
           }
-          const isOn=getRelayStateAtTime(r.id,dayDate,b.startMin,blockEffMode);
           const bgStyle=isOn
             ?'background:rgba(34,197,94,0.35);border-right:4px solid rgba(34,197,94,0.75);'
             :'background:var(--tl-off-bg);';
           html+=`<td style="${bgStyle}"><div class="tl-cell-inner">`;
-          if(fireEvents.length===0&&endEvents.length===0){
+          if(fireEvents.length===0&&endEvents.length===0&&continuingEvents.length===0){
             html+=`<div class="tl-empty-cell" style="color:${isOn?'var(--on-color)':'var(--muted)'};font-weight:${isOn?'700':'400'}">${isOn?'━━ דולק':'·'}</div>`;
+          } else if(fireEvents.length===0&&endEvents.length===0){
+            continuingEvents.forEach(({p})=>{
+              html+=`<div class="tl-prog-block t-on" title="${p.name} · ממשיך מאתמול">
+                <span class="pb-num">${p.relay.indexOf(r.id)+1}</span>${p.name} <span style="opacity:0.7">(ממשיך)</span>
+              </div>`;
+            });
           }
           // הצג אירועים ידניים לאותו בלוק
           const dayDateKey = ilDateKey(dayDate);
@@ -5671,7 +5692,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 95;
+BUILD_BOTTOM_MARK = 96;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
