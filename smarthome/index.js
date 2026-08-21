@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 52;
+const IDX_TOP_MARK = 53;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -561,6 +561,10 @@ let _previousModeId = null; // המצב לפני מעבר עם duration (לחז�
 let _lastModeTransitionAtMs = null;
 let _activeScheduledModeTimer = null; // טיימר חזרה פעיל
 let _pendingRevertInfo = null; // מידע חשוף ללקוח: { revertToMode, revertAtEpochMs } | null
+// טיימרי-חזרה-ממתינים ש"הופרעו" ע"י תזמון-מצב-אחר-שירה-באמצע (למשל מצב-A עם "למשך" עדיין-פעיל,
+// ותזמון-B מפריע-לו-לפני-שהוא-הספיק-לחזור-לבד) — נשמרים כאן, מפתח=המצב-שהיה-לו-הטיימר, כדי-
+// שכשחוזרים-בסוף לאותו-מצב (דרך תזמון-B-עצמו שחוזר-חזרה), נחמש-אותם-מחדש במקום-לאבד-אותם-לצמיתות.
+let _savedPendingRevertsByMode = {};
 const _firedToday = new Set();
 const _actuallyFired = new Set();
 const _firedRunOnceToday = new Map();
@@ -1945,6 +1949,17 @@ const _firedScheduledModes = new Set(); // מונע ירי כפול באותו t
 // אחרי אתחול-מחדש (ראו runBootReconciliation), במקום לאבד את המידע לגמרי.
 function armPendingRevertTimer(prevMode, modeJustSetTo, revertAtEpochMs) {
   if (_activeScheduledModeTimer) clearTimeout(_activeScheduledModeTimer);
+  // **תיקון-קריטי**: אם כבר-יש טיימר-חזרה-ממתין, והוא שייך **לאותו-מצב** ש-prevMode מצביע-אליו
+  // (כלומר: אנחנו עומדים-להיכנס-זמנית-למצב-חדש, אבל prevMode-הזה כבר-היה-לו-משלו טיימר-חזרה-
+  // ממתין, מלפני-שהתזמון-הנוכחי-הפריע-לו) — שומרים אותו-בצד, כדי-לחמש-אותו-מחדש כשנחזור. בלי-זה:
+  // מצב-B (למשל "לילה טוב") שמפריע-למצב-A-שכבר-פעיל-עם-"למשך"-משלו, היה-מוחק-לצמיתות את-טיימר-
+  // החזרה-של-A — A נשאר-דלוק-לנצח (עד-התזמון-הבא-שלו), במקום-לחזור-בזמן-לפי-המשך-המקורי-שלו.
+  if (_pendingRevertInfo && _pendingRevertInfo.modeJustSetTo === prevMode) {
+    _savedPendingRevertsByMode[prevMode] = {
+      revertToMode: _pendingRevertInfo.revertToMode,
+      revertAtEpochMs: _pendingRevertInfo.revertAtEpochMs,
+    };
+  }
   const remainingMs = revertAtEpochMs - Date.now();
   _pendingRevertInfo = { revertToMode: prevMode, revertAtEpochMs, modeJustSetTo };
   io.emit('pending_mode_revert', _pendingRevertInfo);
@@ -1971,6 +1986,14 @@ function clearPendingRevertAndMaybeApply(prevMode, modeJustSetTo) {
     return;
   }
   commitAutoModeSwitch(prevMode, `חזרה אוטומטית למצב ${prevMode}`);
+  // אם ל-prevMode (המצב-שאנחנו-חוזרים-אליו-עכשיו) היה טיימר-חזרה-משלו ששמור-בצד (כי-הופרע-קודם
+  // ע"י התזמון-שרק-עכשיו-הסתיים) — מחמשים אותו-מחדש עכשיו, כדי שהוא-ימשיך-מהמקום-שנעצר, במקום-
+  // להיעלם-לצמיתות.
+  const saved = _savedPendingRevertsByMode[prevMode];
+  if (saved) {
+    delete _savedPendingRevertsByMode[prevMode];
+    armPendingRevertTimer(saved.revertToMode, prevMode, saved.revertAtEpochMs);
+  }
 }
 
 async function _commitAutoModeSwitchInner(newModeId, label) {
@@ -2899,4 +2922,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 52;
+const IDX_BOTTOM_MARK = 53;
