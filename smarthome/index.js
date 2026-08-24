@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 53;
+const IDX_TOP_MARK = 54;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -119,6 +119,7 @@ function loadConfigLocal() {
     if (cfg.haToken) { haToken = cfg.haToken; }
     if (cfg.haUrl) { haUrl = cfg.haUrl; }
     if (cfg.yemotPhoneMap) { yemotPhoneMap = cfg.yemotPhoneMap; }
+    if (cfg.modes) { modes = cfg.modes; console.log(`🗂️ נטענו ${modes.length} מצבים`); }
     if (cfg.externalTriggers) { externalTriggers = cfg.externalTriggers; console.log(`🔘 נטענו ${externalTriggers.length} טריגרים-חיצוניים`); }
     // מידע-טיימר-חזרה-ממתין (תזמון-מצב עם duration) — היה בזיכרון-בלבד קודם, ואבד לגמרי בקריסה.
     // בלי זה, שרת שקרס באמצע "חלון-חזרה-ממתינה" לא היה יודע בכלל שהיה אמור לחזור למצב-קודם.
@@ -159,6 +160,7 @@ function saveConfigLocal() {
         haToken,
         haUrl,
         externalTriggers,
+        modes,
         pendingRevertInfo: _pendingRevertInfo,
         savedAt: new Date().toISOString(),
       };
@@ -456,6 +458,9 @@ function getIvrProgramsOrdered() {
 function getIvrSchedulesOrdered() {
   return scheduledModes.filter(sm => sm.ivr).sort((a,b) => a.id - b.id);
 }
+function getIvrModesOrdered() {
+  return modes.filter(m => m.ivr).sort((a,b) => a.id - b.id);
+}
 
 // כל שורה בקובץ-TTS בשורה-נפרדת-משלה, ומסתיימת ב"שתי-נקודות" (לא נקודה בודדת) — זה מאט את
 // קצב-ההקראה של ימות בין פריט-לפריט (למשל בין ממסר לממסר, או בין הוראה להוראה) — בלי זה, ימות
@@ -518,6 +523,28 @@ function buildYemotAutoFiles(kind) {
     return { tts000, tts001, extIni };
   }
 
+  if (kind === 'mode') {
+    const ivrModes = getIvrModesOrdered();
+    const maxDigits = String(ivrModes.length || 1).length;
+    const posKeys = ivrModes.map((m,i) => i+1).join('.');
+    const tts000 = ivrModes.length
+      ? buildTtsLines(['שלום, להלן רשימת המצבים הזמינים למעבר', ...ivrModes.map((m,i) => `למצב ${m.name} הקש ${i+1}`)])
+      : 'לא הוגדרו מצבים זמינים למעבר טלפוני.';
+    const tts001 = buildTtsLines(['כעת הקישו את מספר הדקות למעבר הזמני, או הקישו 0 למעבר קבוע בלי הגבלת זמן']);
+    const extIni = [
+      'type=api',
+      'rate=0',
+      'voice=Osnat',
+      `api_link=${YEMOT_API_LINK_URL}`, // ניסוי: אותו נתיב-בדיוק כמו ממסרים/תוכניות, מבדילים לפי שם-הפרמטר (ModeNum) — ראו dispatchIvrRequest
+      'api_hangup_send=No',
+      `api_000=ModeNum,,${maxDigits},1,7,No,yes,yes,,${posKeys},3,`,
+      'api_001=Duration,,3,1,7,No,yes,no,,,3,',
+      'api_end_goto=/',
+      '',
+    ].join('\n');
+    return { tts000, tts001, extIni };
+  }
+
   // kind === 'relay' (ברירת-מחדל) — **רק** ממסרים שסומנו ivr===true (בדיוק כמו תוכניות/תיזמונים)
   const relayIds = getOrderedRelayIds().filter(id => schedulerRelayIvr[id]);
   const relayKeys = relayIds.join('.');
@@ -543,6 +570,9 @@ function buildYemotAutoFiles(kind) {
 
 // ── SCHEDULER STATE ──────────────────────────────────────
 let schedulerPrograms = [];
+// רשימת-המצבים עצמם (שם + דגל-ivr) — עד עכשיו התקיים רק בצד-הלקוח, בתוך fullConfig באופן אטום.
+// נדרש כאן במפורש כדי לבנות את תפריט-הבחירה-הטלפוני (IVR) ולוודא בחירות-תקפות.
+let modes = [];
 let schedulerActiveModeId = 0;
 let scheduledModes = []; // תזמוני החלפת מצב
 // טריגרים-חיצוניים: מיפוי "האזן לנושא-MQTT X, כשהשדה Y=ערך Z, בצע פעולה" — כדי שמתגי-קיר/כפתורי-
@@ -1099,7 +1129,7 @@ io.on('connection', (socket) => {
   });
 
   // ── Sync Programs ──
-  socket.on('sync_programs', ({ programs, activeModeId, relayNames, modes, fullConfig }) => {
+  socket.on('sync_programs', ({ programs, activeModeId, relayNames, modes: incomingModes, fullConfig }) => {
     const newIds = new Set((programs || []).map(p => String(p.id)));
     Array.from(_firedToday).forEach(k => { const progId = k.split('_')[0]; if (!newIds.has(progId)) _firedToday.delete(k); });
     schedulerPrograms = programs || [];
@@ -1113,6 +1143,7 @@ io.on('connection', (socket) => {
     // (loadConfigLocal), ומשתנה **רק** דרך commitAutoModeSwitch/confirm_mode_switch (ששניהם
     // כן רושמים ליומן, ועושים גם את שאר-הפעולות-הנלוות כמו כיבוי-ממסרים-לא-רלוונטיים).
     if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; schedulerRelayIvr[r.id] = !!r.ivr; });
+    if (incomingModes) modes = incomingModes;
     if (fullConfig) serverConfig = fullConfig;
     socket.emit('sync_ack', { count: schedulerPrograms.length, firedRunOnceToday: Array.from(_firedRunOnceToday.values()) });
     saveConfigLocal();
@@ -2786,6 +2817,7 @@ async function handleRelayIvrRequest(req, res) {
 function dispatchIvrRequest(req, res, next) {
   if (req.query.SchedNum !== undefined) return handleScheduleIvrRequest(req, res);
   if (req.query.ProgNum !== undefined) return handleProgramIvrRequest(req, res);
+  if (req.query.ModeNum !== undefined) return handleModeIvrRequest(req, res);
   if (req.query.Relay !== undefined) return handleRelayIvrRequest(req, res);
   if (req.query.hangup === 'yes') return res.send('');
   return next ? next() : res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
@@ -2875,6 +2907,53 @@ async function handleScheduleIvrRequest(req, res) {
 app.get('/yemot/schedule', handleScheduleIvrRequest);
 app.get('/schedule', handleScheduleIvrRequest);
 
+// מעבר-מצב ישיר דרך IVR — **רק לאדמין** (בדיוק כמו ניהול-תוכניות/תיזמונים — זו פעולה משמעותית,
+// לא הדלקת-ממסר-בודדת). מוגבל **רק** למצבים שסומנו m.ivr===true בממשק. שלב-שני (Duration) בוחר
+// למשך-כמה-דקות המעבר יימשך — 0 = מעבר-קבוע, בלי-הגבלת-זמן (בדיוק כמו בממסרים). המנגנון-בפועל
+// זהה-לחלוטין למה שכבר-קיים לטריגרים-חיצוניים (executeTriggerAction) — commitAutoModeSwitch,
+// ואם יש משך — armPendingRevertTimer עם המצב-הקודם כיעד-החזרה, כולל שרידות-מלאה אחרי הפעלה-מחדש.
+async function handleModeIvrRequest(req, res) {
+  const modeNumStr=req.query.ModeNum||'',durationStr=req.query.Duration||'',callerPhone=req.query.ApiPhone||'',hangup=req.query.hangup==='yes';
+  if(hangup) return res.send('');
+  if(!modeNumStr||!durationStr||!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
+  const callerId=yemotPhoneMap[callerPhone];
+  if(callerId===undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
+  const perm=yemotPermissions[callerId]||{};
+  if(!perm.isAdmin) return res.send('id_list_message=t-פעולה זו מוגבלת למנהל בלבד&go_to_folder=hangup&');
+  // מיקום (1,2,3...) — לא id אמיתי — ראו getIvrModesOrdered, אותו עיקרון בדיוק כמו תוכניות/תיזמונים.
+  const pos=parseInt(modeNumStr,10);
+  const ivrModes=getIvrModesOrdered();
+  const m=(pos>=1&&pos<=ivrModes.length)?ivrModes[pos-1]:null;
+  if(!m) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  const durationMin=parseInt(durationStr,10);
+  if(isNaN(durationMin)||durationMin<0) return res.send(ymResponse('קלט לא תקין, נסה שוב'));
+  try{
+    const prevModeId=schedulerActiveModeId;
+    if(m.id===prevModeId){
+      // כבר-במצב-הזה — אותו-עיקרון-בדיוק כמו בטריגר-חיצוני: לא-קוראים ל-commitAutoModeSwitch (no-op
+      // ממילא), אבל אם התבקש-משך — מרעננים-אותו, בלי-ליצור-טיימר-חוזר-לעצמו (ראו executeTriggerAction).
+      if(durationMin>0){
+        if(_pendingRevertInfo && _pendingRevertInfo.modeJustSetTo===m.id){
+          armPendingRevertTimer(_pendingRevertInfo.revertToMode, m.id, Date.now()+durationMin*60000);
+          addServerLog({type:'info',msg:`📞 [IVR] כבר במצב "${m.name}" — זמן-החזרה רוענן (עוד ${durationMin} דק') ע"י מנהל (ID ${callerId})`,user:'IVR'});
+          return res.send(ymResponse(`כבר במצב ${m.name} — זמן-החזרה רוענן`));
+        }
+        addServerLog({type:'info',msg:`📞 [IVR] כבר במצב "${m.name}" (ללא-הגבלת-זמן) — אין מצב-קודם-ידוע, לא נוצר טיימר-חזרה`,user:'IVR'});
+        return res.send(ymResponse(`כבר במצב ${m.name}`));
+      }
+      return res.send(ymResponse(`כבר במצב ${m.name}`));
+    }
+    await commitAutoModeSwitch(m.id, `IVR — ID ${callerId}`);
+    if(durationMin>0){
+      armPendingRevertTimer(prevModeId, m.id, Date.now()+durationMin*60000);
+    }
+    addServerLog({type:'info',msg:`📞 [IVR] מעבר למצב "${m.name}"${durationMin>0?` למשך ${durationMin} דק'`:' (קבוע)'} ע"י מנהל (ID ${callerId})`,user:'IVR'});
+    return res.send(ymResponse(`עברת למצב ${m.name}${durationMin>0?`, למשך ${durationMin} דקות`:''}`));
+  }catch(err){return res.send(ymResponse('שגיאה בביצוע הפעולה, נסה שוב'));}
+}
+app.get('/yemot/mode', handleModeIvrRequest);
+app.get('/mode', handleModeIvrRequest);
+
 // גילינו (דרך רשת-הדיבוג למעלה) שימות לפעמים שולחת את הבקשה ל-"/" הגולמי, בלי-קשר-לנתיב
 // שהוגדר בפועל ב-api_link (סיבה לא ברורה בצד-ימות — אולי caching, אולי טיפול-לא-אמין בנתיבים).
 // כדי שהמערכת תעבוד **בכל מקרה**, בלי תלות בהתנהגות-הזו: "/" עצמו בודק את ה-query-parameters
@@ -2922,4 +3001,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 53;
+const IDX_BOTTOM_MARK = 54;
