@@ -10,7 +10,7 @@
 3. חפש **"Smart Home Jewish"** והתקן
 4. הגדר ב-**Configuration** (ראה להלן)
 5. לחץ **Start**
-6. פתח בדפדפן: `http://homeassistant.local:3000`
+6. פתח בדפדפן: `http://192.168.1.25:3000/smart_home_v3.html`
 
 ## הגדרות
 
