@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 54;
+const IDX_TOP_MARK = 56;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -179,13 +179,27 @@ let haToken = ''; // Long-Lived Access Token של HA
 let haUrl = 'http://homeassistant.local:8123'; // כתובת HA המקומית
 
 // שליחת פקודה ל-HA (POST /api/services/switch/turn_on וכו')
+// **תיקון-קריטי, מקור-הבאג-האמיתי-של-"fetch failed" שנמשך-כל-הלילה**: haUrl (ברירת-מחדל
+// http://homeassistant.local:8123) מבוסס mDNS (סיומת .local) — פרוטוקול-גילוי-ברשת שידוע-כשביר
+// אחרי שינוי-בממשק-הרשת (כבל-שנותק-וחובר-בחזרה) — הרזולוציה יכולה-להישאר-שבורה-לשעות, גם-אחרי-
+// שהרשת-הפיזית-עצמה כבר-חזרה (בדיוק מה שראינו בלוג: שגיאות-fetch נמשכות שעות אחרי שהכבל חזר).
+// הפתרון הרשמי-של-Home-Assistant לתקשורת-אד-און-מול-Core: http://supervisor/core/api — נתיב-
+// Docker-פנימי-טהור (לא-תלוי-ב-mDNS/רשת-פיזית-בכלל, כי זו-תקשורת-קונטיינר-לקונטיינר), עם טוקן
+// שכבר-מוזרק-אוטומטית ל-SUPERVISOR_TOKEN (env). דורש `homeassistant_api: true` ב-config.yaml של
+// האד-און (חובה-להוסיף-ידנית! בלעדיו הטוקן לא-יקבל-הרשאה ל-core/api). אם SUPERVISOR_TOKEN לא-קיים
+// (למשל הרצה-ידנית-מחוץ-לאד-און) — נופלים-בחזרה למנגנון-הישן (haUrl+haToken), בלי-לשבור-כלום.
+const SUPERVISOR_TOKEN = process.env.SUPERVISOR_TOKEN || null;
+function haApiBase() { return SUPERVISOR_TOKEN ? 'http://supervisor/core/api' : `${haUrl}/api`; }
+function haApiAuthToken() { return SUPERVISOR_TOKEN || haToken; }
+
 async function haCallService(domain, service, entityId) {
-  if (!haToken) throw new Error('לא הוגדר HA Token');
-  const url = `${haUrl}/api/services/${domain}/${service}`;
+  const token = haApiAuthToken();
+  if (!token) throw new Error('לא הוגדר HA Token');
+  const url = `${haApiBase()}/services/${domain}/${service}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${haToken}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ entity_id: entityId }),
@@ -199,9 +213,10 @@ async function haCallService(domain, service, entityId) {
 
 // קריאת מצב התקן מ-HA
 async function haGetState(entityId) {
-  if (!haToken) throw new Error('לא הוגדר HA Token');
-  const res = await fetch(`${haUrl}/api/states/${entityId}`, {
-    headers: { 'Authorization': `Bearer ${haToken}` }
+  const token = haApiAuthToken();
+  if (!token) throw new Error('לא הוגדר HA Token');
+  const res = await fetch(`${haApiBase()}/states/${entityId}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
   });
   if (!res.ok) throw new Error(`HA API שגיאה ${res.status}`);
   return res.json();
@@ -209,9 +224,10 @@ async function haGetState(entityId) {
 
 // רשימת כל ה-entities הניתנות לשליטה (switch.*, light.*, input_boolean.*, fan.*)
 async function haFetchAllStates() {
-  if (!haToken) throw new Error('לא הוגדר HA Token — הגדר בכרטיסיית התקנים');
-  const res = await fetch(`${haUrl}/api/states`, {
-    headers: { 'Authorization': `Bearer ${haToken}` }
+  const token = haApiAuthToken();
+  if (!token) throw new Error('לא הוגדר HA Token — הגדר בכרטיסיית התקנים');
+  const res = await fetch(`${haApiBase()}/states`, {
+    headers: { 'Authorization': `Bearer ${token}` }
   });
   if (!res.ok) {
     const txt = await res.text();
@@ -641,6 +657,28 @@ function connectMQTT() {
     // בעליית-התהליך) — זה בדיוק האיתות-בפועל ל"המערכת עלתה ומוכנה לשלוח פקודות אמיתיות". השהיה
     // קצרה נוספת (3 שניות) כדי לתת ל-subscribe/STATUS שנשלחו למעלה זמן-להתיישב, לא חובה אך זול-ובטוח.
     setTimeout(() => { runBootReconciliation(); }, 3000);
+    // **תיקון-קריטי-נוסף, נפרד מ-runBootReconciliation (שרצה פעם-אחת-בלבד)**: אם ה-MQTT-עצמו היה-
+    // מנותק בזמן שהשרת **נשאר-פעיל** (לא-קרס, לא-הופעל-מחדש — למשל כבל-רשת שנותק-וחובר-בחזרה) —
+    // פקודות ON/OFF שהיו-אמורות-להישלח באותו-חלון פשוט נכשלו בשקט. זה תרחיש-שונה-לגמרי מ"השרת-
+    // קרס" (ששם runBootReconciliation כן-מטפל), ולכן צריך מנגנון-נפרד שרץ **בכל** התחברות-מחדש,
+    // לא רק בעלייה-הראשונה. משתמשים באותה applyMissedRegularPrograms — בודקת-לפי-היסטוריה (שני-
+    // הכיוונים ON/OFF), בלי-תלות ב-_actuallyFired/_firedToday (שיכולים-להיות-מסומנים-שגוי בגלל
+    // הנסיון-שנכשל — ראו fireEvent).
+    if (_mqttDisconnectedAtMs !== null) {
+      const gapFrom = _mqttDisconnectedAtMs;
+      _mqttDisconnectedAtMs = null;
+      const gapMin = Math.round((Date.now()-gapFrom)/60000*10)/10;
+      addServerLog({ type: 'info', msg: `🔄 MQTT התחבר-מחדש אחרי ${gapMin} דקות ניתוק — בודק תוכניות שהוחמצו בזמן הניתוק`, user: 'מערכת' });
+      setTimeout(async () => {
+        try {
+          const res = applyMissedRegularPrograms(gapFrom, Date.now());
+          if (res && res.done) await res.done;
+          if (!res || !res.appliedCount) addServerLog({ type: 'info', msg: '✅ לא נמצאו תוכניות-שהוחמצו בזמן-הניתוק', user: 'מערכת' });
+        } catch (e) {
+          console.error('❌ שגיאה בבדיקת תוכניות-שהוחמצו (MQTT reconnect):', e.message);
+        }
+      }, 3500); // אחרי runBootReconciliation (3000), כדי לא-להתנגש אם שתיהן-רצות (עלייה-ראשונה)
+    }
   });
 
   mqttClient.on('message', (topic, message) => {
@@ -742,8 +780,8 @@ function connectMQTT() {
     }
   });
 
-  mqttClient.on('error', (e) => { mqttConnected = false; io.emit('mqtt_status', { connected: false }); });
-  mqttClient.on('close', () => { mqttConnected = false; io.emit('mqtt_status', { connected: false }); });
+  mqttClient.on('error', (e) => { mqttConnected = false; if (_mqttDisconnectedAtMs === null) _mqttDisconnectedAtMs = Date.now(); io.emit('mqtt_status', { connected: false }); });
+  mqttClient.on('close', () => { mqttConnected = false; if (_mqttDisconnectedAtMs === null) _mqttDisconnectedAtMs = Date.now(); io.emit('mqtt_status', { connected: false }); });
 }
 
 const _lastCommandOrigin = {};
@@ -1836,8 +1874,13 @@ function simulateScheduleRange(fromDateStr, toDateStr, simModeId){
 
 function fireEvent(event,todayKey){
   const{relayId,action,name}=event;
-  if(!event.isEndEvent) _actuallyFired.add(`${event.progId}_${relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_start_${todayKey}`);
+  // **תיקון-קריטי**: לפני, _actuallyFired הייתה מסומנת כאן — **לפני** נסיון-הפרסום בכלל, בלי-קשר-
+  // להצלחה. אם ה-MQTT היה מנותק (למשל כבל-רשת שנותק זמנית) — publishRelay נכשל, אבל האירוע כבר-
+  // סומן "בוצע-בפועל" — ולכן: (א) הכיבוי-הטבעי-לפי-משך (isEndEvent) שתלוי-בסימון-הזה לא-היה-מדלג
+  // כמצופה (חושב שההתחלה-כן-קרתה), ו-(ב) שום-מנגנון לא-ניסה-שוב את-האירוע-הזה, כי הוא נחשב "טופל".
+  // עכשיו: מסמנים **רק אחרי** שהפרסום-בפועל הצליח.
   const pub = publishRelay(relayId,action).then(()=>{
+    if(!event.isEndEvent) _actuallyFired.add(`${event.progId}_${relayId}_${event.segType}_${event.cycleIdx??'x'}_${event.fireSec}_start_${todayKey}`);
     io.emit('scheduler_fired',{progName:name,relayId,action});
     if(action==='ON'){
       const existing=relayOwner[relayId];
@@ -1848,7 +1891,12 @@ function fireEvent(event,todayKey){
     } else if(relayOwner[relayId]){delete relayOwner[relayId];} // כל כיבוי שמגיע לכאן כבר עבר את checkRelayOwnerBlock (או שזו תוכנית הכיבוי של עצמה) — הממסר כבוי בפועל, אז אין יותר "בעלים", ללא קשר לאיזו תוכנית ביצעה את הכיבוי
     if(event.isEndEvent) addServerLog({type:'info',msg:`[למשך] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
     else addServerLog({type:'info',msg:`[תזמון] "${name}" — ממסר ${relayId} → ${action}`,user:'מערכת'});
-  }).catch(err=>console.error(`❌ שגיאה ממסר ${relayId}:`,err.message));
+  }).catch(err=>{
+    // תיקון: היה רק console.error (נראה רק ביומן-השרת עצמו, לעולם לא בממשק) — עכשיו נראה גם
+    // ביומן-הראשי, כדי שכשל-פרסום (בעיקר MQTT-מנותק) לא-ייעלם בשקט-מוחלט.
+    console.error(`❌ שגיאה ממסר ${relayId}:`,err.message);
+    addServerLog({type:'danger',msg:`❌ נכשל שליחה: "${name}" — ממסר ${relayId} → ${action} (${err.message}) — יתוקן-אוטומטית כשה-MQTT יתחבר-מחדש`,user:'מערכת'});
+  });
   _pendingPublish[relayId] = pub;
   return pub;
 }
@@ -2544,6 +2592,12 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
 
 
 let _hasRunBootReconciliation = false;
+// **תיקון-קריטי-נוסף**: זמן-הניתוק-האחרון של MQTT (לא-של-השרת!) — נחוץ כי runBootReconciliation
+// רץ **פעם-אחת-בלבד** (בעליית-התהליך האמיתית). אם השרת **נשאר-פעיל** (התהליך-עצמו לא-קרס/הופעל-
+// מחדש) אבל ה-MQTT-broker היה-לא-נגיש (כבל-רשת-שנותק-זמנית, MQTT-restart וכו') — פקודות ON/OFF
+// שהיו-אמורות-להישלח **נכשלות בשקט** (publishRelay דוחה, ורק console.error, לא-נראה-בממשק) —
+// ואף-מנגנון לא-תפס-את-זה עד עכשיו, כי runBootReconciliation לא-רץ-שוב. ראו handler 'connect'.
+let _mqttDisconnectedAtMs = null;
 // משחזרת את relayOwner (הנהלת-חשבונות בזיכרון-בלבד — **לא** שולחת שום פקודת-MQTT) מול המצב-הנכון-
 // עכשיו, לכל ממסר עם היסטוריית-אירועים, לא רק ממסרים עם אירוע בתוך פער-מסוים. רצה **תמיד** בעלייה
 // (ראו runBootReconciliation) כי relayOwner נמחקת-לגמרי בכל הפעלה-מחדש, ובלי זה, ממסר שהיה כבר-
@@ -3001,4 +3055,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 54;
+const IDX_BOTTOM_MARK = 56;
