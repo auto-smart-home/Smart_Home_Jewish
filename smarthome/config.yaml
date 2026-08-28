@@ -1,5 +1,5 @@
 name: "Smart Home Jewish"
-version: "1.0.1"
+version: "1.0.2"
 slug: "smarthome_jewish"
 description: "ממשק בקרה לבית חכם — עם תיזמון עברי ו-Home Assistant"
 url: "https://github.com/auto-smart-home/Smart_Home_Jewish"
@@ -10,6 +10,7 @@ arch:
   - armv7
 startup: application
 boot: auto
+homeassistant_api: true
 ports:
   3000/tcp: 3000
 ports_description:
