@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 56;
+const IDX_TOP_MARK = 57;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -3050,9 +3050,16 @@ process.on('unhandledRejection', (reason, promise) => {
   connectMQTT();
   server.listen(PORT, () => {
     console.log(`\n🏠 שרת בית חכם (גרסה מקומית) פועל על פורט ${PORT}\n`);
+    // **אישור-הפעלה גלוי, לא-רק-בקונסולה**: מציג-מיד באיזה-נתיב-בפועל נעשה שימוש לתקשורת מול-HA —
+    // כדי שיהיה-ניתן-לוודא-שהתיקון (supervisor/core/api, לא-mDNS) פעיל, בלי-לחכות-לתקלת-רשת-הבאה.
+    if (SUPERVISOR_TOKEN) {
+      addServerLog({ type: 'info', msg: '✅ תקשורת-HA דרך הנתיב-הפנימי (supervisor/core/api) — לא-תלוי ב-mDNS/רשת-פיזית', user: 'מערכת' });
+    } else {
+      addServerLog({ type: 'warning', msg: `⚠️ SUPERVISOR_TOKEN לא-נמצא — משתמש בנתיב-הישן (${haUrl}) — וודא ש-homeassistant_api: true קיים ב-config.yaml`, user: 'מערכת' });
+    }
   });
 })();
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 56;
+const IDX_BOTTOM_MARK = 57;
