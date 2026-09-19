@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 57;
+const IDX_TOP_MARK = 58;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2559,13 +2559,36 @@ function applyMissedRegularPrograms(gapFromMs, nowMs) {
   allEvents.forEach(e => { if (e._epochMs > gapFromMs && e._epochMs <= nowMs) relaysInGap.add(e.relayId); });
   if (!relaysInGap.size) return { appliedCount: 0 };
 
+  // **תיקון-קריטי**: לפני, כל ממסר (כולל ממסרי-תוכניות-בת) חושב בנפרד-לגמרי — "האירוע-האחרון-
+  // כרונולוגית מנצח", בלי-שום-קשר לתוכנית-האם-שלו. הבעיה: כשכמה תוכניות-אם-מתחרות (למשל "ליל שבת"
+  // ו"יום שבת", שתיהן-שייכות-לאותו-מצב אבל בזמנים-שונים) על **אותו** ממסר-פיזי (בדיוק כמו שלט-מזגן
+  // אחד עם כמה כפתורים) — לממסר-האם יש תחרות-ישירה (וזה כבר-עבד-נכון, כי שתי-התוכניות-האם מתחרות-
+  // על-**אותו**-ממסר). אבל לממסר-**הבת** המשותף (למשל שני "תוכניות-בת" שונות, כל-אחת-שייכת-לאם-
+  // אחרת, אבל שתיהן-מכוונות-לאותו-ממסר) — האירוע-האחרון-כרונולוגית של-תוכנית-הבת-**הלא-רלוונטית**
+  // (ששייכת-לאם-שכבר-הפסידה) יכול לנצח בטעות, ולשלוח פקודה-סותרת מיד-אחרי-שהאם-הנכונה-כבר-נשלחה.
+  // התיקון: פותרים-קודם אילו-תוכניות-**אם** מנצחות (ללא parentProgId) — ואז, בבדיקת-ממסר-של-תוכנית-
+  // בת, מסננים-החוצה כל אירוע ששייך לתוכנית-בת שההורה-שלה **לא**-בין-המנצחות.
+  const parentProgIds = new Set(schedulerPrograms.filter(p => !p.parentProgId).map(p => p.id));
+  const winningParentIds = new Set();
+  for (const relayId of relaysInGap) {
+    const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs && parentProgIds.has(e.progId));
+    if (!relayEvents.length) continue;
+    relayEvents.sort((a,b) => a._epochMs - b._epochMs);
+    winningParentIds.add(relayEvents[relayEvents.length-1].progId);
+  }
+  const childParentMap = {}; // progId (של-תוכנית-בת) -> parentProgId שלה
+  schedulerPrograms.forEach(p => { if (p.parentProgId) childParentMap[p.id] = p.parentProgId; });
+
   // חשוב: appliedCount נקבע כאן, **מיד וסינכרונית** — לא בתוך ה-callback המתוזמן-בפיזור (runStaggered
   // תמיד דוחה דרך setTimeout, אפילו עם 0 מילישניות, אז כל ניסיון-לספור-שם היה תמיד נותן 0 בזמן
   // שה-return מתבצע, גם כשבפועל כן נשלחות פקודות-תיקון רגע-אחר-כך — בדיוק ההודעה-המטעה שנצפתה ביומן).
   const appliedCount = relaysInGap.size;
   const _catchupTodayKey = todayKey;
   const done = runSequential([...relaysInGap], async relayId => {
-    const relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
+    let relayEvents = allEvents.filter(e => e.relayId === relayId && e._epochMs <= nowMs);
+    // מסננים-החוצה אירועי-תוכנית-בת ששייכים-להורה-שהפסיד (ראו הסבר למעלה) — אירועי-תוכנית-אם
+    // עצמם (parentProgIds) לא-מושפעים, הם-כבר-מתחרים-נכון-ביניהם-עצמם.
+    relayEvents = relayEvents.filter(e => !childParentMap[e.progId] || winningParentIds.has(childParentMap[e.progId]));
     if (!relayEvents.length) return;
     relayEvents.sort((a,b) => a._epochMs - b._epochMs);
     const last = relayEvents[relayEvents.length - 1];
@@ -3062,4 +3085,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 57;
+const IDX_BOTTOM_MARK = 58;
