@@ -1,5 +1,5 @@
 name: "Smart Home Jewish"
-version: "1.0.2"
+version: "1.0.3"
 slug: "smarthome_jewish"
 description: "ממשק בקרה לבית חכם — עם תיזמון עברי ו-Home Assistant"
 url: "https://github.com/auto-smart-home/Smart_Home_Jewish"
@@ -24,6 +24,7 @@ options:
   yemot_api_token: ""
   yemot_api_link_url: ""
   admin_password: ""
+  anthropic_api_key: ""
   github_repo: "auto-smart-home/Smart_Home_Jewish"
   controllers: []
 schema:
@@ -33,6 +34,7 @@ schema:
   yemot_api_token: str
   yemot_api_link_url: str
   admin_password: str
+  anthropic_api_key: str
   github_repo: str
   controllers:
     - id: str
