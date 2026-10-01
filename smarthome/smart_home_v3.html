@@ -1064,7 +1064,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 109;
+const BUILD_TOP_MARK = 110;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -4193,11 +4193,19 @@ function renderTimelineMinimal(){
     // היום תישאר דביקה-אופקית בתוך מיכל-הגלילה-האופקי (tl-min-content-wrap) ולא תיעלם בגלילה-אופקית.
     // width:fit-content כדי שהריבוע-הדביק יהיה בגודל-התוכן בלבד (לא יתפרס על כל רוחב-השורה), ו-
     // z-index גבוה מהבלוקים (שמגיעים עד 20, ראו si%20 למטה) כדי שתמיד יישאר מעליהם.
-    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap;position:sticky;right:0;z-index:30;width:fit-content">
-      <span class="${lblClass}">${DAYS_FULL[di]}</span>
-      <span class="${subClass}" style="font-weight:600">${latDate}</span>
-      ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
-      ${badgeHtml}
+    // **תיקון**: ה-sticky+width:fit-content חייב להיות על שכבה **פנימית** בלבד (תיבת-הטקסט), לא על
+    // האלמנט-שנושא-את-הרקע-הצבעוני — אחרת (כמו-שקרה) הרקע-הצבעוני-עצמו מצטמצם ל-fit-content, ורוב-
+    // רוחב-השורה (מתחת-לעמודות-הממסרים, משמאל) נשאר-לבן בלי-רקע בכלל. לכן: עטיפה-חיצונית ברוחב-מלא
+    // (לא-sticky, נושאת-את-hdrClass כדי-שהרקע-יכסה-את-כל-רוחב-היום), ובתוכה תיבה-פנימית דביקה-
+    // ואופקית (fit-content) עם-אותו-רקע-בדיוק (background:inherit — מעתיקה את-הצבע-המחושב-של-
+    // ההורה) כדי-שהתיבה-הצפה תישאר-קריאה מעל-הבלוקים שמתחתיה.
+    html += `<div class="${hdrClass}" style="padding:5px 0;white-space:nowrap">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 16px;position:sticky;right:0;z-index:30;width:fit-content;background:inherit">
+        <span class="${lblClass}">${DAYS_FULL[di]}</span>
+        <span class="${subClass}" style="font-weight:600">${latDate}</span>
+        ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
+        ${badgeHtml}
+      </div>
     </div>`;
 
     const dayStartMs = rangeStartMs + dIdx*86400000; // חצות של היום הזה בדיוק
@@ -5770,7 +5778,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 109;
+BUILD_BOTTOM_MARK = 110;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
