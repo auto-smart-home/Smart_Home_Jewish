@@ -1064,7 +1064,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 108;
+const BUILD_TOP_MARK = 109;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1233,6 +1233,21 @@ let currentUser = null; // המשתמש המחובר כרגע — מגיע מה�
 let serverConfig = {}; // הגדרות שרת (quickActions וכו')
 let _scheduledModes = []; // תזמוני החלפת מצב
 let _externalTriggers = []; // טריגרים-חיצוניים (כפתורי-קיר/מתגי-סצנה zigbee)
+// ═══ "דגל-לכלוך" לציר-הזמן — כדי שמעבר לטאב "ציר זמן" יהיה מיידי כשאין-צורך-אמיתי-בחישוב-מחדש ═══
+// לפני התיקון: כניסה לטאב תמיד הפעילה renderTimeline() מחדש (חישוב כבד), ומצד-שני כמה נתיבי-עדכון
+// (בעיקר שמירת תזמוני-מצב) לא קראו ל-renderTimeline() בכלל — כך שגם כשכבר היו בטאב-ציר-הזמן, עדכון
+// בתזמון-מצב לא התעדכן בציר עד-שיוצאים-ונכנסים-שוב (או לוחצים-שוב על כפתור-הטאב, מה שבפועל-אילץ
+// renderTimeline() מחדש). markTimelineDirty() היא עכשיו הנקודה-היחידה שכל-מקום-שמשנה-תוכניות/תזמוני-
+// מצב קורא-לה: אם הטאב כרגע פעיל — מרעננת-מיד (בדיוק כמו-שהיה), ובכל מקרה מסמנת "מלוכלך" כדי ש-
+// showTab ידע אם-צריך לחשב-מחדש בכניסה הבאה, או שאפשר-להיכנס-מיד בלי-עיכוב כי-כלום-לא-השתנה.
+let _timelineDirty = true; // true בהתחלה — הכניסה-הראשונה-אי-פעם לציר-הזמן תמיד-חייבת-לחשב
+function markTimelineDirty(){
+  _timelineDirty = true;
+  if (document.getElementById('tab-timeline')?.classList.contains('active') && typeof renderTimeline === 'function') {
+    renderTimeline();
+    _timelineDirty = false;
+  }
+}
 let _triggerLearnActive = false;
 let mqttClient = null;
 let socket = null;
@@ -1485,7 +1500,7 @@ function connectMQTT() {
       }
     });
     _relayEventsCache = {};
-    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    markTimelineDirty();
   });
   socket.on('relay_state', ({ id, state }) => {
     updateRelayUI(id, state === 'ON');
@@ -1493,7 +1508,7 @@ function connectMQTT() {
   // אירועי IVR של היום (לא היסטוריה רב-יומית, ולא תלוי אם דפדפן היה פתוח כשהפעולה קרתה)
   socket.on('ivr_today_events', (timers) => {
     rebuildIvrManualEvents(timers);
-    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    markTimelineDirty();
   });
   // עדכון תוכנית מהשרת (למשל ביטול אוטומטי של "חד פעמי")
   socket.on('sync_ack', ({ count, firedRunOnceToday: fired }) => {
@@ -1501,7 +1516,7 @@ function connectMQTT() {
     // קבל תוכניות runOnce שפעלו היום מהשרת
     if (fired && fired.length) {
       fired.forEach(p => { _firedRunOnceToday[p.id] = { ...p, _firedDone: true }; });
-      if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+      markTimelineDirty();
     }
     // אם יש ייבוא ממתין — בצע אותו עכשיו
     if (_importPending) {
@@ -1516,7 +1531,7 @@ function connectMQTT() {
       p.active = active;
       if (p.runOnce) markRunOnceFired(p);
       renderPrograms(); renderRelays();
-      if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+      markTimelineDirty();
       saveLS();
       addLog('info', `[חד פעמי] תוכנית "${p.name}" בוטלה אוטומטית אחרי הפעלה (עודכן מהשרת)`);
     }
@@ -1572,13 +1587,13 @@ function connectMQTT() {
   // זמנים הלכתיים אמיתיים מהשרת — ראו getProgMinutes ותיקון ה-19:20 הקשיח
   socket.on('zmanim_today', (z) => {
     serverZmanim = z || {};
-    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    markTimelineDirty();
   });
 
   // טיימר-חזרה ממתין (אם יש) — נחוץ לסימולציית ציר-הזמן כדי להתחיל מנקודה מדויקת "מעכשיו"
   socket.on('pending_mode_revert', (info) => {
     serverPendingRevert = info || null;
-    if (typeof renderTimeline === 'function' && document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    markTimelineDirty();
   });
 
   socket.on('server_build_marks', (marks) => {
@@ -1596,10 +1611,16 @@ function connectMQTT() {
   socket.on('scheduled_modes', (modes) => {
     _scheduledModes = modes || [];
     renderScheduledModes();
+    // **תיקון**: תזמוני-מצב משפיעים-ישירות על computeModeSegments/findNextModeTransitionAwayMs,
+    // שהציר-כולו-תלוי-בהם — עד-עכשיו עדכון-כאן לא-סימן את הציר "מלוכלך" בכלל, כך שגם-אם-היינו-
+    // כבר בטאב-ציר-הזמן, תזמון-מצב-שהתעדכן (למשל ממשתמש-אחר, או מהשרת) לא-הופיע-בציר עד-שיוצאים-
+    // ונכנסים-שוב. ראה דיון-ממסר-29 ("צריך שכאשר מתבצע עדכון... מיד יתבצע עדכון ברקע").
+    markTimelineDirty();
   });
 
   socket.on('scheduled_modes_saved', ({ ok, count }) => {
     if (ok) toast(`✅ ${count} תזמוני מצב נשמרו`);
+    if (ok) markTimelineDirty();
   });
 
   socket.on('external_triggers', (triggers) => {
@@ -1619,7 +1640,7 @@ function connectMQTT() {
   socket.on('mode_changed', ({ newModeId, label }) => {
     activeModeId = newModeId;
     renderModes(); renderPrograms(); renderRelays();
-    if (document.getElementById('tab-timeline')?.classList.contains('active')) renderTimeline();
+    markTimelineDirty();
     saveLS();
     // ⚠️ לא מוסיפים כאן addLog — הרישום ליומן כבר מגיע מהשרת דרך 'log_broadcast'
     // (addServerLog בתוך commitAutoModeSwitch). הוספה כאן גרמה לכפילות בשורת היומן.
@@ -2006,7 +2027,7 @@ function updateZmanimBarExtras(){
     const hEl=document.getElementById('z-havdalah');
     if(hEl) hEl.textContent = nextHavdalah ? `${nextHavdalah.time} · ${fmtNextDateLabel(nextHavdalah.date,now)}${nextHavdalah.label?' · '+nextHavdalah.label:''}` : '—';
     // אם ציר-הזמן פתוח כרגע וקודם רץ בלי נתוני-לוח (calendar_data.js עוד לא היה מוכן) — רענן אותו עכשיו
-    if (document.getElementById('tab-timeline')?.classList.contains('active') && typeof renderTimeline==='function') renderTimeline();
+    markTimelineDirty();
   } catch(e) {
     console.error('❌ updateZmanimBarExtras נכשל:', e);
     if (typeof addLog === 'function') addLog('danger', `❌ שגיאה בחישוב הדלקת נרות/הבדלה: ${e.message}`);
@@ -2394,7 +2415,7 @@ function commitModeSwitch(newModeId, turnOffRelayIds, activateProgIds){
   socket.emit('confirm_mode_switch', { newModeId, turnOffRelayIds, activateProgIds });
   activeModeId = newModeId;
   renderModes();renderPrograms();renderRelays();
-  if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+  markTimelineDirty();
   saveLS();
   toast('מצב פעיל: '+(modes.find(m=>m.id===newModeId)?.name||''));
 }
@@ -2484,7 +2505,7 @@ function saveRelayName(id,name){
     toast('אינך מורשה לשנות שמות ממסרים');return;
   }
   const r=relays.find(x=>x.id===id);
-  if(r){r.name=name;renderPrograms();renderTimeline();saveLS();}
+  if(r){r.name=name;renderPrograms();markTimelineDirty();saveLS();}
 }
 function highlightRelayProgs(relayId){
   setTimeout(()=>{
@@ -2777,7 +2798,7 @@ function toggleProgActive(id){
     }
     addLog('info', `תוכנית "${p.name}" — ${p.active ? 'הופעלה ✅' : 'הושבתה ⏸'}`);
     renderPrograms();renderRelays();saveLS();
-    if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+    markTimelineDirty();
   }
 }
 function deleteProg(id){
@@ -2792,7 +2813,7 @@ function deleteProg(id){
     if(ci>-1)programs.splice(ci,1);
   }
   const i=programs.findIndex(x=>x.id===id);
-  if(i>-1){programs.splice(i,1);renderPrograms();renderRelays();if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();saveLS();syncProgramsToServer();}
+  if(i>-1){programs.splice(i,1);renderPrograms();renderRelays();markTimelineDirty();saveLS();syncProgramsToServer();}
 }
 function toggleSelectMode(){
   selectMode=!selectMode;
@@ -2859,7 +2880,7 @@ function bulkSetActive(active){
   });
   if(n) addLog('info', `${n} תוכניות ${active?'הופעלו ✅':'הושבתו ⏸'} (פעולה מרובה)`);
   renderPrograms();renderRelays();saveLS();
-  if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+  markTimelineDirty();
   toast(`${n} תוכניות עודכנו`);
 }
 function bulkSetIvr(ivr){
@@ -2898,7 +2919,7 @@ function bulkDelete(){
   selectedProgIds.clear();
   if(n) addLog('danger', `${n} תוכניות נמחקו (פעולה מרובה)`);
   renderPrograms();renderRelays();
-  if(document.getElementById('tab-timeline')?.classList.contains('active'))renderTimeline();
+  markTimelineDirty();
   saveLS();syncProgramsToServer();
   toast(`${n} תוכניות נמחקו`);
 }
@@ -3256,7 +3277,7 @@ function saveProgram(){
     applyChildProgram(data,childData,null);
   }
   renderPrograms();renderRelays();renderModes();
-  if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+  markTimelineDirty();
   saveLS();closeModal();
   syncProgramsToServer();
   toast(editingProgId?'תוכנית עודכנה':'תוכנית נשמרה');
@@ -3294,7 +3315,7 @@ function importJSON(ev){
         _scheduledModes=d.scheduledModes;
         socket.emit('save_scheduled_modes',_scheduledModes);
       }
-      renderAll();renderTimeline();
+      renderAll();renderTimeline();_timelineDirty=false;
       // בדוק התנגשויות בעלות-OFF מדויקות (אותו אלגוריתם כמו ב-runtime ובבאנר):
       // 1) שתי תוכניות priority שמתנגשות זו בזו — אין הכרעה אוטומטית; משביתים את שתיהן
       //    כדי לא להשאיר התנהגות לא-צפויה, ומבקשים תיקון ידני.
@@ -3315,7 +3336,7 @@ function importJSON(ev){
         const rNames = cf.sharedR.map(id=>relayName(id)).join(', ');
         addLog('warning', `[ייבוא] שתי תוכניות עדיפות מתנגשות הושבתו אוטומטית: #${cf.a.seqId} "${cf.a.name}" ↔ #${cf.b.seqId} "${cf.b.name}" על ${rNames} — יש לתקן ידנית (להסיר עדיפות מאחת או לשנות זמנים) ולהפעיל מחדש`);
       });
-      if (disabledIds.size) { saveLS(); renderAll(); renderTimeline(); }
+      if (disabledIds.size) { saveLS(); renderAll(); renderTimeline(); _timelineDirty=false; }
 
       if (nonPrioConflicts.length) {
         nonPrioConflicts.forEach(cf=>{
@@ -3364,7 +3385,7 @@ function setTlRange(days){
   from.value = fmt(p.year, p.month, p.day);
   const end=new Date(p.year, p.month-1, p.day); end.setDate(end.getDate()+days-1);
   to.value = fmt(end.getFullYear(), end.getMonth()+1, end.getDate());
-  renderTimeline();
+  renderTimeline();_timelineDirty=false;
 }
 function getTlDates(){
   const fEl=document.getElementById('tl-from-date');
@@ -3624,7 +3645,7 @@ function addManualEvent(relayId, state, source, durationMin=null) {
     if (manualEvents[i].date < cutoffKey) manualEvents.splice(i,1);
   }
   _relayEventsCache = {};
-  renderTimeline();
+  markTimelineDirty();
 }
 
 // ── סנכרון אירועי IVR ל-Timeline ──────────────────────────
@@ -3872,7 +3893,7 @@ function toggleMinimalView(){
   // כדי שכותרת-שמות-הממסרים תוכל לתפוס בדיוק את אותו מקום (מיד אחרי פס-הזמנים) בלי התנגשות.
   const tabsEl = document.querySelector('.tabs');
   if(tabsEl) tabsEl.style.position = minimalViewMode ? 'static' : '';
-  renderTimeline();
+  renderTimeline();_timelineDirty=false;
 }
 function fmtEpochHM(ms){
   const p = getIsraelParts(new Date(ms));
@@ -4168,7 +4189,11 @@ function renderTimelineMinimal(){
     const hdrClass = (isShabbat||chag) ? 'tl-day-header-shabbat' : isSpecial ? 'tl-day-header-special' : 'tl-day-header-normal';
     const lblClass = (isShabbat||chag) ? 'tl-day-label-shabbat' : isSpecial ? 'tl-day-label-special' : 'tl-day-label-normal';
     const subClass = (isShabbat||chag) ? 'tl-day-sub-shabbat' : isSpecial ? 'tl-day-sub-special' : 'tl-day-sub-normal';
-    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap">
+    // position:sticky;right:0 — בדיוק כמו תא-הכותרת-הימני בתצוגה הרגילה (hdrCells שם) — כדי שכותרת-
+    // היום תישאר דביקה-אופקית בתוך מיכל-הגלילה-האופקי (tl-min-content-wrap) ולא תיעלם בגלילה-אופקית.
+    // width:fit-content כדי שהריבוע-הדביק יהיה בגודל-התוכן בלבד (לא יתפרס על כל רוחב-השורה), ו-
+    // z-index גבוה מהבלוקים (שמגיעים עד 20, ראו si%20 למטה) כדי שתמיד יישאר מעליהם.
+    html += `<div class="${hdrClass}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 16px;white-space:nowrap;position:sticky;right:0;z-index:30;width:fit-content">
       <span class="${lblClass}">${DAYS_FULL[di]}</span>
       <span class="${subClass}" style="font-weight:600">${latDate}</span>
       ${hebDate?`<span class="${subClass}">${hebDate}</span>`:''}
@@ -4514,7 +4539,7 @@ function schedulerTick(){
         p.active = false;
         addLog('info', `[חד פעמי] תוכנית #${p.seqId} "${p.name}" בוטלה אוטומטית אחרי הפעלה`);
         renderPrograms();renderRelays();
-        if(document.getElementById('tab-timeline').classList.contains('active'))renderTimeline();
+        markTimelineDirty();
         saveLS();
         syncProgramsToServer();
       }
@@ -5126,7 +5151,12 @@ function showTab(name,btn){
       if(t.getAttribute('onclick')&&t.getAttribute('onclick').includes("'"+name+"'"))t.classList.add('active');
     });
   }
-  if(name==='timeline')renderTimeline();
+  // **תיקון**: לפני כן renderTimeline() נקרא כאן תמיד-ללא-תנאי — כניסה לטאב-ציר-הזמן תמיד-חישבה-
+  // מחדש, גם כשכלום-לא-השתנה-מאז-הפעם-הקודמת (מה שגרם לעיכוב-מיותר בכניסה). עכשיו, כל-מקום-שבאמת-
+  // משנה-תוכניות/תזמוני-מצב כבר-מסמן _timelineDirty (דרך markTimelineDirty(), ראו למעלה ליד
+  // ההגדרה) — כך שאם-כלום-לא-השתנה, הכניסה-לטאב מיידית (ה-DOM-הקיים כבר-עדכני), ורק-אם-יש-שינוי
+  // אמיתי מחשבים-מחדש.
+  if(name==='timeline' && _timelineDirty){ renderTimeline(); _timelineDirty=false; }
   if(name==='users')renderUsers();
   if(name==='modes')renderModes();
   if(name==='ivr')renderIvrUsers();
@@ -5740,7 +5770,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 108;
+BUILD_BOTTOM_MARK = 109;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
