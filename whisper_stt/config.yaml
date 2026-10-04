@@ -1,6 +1,7 @@
 name: "Whisper STT (תמלול קול)"
-version: "1.0.0"
+version: "1.0.1"
 slug: "whisper_stt"
+init: false
 description: "שירות תמלול-קול עצמאי (Whisper) עם REST API פשוט — תומך בעברית, לשימוש ע\"י Smart Home Jewish לשליטה קולית"
 url: "https://github.com/auto-smart-home/Smart_Home_Jewish"
 arch:
