@@ -1078,7 +1078,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 112;
+const BUILD_TOP_MARK = 113;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1651,6 +1651,13 @@ function connectMQTT() {
     } else if (action.action === 'mode') {
       const modeName = modes.find(m => m.id === action.modeId)?.name || `מצב ${action.modeId}`;
       pretty += `מצב: ${modeName} (${action.modeId})\nמשך: ${action.durationMin ? action.durationMin + ' דקות' : 'קבוע'}\n`;
+    } else if (action.action === 'status') {
+      pretty += `טווח: ${action.statusScope === 'all' ? 'כל הבית' : 'ממסר ספציפי'}\nסוג-שאלה: ${action.statusKind === 'history' ? 'היסטוריה' : 'מצב-נוכחי'}\n`;
+      if (action.statusScope === 'specific') {
+        const relayName = relays.find(r => r.id === action.relayId)?.name || `ממסר ${action.relayId}`;
+        pretty += `ממסר: ${relayName} (${action.relayId})\n`;
+      }
+      pretty += `\n📋 תשובה בפועל: ${action.statusAnswer || '(לא התקבלה תשובה)'}\n`;
     } else if (action.action === 'unclear') {
       pretty += `⚠️ לא ברור: ${action.clarificationNeeded || ''}\n`;
     }
@@ -5836,7 +5843,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 112;
+BUILD_BOTTOM_MARK = 113;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
