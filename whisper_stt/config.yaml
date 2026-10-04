@@ -1,0 +1,20 @@
+name: "Whisper STT (תמלול קול)"
+version: "1.0.0"
+slug: "whisper_stt"
+description: "שירות תמלול-קול עצמאי (Whisper) עם REST API פשוט — תומך בעברית, לשימוש ע\"י Smart Home Jewish לשליטה קולית"
+url: "https://github.com/auto-smart-home/Smart_Home_Jewish"
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+ports:
+  9000/tcp: 9000
+ports_description:
+  9000/tcp: "REST API לתמלול (POST /asr)"
+options:
+  asr_model: "small"
+  asr_engine: "faster_whisper"
+schema:
+  asr_model: list(tiny|base|small|medium|large-v2|large-v3)
+  asr_engine: list(openai_whisper|faster_whisper)
