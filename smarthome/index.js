@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 58;
+const IDX_TOP_MARK = 59;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -319,6 +319,78 @@ async function yemotAddPhoneToWhitelist(templateId, phone) {
 }
 
 function normalizePhoneDigits(p) { return (p || '').replace(/\D/g, ''); }
+
+// ── שליטה-קולית ע"י קלוד (Anthropic API) ─────────────────
+// המפתח מגיע משדה-התצורה anthropic_api_key (config.yaml) — run.sh כבר מזריק את כל שדות-התצורה
+// כמשתני-סביבה באותה-מוסכמה בדיוק (yemot_api_token→YEMOT_API_TOKEN וכו'), אז אין צורך בשום שינוי
+// נוסף ב-run.sh/Dockerfile — process.env.ANTHROPIC_API_KEY כבר מאוכלס אוטומטית ברגע שמוזן בהגדרות.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+// קורא ל-Claude עם הטקסט-המתומלל (מהקלטת-הטלפון, או טקסט-בדיקה-ישיר מ-test_voice_intent) ומחזיר
+// אובייקט-פעולה **מובנה** (לא טקסט-חופשי!) — באמצעות tool_use עם tool_choice כפוי, כדי שהתשובה
+// תמיד תהיה JSON תקין שניתן להריץ ישירות, בלי לנתח-טקסט-חופשי (שעלול להשתבש/להיות מעורפל).
+async function callClaudeForIntent(text) {
+  if (!ANTHROPIC_API_KEY) throw new Error('חסר ANTHROPIC_API_KEY — הגדר בהגדרות-האד-און');
+  const relayList = Object.entries(schedulerRelayNames)
+    .map(([id, name]) => `${id}: ${name}`).join('\n');
+  const modeList = (modes || []).map(m => `${m.id}: ${m.name}`).join('\n');
+  const systemPrompt = `אתה עוזר-קולי לבית-חכם יהודי. המשתמש מדבר-בעברית-חופשית וטבעית, לא-בפקודות-פורמליות.
+תפקידך: לזהות **פעולה-אחת** מהרשימה שלמטה, ולמלא את-הפרטים המדויקים — **לא** לשוחח, **רק** לקרוא-לכלי smart_home_action פעם-אחת.
+
+רשימת-הממסרים (מזהה: שם):
+${relayList}
+
+רשימת-המצבים (מזהה: שם):
+${modeList}
+
+הנחיות:
+- אם המשתמש מזכיר חדר/מכשיר בשם-חופשי (למשל "המזגן של הילדים", "האור בסלון") — התאם לממסר-הכי-מתאים מהרשימה, לפי-השם.
+- אם המשתמש מבקש "לשעה"/"לחצי שעה" וכו' — חשב durationMin בדקות. אם לא-צוין-משך — durationMin=0 (קבוע).
+- אם הבקשה **לא-ברורה** (לא-ניתן-להתאים-בביטחון-סביר לממסר/מצב מסוים) — action="unclear", עם clarificationNeeded שמסביר-מה-חסר.
+- confirmationText תמיד חובה — משפט-קצר-בעברית-טבעית שיוקרא-בטלפון (למשל "מדליק את המזגן בחדר הורים").`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 500,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: text }],
+      tools: [{
+        name: 'smart_home_action',
+        description: 'ביצוע פעולה בבית החכם, לפי-הבקשה-של-המשתמש',
+        input_schema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['relay', 'mode', 'status', 'unclear'], description: 'סוג-הפעולה' },
+            relayId: { type: 'integer', description: 'מזהה-הממסר (רק אם action=relay או status)' },
+            state: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=relay' },
+            durationMin: { type: 'integer', description: 'משך-בדקות, 0=קבוע (רק אם action=relay או mode)' },
+            modeId: { type: 'integer', description: 'מזהה-המצב (רק אם action=mode)' },
+            confirmationText: { type: 'string', description: 'משפט-קצר-בעברית לקריאה-חזרה-לטלפון' },
+            clarificationNeeded: { type: 'string', description: 'רק אם action=unclear — מה-לא-היה-ברור' },
+          },
+          required: ['action', 'confirmationText'],
+        },
+      }],
+      tool_choice: { type: 'tool', name: 'smart_home_action' },
+    }),
+  });
+  if (!res.ok) {
+    const errTxt = await res.text();
+    throw new Error(`Claude API שגיאה ${res.status}: ${errTxt}`);
+  }
+  const data = await res.json();
+  const toolUse = (data.content || []).find(b => b.type === 'tool_use');
+  if (!toolUse) throw new Error('Claude לא-החזיר-פעולה-מובנית (לא-צפוי)');
+  return toolUse.input;
+}
 
 // ── EXPRESS + SOCKET.IO ──────────────────────────────────
 const app = express();
@@ -1353,6 +1425,21 @@ io.on('connection', (socket) => {
     io.emit('scheduled_modes', scheduledModes);
     socket.emit('scheduled_modes_saved', { ok: true, count: scheduledModes.length });
     addServerLog({ type: 'info', msg: `🕐 נשמרו ${scheduledModes.length} תזמוני מצב`, user: 'מערכת' });
+  });
+
+  // ── בדיקת-בינה-קולית (שלב-ביניים, לפני חיבור ימות/Whisper בפועל) ────
+  // מקבל טקסט ישירות מהממשק (לא מהקלטת-טלפון), שולח ל-callClaudeForIntent, ומחזיר את-הפעולה-
+  // המובנית שקלוד-זיהה — **בלי לבצע אותה בפועל** (רק לבדוק שהמפתח/הפרומפט עובדים כמצופה).
+  socket.on('test_voice_intent', async ({ text } = {}) => {
+    if (!text || !text.trim()) { socket.emit('voice_intent_result', { ok: false, error: 'לא הוזן טקסט' }); return; }
+    try {
+      const action = await callClaudeForIntent(text.trim());
+      addServerLog({ type: 'info', msg: `🎙️ [בדיקת-בינה-קולית] "${text.trim()}" → ${JSON.stringify(action)}`, user: 'מערכת' });
+      socket.emit('voice_intent_result', { ok: true, action });
+    } catch (err) {
+      addServerLog({ type: 'danger', msg: `❌ בדיקת-בינה-קולית נכשלה: ${err.message}`, user: 'מערכת' });
+      socket.emit('voice_intent_result', { ok: false, error: err.message });
+    }
   });
 
   // ── טריגרים-חיצוניים (כפתורי-קיר/מתגי-סצנה zigbee) ──────────────────
@@ -3085,4 +3172,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 58;
+const IDX_BOTTOM_MARK = 59;
