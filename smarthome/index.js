@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 60;
+const IDX_TOP_MARK = 61;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -359,6 +359,12 @@ ${modeList}
 - אם המשתמש מזכיר חדר/מכשיר בשם-חופשי (למשל "המזגן של הילדים", "האור בסלון") — התאם לממסר-הכי-מתאים מהרשימה, לפי-השם.
 - אם המשתמש מזכיר **שם-מצב-מפורש** (למשל "עבור למצב X" / "עברנו למצב X") — התאם **רק** למצב שהשם שלו תואם-במדויק (או הכי-קרוב-משמעותית) לשם-שנאמר, אפילו אם הוא נשמע-דומה למצב-אחר ברשימה.
 - אם המשתמש מבקש "לשעה"/"לחצי שעה" וכו' — חשב durationMin בדקות. אם לא-צוין-משך — durationMin=0 (קבוע).
+- action="status" — שאלות-על-מצב-קיים (לא-ביצוע-פעולה). יש-שני-צירים נוספים שצריך-למלא:
+  • statusScope: "all" אם המשתמש שואל **כללית** על הבית (למשל "מה דולק כעת בבית", "מה פועל אצלי") בלי-לציין ממסר-מסוים; "specific" אם ציין ממסר/חדר/מכשיר מסוים.
+  • statusKind: "current" אם שואל על **המצב-הנוכחי** (דלוק/כבוי כעת); "history" אם שואל "**מתי** X דלק/כבה לאחרונה" או "מה הייתה **הפקודה-האחרונה**" ל-X.
+  • relayIndex נדרש **רק אם** statusScope="specific" (לא נדרש כש-statusScope="all").
+  • historyState: אופציונלי, רק אם statusKind="history" והמשתמש ציין במפורש איזה-כיוון מחפש ("מתי דלק" → "ON", "מתי כבה" → "OFF"); אם לא ציין — השאר-ריק.
+  שים-לב: אתה **לא** יודע את התשובה-בפועל (מה-המצב-האמיתי-כעת) — זה-מגיע-מהשרת אחרי-הסיווג שלך. confirmationText עבור status יכול-להיות-תיאור-כללי של מה-שבודקים (למשל "בודק מה דולק בבית"), **לא** ניחוש-של-תשובה.
 - אם הבקשה **לא-ברורה** (לא-ניתן-להתאים-בביטחון-סביר לממסר/מצב מסוים) — action="unclear", עם clarificationNeeded שמסביר-מה-חסר.
 - confirmationText תמיד חובה — משפט-קצר-בעברית-טבעית שיוקרא-בטלפון (למשל "מדליק את המזגן בחדר הורים"), ותמיד עם **השם-האמיתי** של הממסר/המצב (לא האינדקס).`;
 
@@ -381,10 +387,13 @@ ${modeList}
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['relay', 'mode', 'status', 'unclear'], description: 'סוג-הפעולה' },
-            relayIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-הממסרים שלמעלה — רק אם action=relay או status' },
+            relayIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-הממסרים שלמעלה — רק אם action=relay, או action=status עם statusScope=specific' },
             state: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=relay' },
             durationMin: { type: 'integer', description: 'משך-בדקות, 0=קבוע (רק אם action=relay או mode)' },
             modeIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-המצבים שלמעלה — רק אם action=mode' },
+            statusScope: { type: 'string', enum: ['specific', 'all'], description: 'רק אם action=status — "specific" לממסר מסוים, "all" לשאלה-כללית על כל-הבית' },
+            statusKind: { type: 'string', enum: ['current', 'history'], description: 'רק אם action=status — "current" למצב-עכשווי, "history" לשאלה "מתי"/"מה-הפקודה-האחרונה"' },
+            historyState: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=status וstatusKind=history, ורק אם המשתמש ציין-כיוון-מפורש (מתי דלק / מתי כבה)' },
             confirmationText: { type: 'string', description: 'משפט-קצר-בעברית לקריאה-חזרה-לטלפון' },
             clarificationNeeded: { type: 'string', description: 'רק אם action=unclear — מה-לא-היה-ברור' },
           },
@@ -405,7 +414,8 @@ ${modeList}
   // תרגום-חזרה מאינדקס למזהה-האמיתי, כדי שהצד-הצרכן (קליינט-הבדיקה, ובהמשך ה-IVR
   // בפועל) יקבל את-אותו-חוזה כמו-קודם (relayId/modeId אמיתיים).
   const out = { ...toolUse.input };
-  if (out.action === 'relay' || out.action === 'status') {
+  const needsRelay = out.action === 'relay' || (out.action === 'status' && out.statusScope === 'specific');
+  if (needsRelay) {
     const entry = relayEntries[out.relayIndex];
     if (!entry) throw new Error(`קלוד החזיר אינדקס-ממסר לא-תקין: ${out.relayIndex}`);
     out.relayId = entry.id;
@@ -417,6 +427,39 @@ ${modeList}
   }
   delete out.relayIndex;
   delete out.modeIndex;
+
+  // ── מענה-בפועל לשאלות-סטטוס ─────────────────────────────────────────────
+  // קלוד **מסווג** רק את-השאלה (איזה ממסר/טווח/סוג-שאלה) — את-התשובה-האמיתית (המצב-
+  // בפועל, או ההיסטוריה) אנחנו שולפים כאן מהשרת (relayState/serverLog), כי קלוד
+  // לא-יודע-ולא-יכול-לנחש את-זה. בממסרים-בלי-משוב-חי-אמיתי מהמכשיר (למשל שלט-IR
+  // למזגן) — relayState משקף את-הפקודה-האחרונה-שנשלחה, לא-בהכרח-מאושר-פיזית, אז
+  // הניסוח-כאן נשאר-זהיר ("לפי הפקודה האחרונה") ולא-טוען-ודאות-מוחלטת.
+  if (out.action === 'status') {
+    if (out.statusScope === 'all') {
+      const onNames = Object.entries(relayState)
+        .filter(([, st]) => st === 'ON')
+        .map(([id]) => schedulerRelayNames[id] || `ממסר ${id}`);
+      out.statusAnswer = onNames.length
+        ? `כרגע דולק (לפי הפקודה האחרונה שנשלחה לכל ממסר): ${onNames.join(', ')}`
+        : 'כרגע אין שום ממסר שרשום כדולק';
+    } else {
+      const relayName = schedulerRelayNames[out.relayId] || `ממסר ${out.relayId}`;
+      if (out.statusKind === 'history') {
+        const match = serverLog.find(l => l.msg
+          && l.msg.includes(relayName)
+          && (!out.historyState || l.msg.includes(`→ ${out.historyState}`)));
+        out.statusAnswer = match
+          ? `${relayName} — הרשומה האחרונה (${match.date} ${match.time}): ${match.msg}`
+          : `לא נמצאה היסטוריה רשומה ל${relayName} ב-30 הימים האחרונים`;
+      } else {
+        const st = relayState[out.relayId];
+        out.statusAnswer = st
+          ? `${relayName}: ${st === 'ON' ? 'דולק' : 'כבוי'} (לפי הפקודה האחרונה שנשלחה — לא בהכרח משוב חי מהמכשיר)`
+          : `לא ידוע מצב נוכחי ל${relayName}`;
+      }
+    }
+  }
+
   return out;
 }
 
@@ -3200,4 +3243,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 60;
+const IDX_BOTTOM_MARK = 61;
