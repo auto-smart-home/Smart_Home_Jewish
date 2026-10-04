@@ -9,6 +9,7 @@ MQTT_PASS=$(jq -r '.mqtt_pass // ""' $OPTIONS)
 YEMOT_API_TOKEN=$(jq -r '.yemot_api_token // ""' $OPTIONS)
 YEMOT_API_LINK_URL=$(jq -r '.yemot_api_link_url // ""' $OPTIONS)
 ADMIN_PASSWORD=$(jq -r '.admin_password // ""' $OPTIONS)
+ANTHROPIC_API_KEY=$(jq -r '.anthropic_api_key // ""' $OPTIONS)
 CONTROLLERS=$(jq -c '[.controllers[] | {id: .id, name: .name, topic: .topic, relayCount: .relay_count, relayNames: {}}] // []' $OPTIONS)
 GITHUB_REPO=$(jq -r '.github_repo // ""' $OPTIONS)
 
@@ -16,6 +17,7 @@ export CONFIG_JSON="{\"MQTT_URL\":\"${MQTT_URL}\",\"MQTT_USER\":\"${MQTT_USER}\"
 
 export YEMOT_API_TOKEN
 export YEMOT_API_LINK_URL
+export ANTHROPIC_API_KEY
 export PORT=3000
 
 # ── עדכון אוטומטי מ-GitHub בכל הפעלה — עמיד-בפני-כשל-רשת ──────────────────────
