@@ -1078,7 +1078,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 113;
+const BUILD_TOP_MARK = 115;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1130,7 +1130,7 @@ let _zmanimBarRetryCount = 0;
 function saveLS() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
-      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr,category:r.category||''})),
       programs, modes, activeModeId,
       nextProgId,
       log: logEntries.slice(0,250)
@@ -1148,10 +1148,10 @@ function syncProgramsToServer() {
     socket.emit('sync_programs', {
       programs,
       activeModeId,
-      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr,category:r.category||''})),
       modes,
       fullConfig: {
-        relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
+        relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr,category:r.category||''})),
         programs,
         modes,
         activeModeId,
@@ -1180,7 +1180,7 @@ function applyServerConfig(d) {
   // שמור ב-LocalStorage כדי שבפתיחה הבאה יטען מהר
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
-      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),
+      relayNames: relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr,category:r.category||''})),
       programs, modes, activeModeId, nextProgId,
       log: logEntries.slice(0,250)
     }));
@@ -1652,10 +1652,14 @@ function connectMQTT() {
       const modeName = modes.find(m => m.id === action.modeId)?.name || `מצב ${action.modeId}`;
       pretty += `מצב: ${modeName} (${action.modeId})\nמשך: ${action.durationMin ? action.durationMin + ' דקות' : 'קבוע'}\n`;
     } else if (action.action === 'status') {
-      pretty += `טווח: ${action.statusScope === 'all' ? 'כל הבית' : 'ממסר ספציפי'}\nסוג-שאלה: ${action.statusKind === 'history' ? 'היסטוריה' : 'מצב-נוכחי'}\n`;
-      if (action.statusScope === 'specific') {
-        const relayName = relays.find(r => r.id === action.relayId)?.name || `ממסר ${action.relayId}`;
-        pretty += `ממסר: ${relayName} (${action.relayId})\n`;
+      const topicLabel = { relay: 'ממסר/ים', activeMode: 'מצב-פעיל', scheduledModes: 'תזמוני-מצב' }[action.statusTopic] || action.statusTopic || '(לא צוין)';
+      pretty += `נושא: ${topicLabel}\n`;
+      if (action.statusTopic === 'relay') {
+        pretty += `טווח: ${action.statusScope === 'all' ? 'כל הבית' : 'ממסר ספציפי'}${action.categoryFilter ? ` (קטגוריה: ${action.categoryFilter})` : ''}\nסוג-שאלה: ${action.statusKind === 'history' ? 'היסטוריה' : 'מצב-נוכחי'}\n`;
+        if (action.statusScope === 'specific') {
+          const relayName = relays.find(r => r.id === action.relayId)?.name || `ממסר ${action.relayId}`;
+          pretty += `ממסר: ${relayName} (${action.relayId})\n`;
+        }
       }
       pretty += `\n📋 תשובה בפועל: ${action.statusAnswer || '(לא התקבלה תשובה)'}\n`;
     } else if (action.action === 'unclear') {
@@ -2524,6 +2528,8 @@ function relayCardHtml(r){
     </div>
     <input class="relay-name-input" value="${r.name}"
       onchange="saveRelayName(${r.id},this.value)" placeholder="שם...">
+    <input class="relay-name-input" value="${r.category||''}" style="font-size:11px;color:var(--muted)"
+      onchange="saveRelayCategory(${r.id},this.value)" placeholder="קטגוריה (למשל: מזגן) — לשליטה קולית" title="קטגוריה חופשית, לשאלות-סטטוס קוליות כמו 'אילו מזגנים דולקים'">
     <div class="relay-controls">
       <label class="toggle-switch">
         <input type="checkbox" ${r.state?'checked':''} onchange="sendRelay(${r.id},this.checked)">
@@ -2560,6 +2566,13 @@ function saveRelayName(id,name){
   }
   const r=relays.find(x=>x.id===id);
   if(r){r.name=name;renderPrograms();markTimelineDirty();saveLS();}
+}
+function saveRelayCategory(id,category){
+  if(currentUser && currentUser.role!=='admin'){
+    toast('אינך מורשה לשנות הגדרות ממסרים');return;
+  }
+  const r=relays.find(x=>x.id===id);
+  if(r){r.category=(category||'').trim();saveLS();}
 }
 function highlightRelayProgs(relayId){
   setTimeout(()=>{
@@ -3342,7 +3355,7 @@ function exportJSON(){
   if(currentUser && currentUser.role!=='admin'){
     toast('אינך מורשה לייצא הגדרות');return;
   }
-  const blob=new Blob([JSON.stringify({programs,modes,relayNames:relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr})),activeModeId,nextProgId,scheduledModes:_scheduledModes},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({programs,modes,relayNames:relays.map(r=>({id:r.id,name:r.name,ivr:!!r.ivr,category:r.category||''})),activeModeId,nextProgId,scheduledModes:_scheduledModes},null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='smarthome_programs.json';a.click();
   toast('ייצוא JSON הצליח');
 }
@@ -5843,7 +5856,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 113;
+BUILD_BOTTOM_MARK = 115;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
