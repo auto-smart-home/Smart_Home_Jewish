@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 59;
+const IDX_TOP_MARK = 60;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -332,23 +332,35 @@ const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
 // תמיד תהיה JSON תקין שניתן להריץ ישירות, בלי לנתח-טקסט-חופשי (שעלול להשתבש/להיות מעורפל).
 async function callClaudeForIntent(text) {
   if (!ANTHROPIC_API_KEY) throw new Error('חסר ANTHROPIC_API_KEY — הגדר בהגדרות-האד-און');
-  const relayList = Object.entries(schedulerRelayNames)
-    .map(([id, name]) => `${id}: ${name}`).join('\n');
-  const modeList = (modes || []).map(m => `${m.id}: ${m.name}`).join('\n');
+
+  // ── מיפוי ל-אינדקסים-קטנים (0,1,2…) במקום המזהים-האמיתיים ────────────────
+  // התגלה-בפועל: מזהי-המצבים (וחלק מהממסרים) הם מספרי-epoch ארוכים (13 ספרות),
+  // וכש-שני-מצבים-סמוכים-ברשימה (למשל "נוסעים לשבת" ו"לילה טוב") יש להם מזהים
+  // ארוכים-ודומים-למבט-ראשון, המודל נוטה-לפעמים "לגלוש" למזהה-של-השורה-הסמוכה
+  // (קלאסי בהשוואת-רשימות-ע"י-מודלים-קטנים/זריזים). הפתרון: קלוד רואה-ועובד רק
+  // עם אינדקס-סידורי-קטן (0,1,2…) לכל ממסר/מצב — קל-להצמיד-נכון בלי-טעויות — ואנחנו
+  // מתרגמים-חזרה למזהה-האמיתי בצד-השרת, אחרי שהתשובה חזרה.
+  const relayEntries = Object.entries(schedulerRelayNames).map(([id, name]) => ({ id: Number(id), name }));
+  const modeEntries = (modes || []).map(m => ({ id: m.id, name: m.name }));
+  const relayList = relayEntries.map((e, i) => `${i}: ${e.name}`).join('\n');
+  const modeList = modeEntries.map((e, i) => `${i}: ${e.name}`).join('\n');
+
   const systemPrompt = `אתה עוזר-קולי לבית-חכם יהודי. המשתמש מדבר-בעברית-חופשית וטבעית, לא-בפקודות-פורמליות.
 תפקידך: לזהות **פעולה-אחת** מהרשימה שלמטה, ולמלא את-הפרטים המדויקים — **לא** לשוחח, **רק** לקרוא-לכלי smart_home_action פעם-אחת.
 
-רשימת-הממסרים (מזהה: שם):
+רשימת-הממסרים (אינדקס: שם):
 ${relayList}
 
-רשימת-המצבים (מזהה: שם):
+רשימת-המצבים (אינדקס: שם):
 ${modeList}
 
 הנחיות:
+- relayIndex/modeIndex הם **האינדקס** מהרשימה שלמעלה (המספר-שלפני-הנקודתיים), לא שם ולא מזהה-אחר. בדוק-פעמיים שהאינדקס-שבחרת תואם-בדיוק לשם-הנכון בשורה.
 - אם המשתמש מזכיר חדר/מכשיר בשם-חופשי (למשל "המזגן של הילדים", "האור בסלון") — התאם לממסר-הכי-מתאים מהרשימה, לפי-השם.
+- אם המשתמש מזכיר **שם-מצב-מפורש** (למשל "עבור למצב X" / "עברנו למצב X") — התאם **רק** למצב שהשם שלו תואם-במדויק (או הכי-קרוב-משמעותית) לשם-שנאמר, אפילו אם הוא נשמע-דומה למצב-אחר ברשימה.
 - אם המשתמש מבקש "לשעה"/"לחצי שעה" וכו' — חשב durationMin בדקות. אם לא-צוין-משך — durationMin=0 (קבוע).
 - אם הבקשה **לא-ברורה** (לא-ניתן-להתאים-בביטחון-סביר לממסר/מצב מסוים) — action="unclear", עם clarificationNeeded שמסביר-מה-חסר.
-- confirmationText תמיד חובה — משפט-קצר-בעברית-טבעית שיוקרא-בטלפון (למשל "מדליק את המזגן בחדר הורים").`;
+- confirmationText תמיד חובה — משפט-קצר-בעברית-טבעית שיוקרא-בטלפון (למשל "מדליק את המזגן בחדר הורים"), ותמיד עם **השם-האמיתי** של הממסר/המצב (לא האינדקס).`;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -369,10 +381,10 @@ ${modeList}
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['relay', 'mode', 'status', 'unclear'], description: 'סוג-הפעולה' },
-            relayId: { type: 'integer', description: 'מזהה-הממסר (רק אם action=relay או status)' },
+            relayIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-הממסרים שלמעלה — רק אם action=relay או status' },
             state: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=relay' },
             durationMin: { type: 'integer', description: 'משך-בדקות, 0=קבוע (רק אם action=relay או mode)' },
-            modeId: { type: 'integer', description: 'מזהה-המצב (רק אם action=mode)' },
+            modeIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-המצבים שלמעלה — רק אם action=mode' },
             confirmationText: { type: 'string', description: 'משפט-קצר-בעברית לקריאה-חזרה-לטלפון' },
             clarificationNeeded: { type: 'string', description: 'רק אם action=unclear — מה-לא-היה-ברור' },
           },
@@ -389,7 +401,23 @@ ${modeList}
   const data = await res.json();
   const toolUse = (data.content || []).find(b => b.type === 'tool_use');
   if (!toolUse) throw new Error('Claude לא-החזיר-פעולה-מובנית (לא-צפוי)');
-  return toolUse.input;
+
+  // תרגום-חזרה מאינדקס למזהה-האמיתי, כדי שהצד-הצרכן (קליינט-הבדיקה, ובהמשך ה-IVR
+  // בפועל) יקבל את-אותו-חוזה כמו-קודם (relayId/modeId אמיתיים).
+  const out = { ...toolUse.input };
+  if (out.action === 'relay' || out.action === 'status') {
+    const entry = relayEntries[out.relayIndex];
+    if (!entry) throw new Error(`קלוד החזיר אינדקס-ממסר לא-תקין: ${out.relayIndex}`);
+    out.relayId = entry.id;
+  }
+  if (out.action === 'mode') {
+    const entry = modeEntries[out.modeIndex];
+    if (!entry) throw new Error(`קלוד החזיר אינדקס-מצב לא-תקין: ${out.modeIndex}`);
+    out.modeId = entry.id;
+  }
+  delete out.relayIndex;
+  delete out.modeIndex;
+  return out;
 }
 
 // ── EXPRESS + SOCKET.IO ──────────────────────────────────
@@ -3172,4 +3200,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 59;
+const IDX_BOTTOM_MARK = 60;
