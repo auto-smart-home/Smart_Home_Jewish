@@ -743,13 +743,17 @@
     <!-- VOICE-AI TEST CARD -->
     <div class="user-card" style="margin-top:16px">
       <div class="user-name">🎙️ בדיקת שליטה-קולית (בינה)</div>
-      <div style="font-size: 13px;color:var(--muted);margin-bottom:12px">שלב-ביניים לבדיקה: הקלד משפט חופשי בעברית (כאילו אמרת אותו בטלפון), ונראה מה קלוד מזהה — בלי לבצע שום פעולה בפועל. מוודא שה-API key עובד ושהזיהוי נכון, לפני שמחברים הקלטת-טלפון/תמלול בפועל.</div>
+      <div style="font-size: 13px;color:var(--muted);margin-bottom:12px">הקלד משפט חופשי בעברית (כאילו אמרת אותו בטלפון), ונראה מה קלוד מזהה. מוודא שה-API key ושהזיהוי עובדים נכון, לפני שמחברים הקלטת-טלפון/תמלול בפועל.</div>
       <div class="form-row-inline">
         <div class="form-row" style="flex:1">
           <label class="form-label">מה היית אומר בטלפון?</label>
           <input class="form-input" id="voice-test-input" placeholder="למשל: תדליק את המזגן בחדר של הילדים לחצי שעה" style="width:100%" onkeydown="if(event.key==='Enter')runVoiceIntentTest()">
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px;cursor:pointer">
+        <input type="checkbox" id="voice-test-execute">
+        <span>⚡ בצע בפועל (לא רק סיווג) — ידליק/יכבה ממסר אמיתי או יעביר מצב אמיתי!</span>
+      </label>
       <button class="icon-btn" onclick="runVoiceIntentTest()" style="margin-top:10px;background:var(--accent);color:#fff">🤖 בדוק זיהוי</button>
       <div id="voice-test-result" style="margin-top:10px;font-size:14px;white-space:pre-wrap;line-height:1.6"></div>
     </div>
@@ -1078,7 +1082,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 115;
+const BUILD_TOP_MARK = 116;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1639,7 +1643,7 @@ function connectMQTT() {
 
   // תוצאת-בדיקת-בינה-קולית (test_voice_intent, ראו runVoiceIntentTest) — מגיע חזרה כ-socket event
   // (לא Promise רגיל של fetch) כי כל שאר התקשורת-עם-השרת כאן עוברת ב-socket.io, לא ב-REST.
-  socket.on('voice_intent_result', ({ ok, action, error }) => {
+  socket.on('voice_intent_result', ({ ok, action, error, executed, execResult }) => {
     const resEl = document.getElementById('voice-test-result');
     if (!resEl) return;
     if (!ok) { resEl.textContent = `❌ שגיאה: ${error}`; return; }
@@ -1664,6 +1668,11 @@ function connectMQTT() {
       pretty += `\n📋 תשובה בפועל: ${action.statusAnswer || '(לא התקבלה תשובה)'}\n`;
     } else if (action.action === 'unclear') {
       pretty += `⚠️ לא ברור: ${action.clarificationNeeded || ''}\n`;
+    }
+    if (executed && execResult) {
+      pretty += `\n${execResult.ok ? '✅' : '🚫'} ביצוע בפועל: ${execResult.message}\n`;
+    } else if (action.action === 'relay' || action.action === 'mode') {
+      pretty += `\n(סיווג בלבד — לא בוצע בפועל. סמן "בצע בפועל" כדי להריץ)\n`;
     }
     resEl.textContent = pretty;
   });
@@ -4934,14 +4943,16 @@ async function runYemotTest(){
 }
 
 // בדיקת שליטה-קולית: שולח טקסט-חופשי לשרת (test_voice_intent), שמעביר ל-callClaudeForIntent
-// ומחזיר את-הפעולה-המובנית דרך voice_intent_result (ראו socket.on שם) — בלי לבצע כלום בפועל.
+// ומחזיר את-הפעולה-המובנית דרך voice_intent_result (ראו socket.on שם). אם תיבת "בצע בפועל"
+// מסומנת — השרת גם-מריץ את הפעולה-בפועל (executeVoiceAction), עם ההרשאות של המשתמש-המחובר.
 function runVoiceIntentTest(){
   const input = document.getElementById('voice-test-input');
   const text = (input?.value || '').trim();
+  const execute = !!document.getElementById('voice-test-execute')?.checked;
   const resEl = document.getElementById('voice-test-result');
   if (!text) { toast('נא להקליד משפט לבדיקה'); return; }
   if (resEl) resEl.textContent = '🤔 שולח לקלוד...';
-  socket.emit('test_voice_intent', { text });
+  socket.emit('test_voice_intent', { text, execute, userName: currentUser?.name });
 }
 
 // עריכת TTS/ext.ini בשלוחת ימות המשיח — קוראת/כותבת בפועל מול השרת
@@ -5856,7 +5867,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 115;
+BUILD_BOTTOM_MARK = 116;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
