@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 61;
+const IDX_TOP_MARK = 62;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -220,6 +220,26 @@ async function haGetState(entityId) {
   });
   if (!res.ok) throw new Error(`HA API שגיאה ${res.status}`);
   return res.json();
+}
+
+// מסנכרן את relayState של כל התקני-HA מהמצב-האמיתי-בפועל ב-Home Assistant.
+// **קריטי**: בניגוד לממסרי-Tasmota (ש"נשאלים" אוטומטית ב-cmnd/.../STATUS מיד-כש-MQTT מתחבר —
+// ראו connectMQTT), להתקני-HA אין שום מנגנון-מקביל שרץ-אוטומטית. כתוצאה: אחרי-כל הפעלה-מחדש של
+// התוסף, relayState מתאפס-לערך-ברירת-המחדל (OFF) לכל ממסר, ועבור ממסרי-HA זה **נשאר-תקוע-על-OFF**
+// (גם אם ההתקן-בפועל דלוק) עד שמישהו-לוחץ-ידנית על כפתור-הרענון בממשק, או שהשרת-עצמו שולח-פקודה
+// חדשה לאותו-ממסר (עדכון-אופטימי ב-publishRelay). התגלה-בפועל ע"י שאלת-סטטוס-קולית שהחזירה-"כבוי"
+// להתקן-HA שהיה-דלוק-בפועל. הפתרון: קוראים לפונקציה-הזו **גם** אוטומטית בעלית-השרת (לא רק מהכפתור),
+// כך שה-relayState מתואם-למצב-האמיתי כבר-בתוך-שניות מהעלייה, בלי-תלות-בלחיצה-ידנית.
+async function refreshHaStates() {
+  for (const dev of haDevices) {
+    if (!dev.relayId) continue;
+    try {
+      const st = await haGetState(dev.entity_id);
+      const newState = st.state === 'on' ? 'ON' : 'OFF';
+      relayState[dev.relayId] = newState;
+      io.emit('relay_state', { id: dev.relayId, state: newState });
+    } catch (e) { /* התקן לא זמין */ }
+  }
 }
 
 // רשימת כל ה-entities הניתנות לשליטה (switch.*, light.*, input_boolean.*, fan.*)
@@ -1226,19 +1246,7 @@ io.on('connection', (socket) => {
   });
 
   // עדכון מצב חי של התקני HA
-  socket.on('refresh_ha_states', async () => {
-    try {
-      for (const dev of haDevices) {
-        if (!dev.relayId) continue;
-        try {
-          const st = await haGetState(dev.entity_id);
-          const newState = st.state === 'on' ? 'ON' : 'OFF';
-          relayState[dev.relayId] = newState;
-          io.emit('relay_state', { id: dev.relayId, state: newState });
-        } catch(e) { /* התקן לא זמין */ }
-      }
-    } catch(e) { console.error('שגיאה בעדכון מצב HA:', e.message); }
-  });
+  socket.on('refresh_ha_states', async () => { await refreshHaStates(); });
 
   // ── Debug: מצב-בעלות-ממסרים בפועל (קריאה-בלבד, לא נוגע/משנה שום דבר) ──
   // מיועד לבדיקה מהקונסול: socket.emit('debug_get_relay_owner'); socket.once('debug_get_relay_owner_result', console.log);
@@ -3229,6 +3237,9 @@ process.on('unhandledRejection', (reason, promise) => {
   // (הקפאת last_tick כבר בוצעה למעלה, ברגע-טעינת-הקובץ — לפני כל קוד אחר. לא נוגעים בזה כאן שוב.)
   rebuildHaRelayNames();
   connectMQTT();
+  // מסנכרן relayState של התקני-HA מיד-בעלייה (ראו הערה ב-refreshHaStates) — בלי-זה, ממסרי-HA
+  // נשארים מוצגים-כ-OFF אחרי כל הפעלה-מחדש, גם אם ההתקן-בפועל דלוק.
+  refreshHaStates().catch(e => console.error('❌ שגיאה בסנכרון-ראשוני של מצבי-HA:', e.message));
   server.listen(PORT, () => {
     console.log(`\n🏠 שרת בית חכם (גרסה מקומית) פועל על פורט ${PORT}\n`);
     // **אישור-הפעלה גלוי, לא-רק-בקונסולה**: מציג-מיד באיזה-נתיב-בפועל נעשה שימוש לתקשורת מול-HA —
@@ -3243,4 +3254,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 61;
+const IDX_BOTTOM_MARK = 62;
