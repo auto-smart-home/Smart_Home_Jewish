@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 64;
+const IDX_TOP_MARK = 65;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -511,6 +511,64 @@ ${modeList}
   }
 
   return out;
+}
+
+// מבצע-בפועל פעולת relay/mode שקלוד סיווג (callClaudeForIntent) — **אותה-היררכיית-בעלות בדיוק**
+// כמו handleRelayIvrRequest/handleModeIvrRequest (שליטה-ישירה דרך הטלפון), כולל עדכון relayOwner
+// ו-armPendingRevertTimer למשך. ownerCtx={ virtualOwnerId, ownerLabel, isPriority } מגיע מהקורא —
+// כש-זה-מגיע-מהכרטיס-הקולי-הטלפוני-בעתיד, יהיה-תלוי בהרשאת-המתקשר (yemotPermissions[callerId]),
+// ובדיקת-הטקסט-בממשק (test_voice_intent) הוא-עצמו משתמש בהרשאת-המשתמש-המחובר באותה-רוח.
+async function executeVoiceAction(action, ownerCtx) {
+  const { virtualOwnerId, ownerLabel, isPriority } = ownerCtx;
+  if (action.action === 'relay') {
+    const relayName = schedulerRelayNames[action.relayId] || `ממסר ${action.relayId}`;
+    const nowSecForOwner = getNowSecIL();
+    if (action.state === 'OFF') {
+      const heldByOther = checkRelayOwnerBlock({ relayId: action.relayId, progId: virtualOwnerId, isPriority: !!isPriority, fireSec: nowSecForOwner }, nowSecForOwner);
+      if (heldByOther) return { ok: false, message: `לא ניתן לכבות את ${relayName} כרגע — בשליטת "${heldByOther.blockedBy}"` };
+    }
+    await publishRelay(action.relayId, action.state, ownerLabel);
+    let dueAt = null;
+    const durationMin = parseInt(action.durationMin, 10) || 0;
+    if (durationMin > 0) {
+      const timerId = `voice_${Date.now()}_${Math.round(Math.random()*1e6)}`;
+      const startedAt = Date.now();
+      dueAt = startedAt + durationMin * 60000;
+      ivrPendingTimers.push({ id: timerId, relayId: action.relayId, revertAction: action.state === 'ON' ? 'OFF' : 'ON', startedAt, dueAt, label: ownerLabel, callerId: null });
+      ivrTodayEvents.push({ id: timerId, relayId: action.relayId, callerId: null, startedAt, dueAt, action: action.state, dateKey: new Date(startedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) });
+      saveConfigLocal();
+      io.emit('ivr_today_events', ivrTodayEvents);
+    }
+    if (action.state === 'ON') {
+      const endSecForOwner = dueAt !== null ? computeEndSecFromEpoch(dueAt) : null;
+      const existing = relayOwner[action.relayId];
+      const candidate = { progId: virtualOwnerId, name: ownerLabel, priority: !!isPriority, endSec: endSecForOwner };
+      const existingExpired = existing && existing.endSec !== null && existing.endSec <= nowSecForOwner;
+      const existingIsStronger = existing && !existingExpired && existing.progId !== candidate.progId && existing.endSec !== null && ((existing.priority && !candidate.priority) || (!existing.priority && !candidate.priority && candidate.endSec !== null && existing.endSec > candidate.endSec));
+      if (!existingIsStronger) relayOwner[action.relayId] = candidate;
+    } else if (relayOwner[action.relayId]) {
+      delete relayOwner[action.relayId];
+    }
+    return { ok: true, message: `${relayName}: ${action.state === 'ON' ? 'הודלק' : 'כובה'} בהצלחה${durationMin > 0 ? `, יחזור אוטומטית בעוד ${durationMin} דקות` : ''}` };
+  }
+  if (action.action === 'mode') {
+    const m = (modes || []).find(x => x.id === action.modeId);
+    if (!m) return { ok: false, message: `מצב ${action.modeId} לא נמצא` };
+    const durationMin = parseInt(action.durationMin, 10) || 0;
+    const prevModeId = schedulerActiveModeId;
+    if (m.id === prevModeId) {
+      if (durationMin > 0 && _pendingRevertInfo && _pendingRevertInfo.modeJustSetTo === m.id) {
+        armPendingRevertTimer(_pendingRevertInfo.revertToMode, m.id, Date.now() + durationMin*60000);
+        return { ok: true, message: `כבר במצב ${m.name} — זמן-החזרה רוענן` };
+      }
+      return { ok: true, message: `כבר במצב ${m.name}` };
+    }
+    await commitAutoModeSwitch(m.id, ownerLabel);
+    if (durationMin > 0) armPendingRevertTimer(prevModeId, m.id, Date.now() + durationMin*60000);
+    return { ok: true, message: `עברת למצב ${m.name}${durationMin > 0 ? `, למשך ${durationMin} דקות` : ''}` };
+  }
+  // status/unclear — אין-מה-לבצע, statusAnswer/clarificationNeeded כבר-מולאו ע"י callClaudeForIntent
+  return { ok: true, message: action.statusAnswer || action.confirmationText || '' };
 }
 
 // ── EXPRESS + SOCKET.IO ──────────────────────────────────
@@ -1540,17 +1598,28 @@ io.on('connection', (socket) => {
     addServerLog({ type: 'info', msg: `🕐 נשמרו ${scheduledModes.length} תזמוני מצב`, user: 'מערכת' });
   });
 
-  // ── בדיקת-בינה-קולית (שלב-ביניים, לפני חיבור ימות/Whisper בפועל) ────
-  // מקבל טקסט ישירות מהממשק (לא מהקלטת-טלפון), שולח ל-callClaudeForIntent, ומחזיר את-הפעולה-
-  // המובנית שקלוד-זיהה — **בלי לבצע אותה בפועל** (רק לבדוק שהמפתח/הפרומפט עובדים כמצופה).
-  socket.on('test_voice_intent', async ({ text } = {}) => {
+  // ── בדיקת-בינה-קולית (לפני חיבור ימות/Whisper בפועל) ────────────────────
+  // מקבל טקסט ישירות מהממשק (לא מהקלטת-טלפון), שולח ל-callClaudeForIntent לסיווג, ו-**אם
+  // execute===true** — מבצע-בפועל (executeVoiceAction) בדיוק כמו-שיחת-IVR רגילה: בעלות-הממסר
+  // (relayOwner) ועדיפות (isPriority) נגזרות מהרשאת-המשתמש-המחובר-בדפדפן (runtimeUsers), באותה-
+  // רוח-מדויקת שתחול בהמשך על-מתקשר-טלפון-אמיתי (yemotPermissions[callerId]) — ראו הדיון בשיחה.
+  // execute===false (ברירת-מחדל בממשק) נשאר-מצב-בדיקה-בלבד, בלי-לבצע-כלום-בפועל.
+  socket.on('test_voice_intent', async ({ text, execute, userName } = {}) => {
     if (!text || !text.trim()) { socket.emit('voice_intent_result', { ok: false, error: 'לא הוזן טקסט' }); return; }
     try {
       const action = await callClaudeForIntent(text.trim());
-      addServerLog({ type: 'info', msg: `🎙️ [בדיקת-בינה-קולית] "${text.trim()}" → ${JSON.stringify(action)}`, user: 'מערכת' });
-      socket.emit('voice_intent_result', { ok: true, action });
+      addServerLog({ type: 'info', msg: `🎙️ [בינה-קולית] "${text.trim()}" → ${JSON.stringify(action)}${execute ? ' [מבצע בפועל]' : ' [בדיקה בלבד]'}`, user: 'מערכת' });
+      let execResult = null;
+      if (execute && (action.action === 'relay' || action.action === 'mode')) {
+        const user = runtimeUsers.find(u => u.name === userName);
+        const isPriority = !!(user && user.priority);
+        const label = `בינה-קולית (${userName || 'משתמש'})`;
+        execResult = await executeVoiceAction(action, { virtualOwnerId: `voice_owner_${userName || 'test'}`, ownerLabel: label, isPriority });
+        addServerLog({ type: execResult.ok ? 'success' : 'warning', msg: `🎙️ [בינה-קולית] ביצוע: ${execResult.message}`, user: label });
+      }
+      socket.emit('voice_intent_result', { ok: true, action, executed: !!execute, execResult });
     } catch (err) {
-      addServerLog({ type: 'danger', msg: `❌ בדיקת-בינה-קולית נכשלה: ${err.message}`, user: 'מערכת' });
+      addServerLog({ type: 'danger', msg: `❌ בינה-קולית נכשלה: ${err.message}`, user: 'מערכת' });
       socket.emit('voice_intent_result', { ok: false, error: err.message });
     }
   });
@@ -3288,4 +3357,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 64;
+const IDX_BOTTOM_MARK = 65;
