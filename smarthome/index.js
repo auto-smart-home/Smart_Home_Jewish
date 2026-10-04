@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 62;
+const IDX_TOP_MARK = 64;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -360,10 +360,13 @@ async function callClaudeForIntent(text) {
   // (קלאסי בהשוואת-רשימות-ע"י-מודלים-קטנים/זריזים). הפתרון: קלוד רואה-ועובד רק
   // עם אינדקס-סידורי-קטן (0,1,2…) לכל ממסר/מצב — קל-להצמיד-נכון בלי-טעויות — ואנחנו
   // מתרגמים-חזרה למזהה-האמיתי בצד-השרת, אחרי שהתשובה חזרה.
-  const relayEntries = Object.entries(schedulerRelayNames).map(([id, name]) => ({ id: Number(id), name }));
+  const relayEntries = Object.entries(schedulerRelayNames).map(([id, name]) => ({ id: Number(id), name, category: schedulerRelayCategory[id] || '' }));
   const modeEntries = (modes || []).map(m => ({ id: m.id, name: m.name }));
-  const relayList = relayEntries.map((e, i) => `${i}: ${e.name}`).join('\n');
+  // כש-לממסר יש קטגוריה-מוגדרת (למשל "מזגן") היא מופיעה בסוגריים, כדי שקלוד יוכל-להבין שאלות-
+  // כמו "אילו מזגנים דולקים" בלי-לנחש-משם-חופשי (ראו גם categoryFilter למטה).
+  const relayList = relayEntries.map((e, i) => `${i}: ${e.name}${e.category ? ` (${e.category})` : ''}`).join('\n');
   const modeList = modeEntries.map((e, i) => `${i}: ${e.name}`).join('\n');
+  const knownCategories = [...new Set(relayEntries.map(e => e.category).filter(Boolean))];
 
   const systemPrompt = `אתה עוזר-קולי לבית-חכם יהודי. המשתמש מדבר-בעברית-חופשית וטבעית, לא-בפקודות-פורמליות.
 תפקידך: לזהות **פעולה-אחת** מהרשימה שלמטה, ולמלא את-הפרטים המדויקים — **לא** לשוחח, **רק** לקרוא-לכלי smart_home_action פעם-אחת.
@@ -379,12 +382,17 @@ ${modeList}
 - אם המשתמש מזכיר חדר/מכשיר בשם-חופשי (למשל "המזגן של הילדים", "האור בסלון") — התאם לממסר-הכי-מתאים מהרשימה, לפי-השם.
 - אם המשתמש מזכיר **שם-מצב-מפורש** (למשל "עבור למצב X" / "עברנו למצב X") — התאם **רק** למצב שהשם שלו תואם-במדויק (או הכי-קרוב-משמעותית) לשם-שנאמר, אפילו אם הוא נשמע-דומה למצב-אחר ברשימה.
 - אם המשתמש מבקש "לשעה"/"לחצי שעה" וכו' — חשב durationMin בדקות. אם לא-צוין-משך — durationMin=0 (קבוע).
-- action="status" — שאלות-על-מצב-קיים (לא-ביצוע-פעולה). יש-שני-צירים נוספים שצריך-למלא:
+- action="status" — שאלות-על-מצב-קיים (לא-ביצוע-פעולה). השדה-הראשון-שצריך-למלא הוא statusTopic:
+  • statusTopic="relay" — שאלה על ממסר/ים (דלוק/כבוי, היסטוריה). זה **לא** מתאים לשאלות על "מצב" (מצב-שבת/חול/אירוח וכו') — אלה הם statusTopic="activeMode"/"scheduledModes" (ראו למטה).
+  • statusTopic="activeMode" — המשתמש שואל **איזה מצב פעיל-כעת** (למשל "איזה מצב אנחנו", "מה המצב הנוכחי", "באיזה מצב המערכת"). אין-שדות-נוספים-נדרשים.
+  • statusTopic="scheduledModes" — המשתמש שואל על **תזמוני-מעבר-מצב** (למשל "אילו תזמוני-מצב מוגדרים כפעילים", "מה התזמונים שמופעלים"). אין-שדות-נוספים-נדרשים.
+  כש-statusTopic="relay" — יש-עוד-צירים שצריך-למלא:
   • statusScope: "all" אם המשתמש שואל **כללית** על הבית (למשל "מה דולק כעת בבית", "מה פועל אצלי") בלי-לציין ממסר-מסוים; "specific" אם ציין ממסר/חדר/מכשיר מסוים.
   • statusKind: "current" אם שואל על **המצב-הנוכחי** (דלוק/כבוי כעת); "history" אם שואל "**מתי** X דלק/כבה לאחרונה" או "מה הייתה **הפקודה-האחרונה**" ל-X.
   • relayIndex נדרש **רק אם** statusScope="specific" (לא נדרש כש-statusScope="all").
   • historyState: אופציונלי, רק אם statusKind="history" והמשתמש ציין במפורש איזה-כיוון מחפש ("מתי דלק" → "ON", "מתי כבה" → "OFF"); אם לא ציין — השאר-ריק.
-  שים-לב: אתה **לא** יודע את התשובה-בפועל (מה-המצב-האמיתי-כעת) — זה-מגיע-מהשרת אחרי-הסיווג שלך. confirmationText עבור status יכול-להיות-תיאור-כללי של מה-שבודקים (למשל "בודק מה דולק בבית"), **לא** ניחוש-של-תשובה.
+  • categoryFilter: רק כש-statusScope="all" **וגם** המשתמש ציין סוג-מכשיר כללי (למשל "אילו מזגנים דולקים", "מה פתוח מהתריסים") ולא ממסר-ספציפי-בשם. הערך-חייב-להיות **מדויק** אחת-מהקטגוריות-הידועות: ${knownCategories.length ? knownCategories.join(', ') : '(אין-עדיין-קטגוריות-מוגדרות-לממסרים — השאר-ריק)'}. אם המשתמש-שאל-כללית-לגמרי ("מה דולק בבית") או ציין-סוג-שלא-מופיע-ברשימת-הקטגוריות — השאר-ריק (בלי-לסנן).
+  שים-לב: אתה **לא** יודע את התשובה-בפועל (מה-המצב-האמיתי-כעת, איזה מצב פעיל, וכו') — זה-מגיע-מהשרת אחרי-הסיווג שלך. confirmationText עבור status יכול-להיות-תיאור-כללי של מה-שבודקים (למשל "בודק מה דולק בבית" / "בודק איזה מצב פעיל"), **לא** ניחוש-של-תשובה.
 - אם הבקשה **לא-ברורה** (לא-ניתן-להתאים-בביטחון-סביר לממסר/מצב מסוים) — action="unclear", עם clarificationNeeded שמסביר-מה-חסר.
 - confirmationText תמיד חובה — משפט-קצר-בעברית-טבעית שיוקרא-בטלפון (למשל "מדליק את המזגן בחדר הורים"), ותמיד עם **השם-האמיתי** של הממסר/המצב (לא האינדקס).`;
 
@@ -411,9 +419,11 @@ ${modeList}
             state: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=relay' },
             durationMin: { type: 'integer', description: 'משך-בדקות, 0=קבוע (רק אם action=relay או mode)' },
             modeIndex: { type: 'integer', description: 'האינדקס (0,1,2…) מרשימת-המצבים שלמעלה — רק אם action=mode' },
-            statusScope: { type: 'string', enum: ['specific', 'all'], description: 'רק אם action=status — "specific" לממסר מסוים, "all" לשאלה-כללית על כל-הבית' },
+            statusTopic: { type: 'string', enum: ['relay', 'activeMode', 'scheduledModes'], description: 'רק אם action=status — על-מה-השאלה: ממסר, המצב-הפעיל-כעת, או תזמוני-המעבר-בין-מצבים' },
+            statusScope: { type: 'string', enum: ['specific', 'all'], description: 'רק אם action=status וstatusTopic=relay — "specific" לממסר מסוים, "all" לשאלה-כללית על כל-הבית' },
             statusKind: { type: 'string', enum: ['current', 'history'], description: 'רק אם action=status — "current" למצב-עכשווי, "history" לשאלה "מתי"/"מה-הפקודה-האחרונה"' },
             historyState: { type: 'string', enum: ['ON', 'OFF'], description: 'רק אם action=status וstatusKind=history, ורק אם המשתמש ציין-כיוון-מפורש (מתי דלק / מתי כבה)' },
+            categoryFilter: { type: 'string', description: 'רק אם action=status וstatusScope=all, והמשתמש ציין סוג-מכשיר כללי (למשל "מזגנים") — ערך-מדויק מרשימת-הקטגוריות-הידועות שבהנחיות' },
             confirmationText: { type: 'string', description: 'משפט-קצר-בעברית לקריאה-חזרה-לטלפון' },
             clarificationNeeded: { type: 'string', description: 'רק אם action=unclear — מה-לא-היה-ברור' },
           },
@@ -434,7 +444,10 @@ ${modeList}
   // תרגום-חזרה מאינדקס למזהה-האמיתי, כדי שהצד-הצרכן (קליינט-הבדיקה, ובהמשך ה-IVR
   // בפועל) יקבל את-אותו-חוזה כמו-קודם (relayId/modeId אמיתיים).
   const out = { ...toolUse.input };
-  const needsRelay = out.action === 'relay' || (out.action === 'status' && out.statusScope === 'specific');
+  // גיבוי: אם action=status בלי statusTopic (לא-צפוי, אבל לא-אמור-להקריס) — מניחים "relay",
+  // ששומר-תאימות עם ההתנהגות-הקודמת (לפני שנוסף הציר הזה).
+  if (out.action === 'status' && !out.statusTopic) out.statusTopic = 'relay';
+  const needsRelay = out.action === 'relay' || (out.action === 'status' && out.statusTopic === 'relay' && out.statusScope === 'specific');
   if (needsRelay) {
     const entry = relayEntries[out.relayIndex];
     if (!entry) throw new Error(`קלוד החזיר אינדקס-ממסר לא-תקין: ${out.relayIndex}`);
@@ -454,14 +467,31 @@ ${modeList}
   // לא-יודע-ולא-יכול-לנחש את-זה. בממסרים-בלי-משוב-חי-אמיתי מהמכשיר (למשל שלט-IR
   // למזגן) — relayState משקף את-הפקודה-האחרונה-שנשלחה, לא-בהכרח-מאושר-פיזית, אז
   // הניסוח-כאן נשאר-זהיר ("לפי הפקודה האחרונה") ולא-טוען-ודאות-מוחלטת.
-  if (out.action === 'status') {
+  if (out.action === 'status' && out.statusTopic === 'activeMode') {
+    const activeMode = (modes || []).find(m => m.id === schedulerActiveModeId);
+    out.statusAnswer = `המצב הפעיל כעת: ${activeMode ? activeMode.name : `(מזהה ${schedulerActiveModeId}, לא נמצא בשם)`}`;
+  } else if (out.action === 'status' && out.statusTopic === 'scheduledModes') {
+    const enabled = (scheduledModes || []).filter(sm => sm.active);
+    if (!enabled.length) {
+      out.statusAnswer = 'אין כרגע שום תזמון-מעבר-מצב מוגדר כפעיל';
+    } else {
+      const lines = enabled.map(sm => {
+        const toMode = (modes || []).find(m => m.id === sm.toModeId);
+        const whenStr = sm.type === 'time' ? `בשעה ${sm.time}` : `ב-${sm.zman}${sm.offsetVal ? ` ${sm.offsetDir === '-' ? '-' : '+'}${sm.offsetVal} דק'` : ''}`;
+        return `"${sm.name || sm.id}" — מעבר למצב ${toMode ? toMode.name : sm.toModeId} ${whenStr}`;
+      });
+      out.statusAnswer = `תזמוני-מצב פעילים: ${lines.join(' | ')}`;
+    }
+  } else if (out.action === 'status' && out.statusTopic === 'relay') {
     if (out.statusScope === 'all') {
+      const categoryFilter = (out.categoryFilter || '').trim();
       const onNames = Object.entries(relayState)
-        .filter(([, st]) => st === 'ON')
+        .filter(([id, st]) => st === 'ON' && (!categoryFilter || schedulerRelayCategory[id] === categoryFilter))
         .map(([id]) => schedulerRelayNames[id] || `ממסר ${id}`);
+      const scopeLabel = categoryFilter ? `מקטגוריית "${categoryFilter}"` : 'בכל הבית';
       out.statusAnswer = onNames.length
-        ? `כרגע דולק (לפי הפקודה האחרונה שנשלחה לכל ממסר): ${onNames.join(', ')}`
-        : 'כרגע אין שום ממסר שרשום כדולק';
+        ? `כרגע דולק ${scopeLabel} (לפי הפקודה האחרונה שנשלחה לכל ממסר): ${onNames.join(', ')}`
+        : `כרגע אין שום ממסר ${scopeLabel} שרשום כדולק`;
     } else {
       const relayName = schedulerRelayNames[out.relayId] || `ממסר ${out.relayId}`;
       if (out.statusKind === 'history') {
@@ -557,6 +587,10 @@ const schedulerRelayNames = {};
 // לא נשמר-בנפרד ב-config.json — מתעדכן-מחדש מ-sync_programs בכל פעם שדפדפן מתחבר/משנה (אותה
 // אמינות בדיוק כמו שמות-ממסרים, שגם הם לא נשמרים כאן ישירות אלא מגיעים תמיד מחדש מהלקוח).
 const schedulerRelayIvr = {};
+// מקביל בדיוק ל-schedulerRelayIvr — "קטגוריה" חופשית-שהמשתמש-מגדיר-לממסר (למשל "מזגן", "תאורה",
+// "תריס"). נועד כדי ש-שליטה-קולית תוכל-להבחין בשאלות-כמו "אילו מזגנים דולקים" (ולא רק "מה דולק"
+// כללית) — ראו callClaudeForIntent. ריק=לא-מסווג. אותה-אמינות/מקור כמו schedulerRelayNames/Ivr.
+const schedulerRelayCategory = {};
 let _relayOffset = 0;
 CONTROLLERS.forEach(ctrl => {
   ctrl._offset = _relayOffset;
@@ -1331,7 +1365,7 @@ io.on('connection', (socket) => {
     // אמיתי. schedulerActiveModeId הוא state בבעלות-בלעדית-של-השרת — נטען מ-config בעלייה
     // (loadConfigLocal), ומשתנה **רק** דרך commitAutoModeSwitch/confirm_mode_switch (ששניהם
     // כן רושמים ליומן, ועושים גם את שאר-הפעולות-הנלוות כמו כיבוי-ממסרים-לא-רלוונטיים).
-    if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; schedulerRelayIvr[r.id] = !!r.ivr; });
+    if (relayNames) relayNames.forEach(r => { schedulerRelayNames[r.id] = r.name; schedulerRelayIvr[r.id] = !!r.ivr; schedulerRelayCategory[r.id] = r.category || ''; });
     if (incomingModes) modes = incomingModes;
     if (fullConfig) serverConfig = fullConfig;
     socket.emit('sync_ack', { count: schedulerPrograms.length, firedRunOnceToday: Array.from(_firedRunOnceToday.values()) });
@@ -3254,4 +3288,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 62;
+const IDX_BOTTOM_MARK = 64;
