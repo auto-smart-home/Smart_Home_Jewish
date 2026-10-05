@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 66;
+const IDX_TOP_MARK = 67;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -290,6 +290,50 @@ async function yemotDownloadFile(filePath) {
     throw new Error(data.message || 'שגיאה בקריאת הקובץ מימות המשיח');
   }
   return text;
+}
+
+// ── שליטה-קולית: הורדת-הקלטה (בינארית) מימות + תמלול ב-Whisper ──────────────
+// כתובת שירות-ה-Whisper (add-on נפרד, ראו whisper_stt) — מגיעה מהגדרת-ה-add-on whisper_url (run.sh).
+const WHISPER_URL = (process.env.WHISPER_URL || '').replace(/\/+$/, '');
+
+// כמו yemotDownloadFile, אבל מחזיר Buffer (קובץ-שמע), לא טקסט. ימות מחזירה 404/JSON-שגיאה כשהקובץ חסר.
+async function yemotDownloadBinary(filePath) {
+  if (!YEMOT_API_TOKEN) throw new Error('חסר YEMOT_API_TOKEN');
+  const params = new URLSearchParams({ token: YEMOT_API_TOKEN, path: filePath });
+  const res = await fetch(`${YEMOT_BASE_URL}/DownloadFile?${params}`);
+  if (!res.ok) throw new Error(`הקובץ ${filePath} לא נמצא בימות (HTTP ${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  // שגיאות-API מגיעות כ-JSON קטן — קובץ-שמע אמיתי אף-פעם לא מתחיל ב-"{"
+  if (buf.length < 2000 && buf[0] === 0x7b) throw new Error(`ימות החזירה שגיאה במקום קובץ: ${buf.toString('utf8').slice(0, 200)}`);
+  return buf;
+}
+
+// מחיקה-אחרי-שימוש של הקלטת-הפקודה (פרטיות — לא משאירים הקלטות-קוליות של הבית בשרת-ימות). best-effort:
+// כשל כאן לא עוצר-כלום, רק נרשם-ביומן.
+async function yemotDeleteFile(filePath) {
+  try {
+    const params = new URLSearchParams({ token: YEMOT_API_TOKEN, action: 'delete', what: filePath });
+    const res = await fetch(`${YEMOT_BASE_URL}/FileAction?${params}`);
+    const data = await res.json().catch(() => ({}));
+    if (data.responseStatus && data.responseStatus !== 'OK') throw new Error(data.message || data.responseStatus);
+  } catch (e) {
+    addServerLog({ type: 'warning', msg: `🎙️ [שליטה-קולית] מחיקת-ההקלטה ${filePath} נכשלה (לא קריטי): ${e.message}`, user: 'IVR' });
+  }
+}
+
+// שולח קובץ-שמע ל-Whisper (POST /asr) ומחזיר את הטקסט-המתומלל. language=he קבוע — כל-השיחות בעברית.
+async function transcribeWithWhisper(audioBuffer, filename) {
+  if (!WHISPER_URL) throw new Error('חסר whisper_url — הגדר בהגדרות-האד-און את כתובת שירות ה-Whisper');
+  const form = new FormData();
+  form.append('audio_file', new Blob([audioBuffer], { type: 'audio/wav' }), filename || 'cmd.wav');
+  const res = await fetch(`${WHISPER_URL}/asr?task=transcribe&language=he&output=json`, {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!res.ok) throw new Error(`Whisper החזיר שגיאה HTTP ${res.status}`);
+  const data = await res.json();
+  return String(data.text || '').trim();
 }
 
 async function yemotUploadFile(filePath, content, filename) {
@@ -3167,6 +3211,7 @@ function dispatchIvrRequest(req, res, next) {
   if (req.query.ProgNum !== undefined) return handleProgramIvrRequest(req, res);
   if (req.query.ModeNum !== undefined) return handleModeIvrRequest(req, res);
   if (req.query.Relay !== undefined) return handleRelayIvrRequest(req, res);
+  if (req.query.VoiceCmd !== undefined) return handleVoiceIvrRequest(req, res);
   if (req.query.hangup === 'yes') return res.send('');
   return next ? next() : res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
 }
@@ -3302,6 +3347,100 @@ async function handleModeIvrRequest(req, res) {
 app.get('/yemot/mode', handleModeIvrRequest);
 app.get('/mode', handleModeIvrRequest);
 
+// ── שליטה-קולית דרך הטלפון (הקלטה → Whisper → קלוד → ביצוע) ────────────────────
+// שלוחת-ימות מסוג API עם api_link=https://YOUR_DOMAIN/yemot/voice (בלי "?" — ראו הסבר ליד /yemot/quick).
+// זרימה בשתי-בקשות (ימות קוראת ל-api_link פעמיים באותה-שיחה):
+//   1) בלי VoiceCmd → מחזירים פקודת read מסוג record: ימות משמיעה "אמור את הפקודה", מקליטה, וקוראת-שוב.
+//   2) עם VoiceCmd → מורידים את ההקלטה, מתמללים (Whisper), מסווגים (קלוד), בודקים-הרשאה, מבצעים.
+// שם-הקובץ נקבע-על-ידינו (cmd_<ApiCallId>.wav) ולא תלוי במה שימות מחזירה ב-VoiceCmd — כך אין-תלות
+// בפורמט-הערך-הזה; הערך עצמו נרשם-ליומן ומנוסה-גם-כנתיב-חלופי.
+const VOICE_REC_DIR = '/voice_cmd';
+
+// אכיפת-הרשאות-המתקשר על פעולה-שקלוד סיווג — אותם-כללים-בדיוק כמו handleRelayIvrRequest/handleModeIvrRequest:
+// ממסר — לפי allowedRelays/allowedActions/maxDuration; מצבים — מנהל-בלבד; שאילתות-מצב — מנהל, או
+// ממסר-ספציפי שהמתקשר מורשה-לגביו (כדי לא-לדלוף מידע-על-הבית למי שאין לו הרשאה). מחזיר null=מותר, אחרת הודעת-סירוב.
+function checkVoicePermission(action, perm) {
+  if (perm.isAdmin) return null;
+  if (action.action === 'relay') {
+    const durationMin = parseInt(action.durationMin, 10) || 0;
+    const maxDur = action.state === 'ON' ? (perm.maxDurationMinOn ?? 0) : (perm.maxDurationMinOff ?? 0);
+    if (!(perm.allowedRelays || []).includes(action.relayId) || !(perm.allowedActions || []).includes(action.state) || (maxDur !== 0 && (durationMin === 0 || durationMin > maxDur)))
+      return 'אינך מורשה לבצע פעולה זו';
+    return null;
+  }
+  if (action.action === 'mode') return 'פעולה זו מוגבלת למנהל בלבד';
+  if (action.action === 'status') {
+    if (action.statusTopic === 'relay' && action.statusScope === 'specific' && (perm.allowedRelays || []).includes(action.relayId)) return null;
+    return 'פעולה זו מוגבלת למנהל בלבד';
+  }
+  return null; // unclear — אין מה לבצע
+}
+
+async function handleVoiceIvrRequest(req, res) {
+  const callerPhone = req.query.ApiPhone || '', hangup = req.query.hangup === 'yes';
+  if (hangup) return res.send('');
+  if (!callerPhone) return res.send(ymResponse('לא התקבל קלט מלא, נסה שוב'));
+  const callerId = yemotPhoneMap[callerPhone];
+  if (callerId === undefined) return res.send('id_list_message=t-אין הרשאה למספר זה&go_to_folder=hangup&');
+  const perm = yemotPermissions[callerId] || {};
+
+  // שם-קובץ-ייחודי-לשיחה — אותו ApiCallId מגיע בשתי-הבקשות של אותה-שיחה. מנקים-תווים-חשודים.
+  const callKey = String(req.query.ApiCallId || '').replace(/[^A-Za-z0-9_-]/g, '') || `t${Date.now()}`;
+  const fname = `cmd_${callKey}.wav`;
+
+  // שלב 1 — עדיין-אין-הקלטה: מבקשים-מימות-להקליט. פרמטרי-record לפי תיעוד-ימות:
+  // read=<הודעה>=<שם-משתנה>,no,record,<תיקייה>,<שם-קובץ>,<אישור-אחרי-הקלטה>,<שמירה-בניתוק>,<הוספה-לקיים>,<מינימום-שניות>,<מקסימום-שניות>
+  if (req.query.VoiceCmd === undefined) {
+    return res.send(`read=t-אמור את הפקודה לאחר הצליל=VoiceCmd,no,record,${VOICE_REC_DIR},${fname},no,yes,no,1,20&`);
+  }
+
+  // שלב 2 — יש הקלטה.
+  const t0 = Date.now();
+  const rawVal = String(req.query.VoiceCmd || '');
+  const candidates = [`ivr2:${VOICE_REC_DIR}/${fname}`];
+  if (rawVal.includes('/')) candidates.push(rawVal.startsWith('ivr2:') ? rawVal : `ivr2:${rawVal.startsWith('/') ? '' : '/'}${rawVal}`);
+  let audio = null, usedPath = null, lastErr = null;
+  try {
+    for (const p of candidates) {
+      try { audio = await yemotDownloadBinary(p); usedPath = p; break; } catch (e) { lastErr = e; }
+    }
+    if (!audio) throw lastErr || new Error('לא נמצאה הקלטה');
+    const tDl = Date.now();
+    const text = await transcribeWithWhisper(audio, fname);
+    const tTr = Date.now();
+    addServerLog({ type: 'info', msg: `🎙️ [שליטה-קולית] ID ${callerId} — תומלל: "${text}" (קובץ ${usedPath}, ${audio.length} בתים; הורדה ${tDl - t0}ms, תמלול ${tTr - tDl}ms)`, user: 'IVR' });
+    if (!text) return res.send(ymResponse('לא הצלחתי לשמוע, נסה שוב'));
+
+    const action = await callClaudeForIntent(text);
+    const denied = checkVoicePermission(action, perm);
+    if (denied) {
+      addServerLog({ type: 'warning', msg: `🎙️ [שליטה-קולית] ID ${callerId} — "${text}" → ${action.action} נדחה: ${denied}`, user: 'IVR' });
+      return res.send(ymResponse(denied));
+    }
+    let msg;
+    if (action.action === 'relay' || action.action === 'mode') {
+      // אותה-בעלות/עדיפות בדיוק כמו שיחת-IVR רגילה של אותו-מתקשר (virtualOwnerId זהה ל-handleRelayIvrRequest).
+      const r = await executeVoiceAction(action, { virtualOwnerId: `ivr_owner_${callerId}`, ownerLabel: `IVR קולי — ID ${callerId}`, isPriority: !!perm.priority });
+      msg = r.message;
+      addServerLog({ type: r.ok ? 'success' : 'warning', msg: `🎙️ [שליטה-קולית] ID ${callerId} — "${text}" → ${msg} (סה"כ ${Date.now() - t0}ms)`, user: 'IVR' });
+    } else if (action.action === 'status') {
+      msg = action.statusAnswer || action.confirmationText || 'אין מידע';
+      addServerLog({ type: 'info', msg: `🎙️ [שליטה-קולית] ID ${callerId} — "${text}" → שאילתה: ${msg}`, user: 'IVR' });
+    } else {
+      msg = action.clarificationNeeded || 'לא הבנתי, נסה שוב';
+      addServerLog({ type: 'info', msg: `🎙️ [שליטה-קולית] ID ${callerId} — "${text}" → לא-ברור: ${msg}`, user: 'IVR' });
+    }
+    return res.send(ymResponse(msg));
+  } catch (err) {
+    addServerLog({ type: 'danger', msg: `❌ [שליטה-קולית] ID ${callerId} — ${err.message} (VoiceCmd="${rawVal}", נתיבים שנוסו: ${candidates.join(' | ')})`, user: 'IVR' });
+    return res.send(ymResponse('שגיאה בעיבוד הפקודה הקולית, נסה שוב'));
+  } finally {
+    if (usedPath) yemotDeleteFile(usedPath); // best-effort, לא ממתינים
+  }
+}
+app.get('/yemot/voice', handleVoiceIvrRequest);
+app.get('/voice', handleVoiceIvrRequest);
+
 // גילינו (דרך רשת-הדיבוג למעלה) שימות לפעמים שולחת את הבקשה ל-"/" הגולמי, בלי-קשר-לנתיב
 // שהוגדר בפועל ב-api_link (סיבה לא ברורה בצד-ימות — אולי caching, אולי טיפול-לא-אמין בנתיבים).
 // כדי שהמערכת תעבוד **בכל מקרה**, בלי תלות בהתנהגות-הזו: "/" עצמו בודק את ה-query-parameters
@@ -3359,4 +3498,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 66;
+const IDX_BOTTOM_MARK = 67;
