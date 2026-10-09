@@ -19,7 +19,7 @@ function debugNow() { return new Date(Date.now() + DEBUG_OFFSET_MS); }
 // סימון-בנייה לבדיקת שלמות-קובץ (ראו IDX_BOTTOM_MARK בסוף הקובץ + BUILD_TOP_MARK/BUILD_BOTTOM_MARK
 // ב-smart_home_v3.html) — ארבעתם אמורים להראות אותו מספר. אם מספר כלשהו שונה/חסר, זה סימן ברור
 // שחלק מהעלאה לגיטהאב לא הגיע בשלמותו (למשל בגלל הדבקה חלקית של קובץ גדול, במקום Upload files).
-const IDX_TOP_MARK = 67;
+const IDX_TOP_MARK = 68;
 
 // ── CONFIG — נטען מ-config.json מקומי (ואם לא קיים — מ-CONFIG_JSON env) ──
 
@@ -2636,6 +2636,21 @@ function toTrueEpoch(selfConsistentEpoch, dateIL) {
   return selfConsistentEpoch - (naiveMidnight - trueMidnight);
 }
 
+// נרמול תאריך-עברי — **אותה-פונקציה בדיוק** כמו fmtHebDate בלקוח (smart_home_v3.html): מסיר \" מוברח,
+// ומסיר את ה' שלפני שנה (ה'תשפ"ו → תשפ"ו). includeYear=false מסיר גם את השנה עצמה.
+// למה זה נחוץ: הלקוח שומר ב-calLabel/calDay/calMonth את הגרסה-**המנורמלת** (בלי ה'), אבל הרשומה בלוח
+// (calendar_data.js) מכילה את הגרסה-הגולמית (עם ה') — השוואה ישירה בין השתיים לעולם לא הייתה מתאימה,
+// וכך תזמון-מצב עם תאריך (שנתי/חד-פעמי) לא רץ אף-פעם.
+function normHebDate(raw, includeYear = true) {
+  if (!raw) return '';
+  let s = String(raw).replace(/\\"/g, '"');
+  // טוקן-השנה (תמיד אחרון, תמיד עם גרשיים לפני האות האחרונה): תשפ"ו, תשצ"ט, ת"ת (5800 — אחרי 2039/40 הצורה
+  // כבר לא מתחילה ב"תש", ולכן אין להסתמך על התחילית), תת"א... — כך זה עובד לכל 100 השנים שבקובץ הלוח.
+  s = s.replace(/ה'([א-ת]*"[א-ת])$/, '$1');
+  if (!includeYear) s = s.replace(/\s+[א-ת]*"[א-ת]$/, '').trim();
+  return s.trim();
+}
+
 function computeScheduledModeFireEpoch(sm, dateIL) {
   if (!sm.active) return null;
   const dow = dateIL.getDay();
@@ -2648,9 +2663,17 @@ function computeScheduledModeFireEpoch(sm, dateIL) {
     if (!entry) return null;
     const calDate = entry['תאריך עברי'] || '';
     if (sm.calType === 'annual') {
-      if (!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) return null;
+      // שנתי = אותו יום+חודש עבריים בכל שנה — משווים בלי השנה העברית (calMonth שנשמר מכיל אותה, למשל
+      // 'טבת תשפ"ו', וזה היה מגביל את התזמון לשנה אחת בלבד גם אילו ההשוואה הייתה תקינה).
+      if (normHebDate(calDate, false) !== normHebDate(`${sm.calDay} ${sm.calMonth}`, false)) return null;
     } else if (sm.calType === 'once') {
-      if (calDate !== sm.calLabel || yyyy !== sm.calYear) return null;
+      // חד-פעמי: התווית נבחרת מהחיפוש **עם** השנה העברית (למשל י"ב טבת תשפ"ו) ולכן היא כבר מזהה יום
+      // אחד בלבד — לא צריך שנה לועזית נוספת. רק אם התווית ללא שנה-עברית (נתונים ישנים) נדרשת calYear.
+      const wanted = normHebDate(sm.calLabel);
+      const hasHebYear = /\s[א-ת]*"[א-ת]$/.test(wanted);
+      if (hasHebYear) {
+        if (normHebDate(calDate) !== wanted) return null;
+      } else if (normHebDate(calDate, false) !== wanted || yyyy !== Number(sm.calYear)) return null;
     } else if (sm.calType === 'rosh_chodesh_aleph') {
       if (getHebrewDayNumber(entry) !== 1) return null;
     } else if (sm.calType === 'rosh_chodesh_lamed') {
@@ -3498,4 +3521,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // אם השורה הזו לא הגיעה (השרת בכלל לא היה עולה, כי JS שבור לא ירוץ) — הבעיה תתגלה כבר בכשל-עלייה.
 // היא כאן בעיקר לשלמות הסימטריה מול smart_home_v3.html, ולמקרה של index.js קטום-אך-תקין-תחבירית.
-const IDX_BOTTOM_MARK = 67;
+const IDX_BOTTOM_MARK = 68;
