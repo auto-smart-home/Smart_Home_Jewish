@@ -1082,7 +1082,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 119;
+const BUILD_TOP_MARK = 120;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -1876,6 +1876,7 @@ function findNextModeTransitionAwayMs(fromMs, excludeModeIds, maxDaysForward){
     (_scheduledModes||[]).forEach(sm=>{
       if(!sm.active) return;
       if(sm.days && sm.days.length && !sm.days.includes(di)) return;
+      if(!smMatchesCalDate(sm, dayDate)) return;
       let minOfDay = null;
       if(sm.type==='time'){ minOfDay = timeStrToMinutesLocal(sm.time); }
       else { minOfDay = getZmanMinutesForDateSM(sm.zman, dayDate); if(minOfDay!==null) minOfDay += (sm.offsetDir==='-'?-1:1)*(sm.offsetVal||0); }
@@ -1955,22 +1956,7 @@ function computeModeSegments(fromDate, rangeDays){
       if(sm.days && sm.days.length && !sm.days.includes(dow)) continue;
       // בדיקת calType (כולל ראש-חודש) — קודם לא נבדק כלל כאן, רק בשרת; תזמון-מצב עם תאריך-מיוחד
       // היה מוצג בציר-הזמן כאילו הוא קורה כל יום, מטעה במיוחד לגבי ראש-חודש/תאריך-שנתי/חד-פעמי.
-      if(sm.calType && sm.calType!=='none'){
-        const entry = getCalEntry(dayDate);
-        if(!entry) continue;
-        const [ed,em,ey] = entry['תאריך לועזי'].split('/').map(Number);
-        if(sm.calType==='annual'){
-          const calDate = entry['תאריך עברי']||'';
-          if(!calDate.startsWith(`${sm.calDay} ${sm.calMonth}`)) continue;
-        } else if(sm.calType==='once'){
-          const calDate = entry['תאריך עברי']||'';
-          if(calDate!==sm.calLabel || ey!==sm.calYear) continue;
-        } else if(sm.calType==='rosh_chodesh_aleph'){
-          if(getHebrewDayNumber(entry)!==1) continue;
-        } else if(sm.calType==='rosh_chodesh_lamed'){
-          if(getHebrewDayNumber(entry)!==30) continue;
-        }
-      }
+      if(!smMatchesCalDate(sm, dayDate)) continue;
       let fireMin = null;
       if((sm.type||'time')==='time'){
         fireMin = timeStrToMinutesLocal(sm.time||'00:00');
@@ -5153,6 +5139,27 @@ function matchesCalFilterForDate(p, date) {
   }
   return true;
 }
+// התאמת תזמון-מצב לתאריך (annual/once/ראש-חודש) — אותה לוגיקה כמו computeScheduledModeFireEpoch בשרת.
+// חשוב: התאריך העברי בלוח הוא עם ה' לפני השנה (ה'תשפ"ז) ואילו calLabel/calMonth מנורמלים — משווים אחרי נרמול.
+function smMatchesCalDate(sm, dayDate){
+  if(!sm.calType || sm.calType==='none') return true;
+  const entry = getCalEntry(dayDate);
+  if(!entry) return false;
+  const [ed,em,ey] = entry['תאריך לועזי'].split('/').map(Number);
+  const raw = entry['תאריך עברי']||'';
+  if(sm.calType==='annual'){
+    return fmtHebDate(raw,false) === fmtHebDate(`${sm.calDay} ${sm.calMonth}`,false);
+  } else if(sm.calType==='once'){
+    const wanted = fmtHebDate(sm.calLabel||'');
+    if(/\s[א-ת]*"[א-ת]$/.test(wanted)) return fmtHebDate(raw) === wanted;
+    return fmtHebDate(raw,false) === wanted && ey === Number(sm.calYear);
+  } else if(sm.calType==='rosh_chodesh_aleph'){
+    return getHebrewDayNumber(entry)===1;
+  } else if(sm.calType==='rosh_chodesh_lamed'){
+    return getHebrewDayNumber(entry)===30;
+  }
+  return true;
+}
 function matchesCalFilter(p) {
   return matchesCalFilterForDate(p, new Date());
 }
@@ -5884,7 +5891,7 @@ function selectCalendarSm(idx, label, day, month, greg) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 119;
+BUILD_BOTTOM_MARK = 120;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
