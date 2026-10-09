@@ -1082,7 +1082,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 118;
+const BUILD_TOP_MARK = 119;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5101,10 +5101,12 @@ function fmtHebDate(raw, includeYear=true) {
   // unescape \" → "
   let s = raw.replace(/\\"/g, '"');
   // remove ה' at start of year part (e.g. ה'תשפ"ו → תשפ"ו)
-  s = s.replace(/ה'(תש[א-ת"]+)/, '$1');
+  // טוקן-השנה הוא תמיד האחרון ותמיד עם גרשיים לפני האות האחרונה (תשפ"ו, תשצ"ט, ת"ת, תת"א...). לא מסתמכים
+  // על התחילית "תש" — מהשנה העברית 5800 (גרגוריאנית ~2040) הצורה היא ת"ת/תת"א וכו', והתחילית כבר לא מתאימה.
+  s = s.replace(/ה'([א-ת]*"[א-ת])$/, '$1');
   if (!includeYear) {
-    // strip the year (last word after last space before תש...)
-    s = s.replace(/\s+תש[א-ת"]+$/, '').trim();
+    // strip the year (the last word)
+    s = s.replace(/\s+[א-ת]*"[א-ת]$/, '').trim();
   }
   return s.trim();
 }
@@ -5757,8 +5759,7 @@ function buildSmRow(sm, idx) {
       </select>
       ${(calType!=='none'&&calType!=='rosh_chodesh_aleph'&&calType!=='rosh_chodesh_lamed')?`<div style="position:relative"><input type="text" placeholder="חפש תאריך עברי..." value="${sm.calLabel||''}" oninput="searchCalendarSm(this.value,${idx})" style="width:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text)">
       <div id="sm-cal-results-${idx}" style="position:absolute;top:100%;inset-inline-start:0;margin-top:2px;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:8px;max-height:150px;overflow-y:auto;display:none;min-width:200px"></div></div>
-      ${sm.calLabel?`<span style="font-size:12px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);border-radius:6px;padding:2px 8px;color:var(--accent2)">${sm.calLabel} <button onclick="_scheduledModes[${idx}].calLabel='';_scheduledModes[${idx}].calDay=null;_scheduledModes[${idx}].calMonth=null;renderScheduledModes()" style="background:none;border:none;cursor:pointer;color:var(--muted)">✕</button></span>`:''}
-      ${calType==='once'?`<input type="number" placeholder="שנה" value="${sm.calYear||''}" onchange="_scheduledModes[${idx}].calYear=parseInt(this.value)" style="width:70px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`:''}`:''}
+      ${sm.calLabel?`<span style="font-size:12px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);border-radius:6px;padding:2px 8px;color:var(--accent2)">${calType==='annual' ? `${fmtHebDate(sm.calLabel,false)} · כל שנה` : `${sm.calLabel}${sm.calGreg?` (${sm.calGreg})`:''}`} <button onclick="_scheduledModes[${idx}].calLabel='';_scheduledModes[${idx}].calDay=null;_scheduledModes[${idx}].calMonth=null;_scheduledModes[${idx}].calYear=null;_scheduledModes[${idx}].calGreg='';renderScheduledModes()" style="background:none;border:none;cursor:pointer;color:var(--muted)">✕</button></span>`:''}`:''}
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <label style="font-size:13px;display:flex;align-items:center;gap:6px">
@@ -5850,7 +5851,7 @@ function searchCalendarSm(query, idx) {
       seen.add(heb);
       const parts = heb.split(' ');
       const special = chag || tzom || '';
-      found.push({ label: heb, day: parts[0], month: parts.slice(1).join(' '), special });
+      found.push({ label: heb, day: parts[0], month: parts.slice(1).join(' '), special, greg: entry['תאריך לועזי'] || '' });
       if (found.length >= 8) break;
     }
   }
@@ -5865,13 +5866,17 @@ function searchCalendarSm(query, idx) {
 function selectCalendarSmIdx(idx, i) {
   const f = (_smCalMatches[idx] || [])[i];
   if (!f) return;
-  selectCalendarSm(idx, f.label, f.day, f.month);
+  selectCalendarSm(idx, f.label, f.day, f.month, f.greg);
 }
 
-function selectCalendarSm(idx, label, day, month) {
+// greg = התאריך הלועזי של הרשומה שנבחרה (DD/MM/YYYY). בחד-פעמי התווית כבר כוללת את השנה העברית ולכן
+// מזהה יום אחד בלבד; השנה הלועזית נשמרת אוטומטית (calYear/calGreg) לתצוגה — אין צורך להקליד אותה ידנית.
+function selectCalendarSm(idx, label, day, month, greg) {
   _scheduledModes[idx].calLabel = label;
   _scheduledModes[idx].calDay = day;
   _scheduledModes[idx].calMonth = month;
+  _scheduledModes[idx].calGreg = greg || '';
+  _scheduledModes[idx].calYear = greg ? (parseInt(String(greg).split('/')[2], 10) || null) : null;
   const results = document.getElementById(`sm-cal-results-${idx}`);
   if (results) results.style.display = 'none';
   renderScheduledModes();
@@ -5879,7 +5884,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 118;
+BUILD_BOTTOM_MARK = 119;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
