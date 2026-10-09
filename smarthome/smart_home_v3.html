@@ -1082,7 +1082,7 @@ const LS_KEY = 'smarthome_v2';
 // סימוני-בנייה לבדיקת שלמות-קבצים (ראו index.js ל-IDX_TOP_MARK/IDX_BOTTOM_MARK): 4 מספרים —
 // תחילת+סוף הקובץ הזה, ותחילת+סוף index.js (מתקבל מהשרת). כולם אמורים להראות אותו מספר; אם אחד
 // מהם שונה/חסר (למשל "0" או "?"), זה סימן ברור שחלק מהעלאה לגיטהאב לא הגיע בשלמותו.
-const BUILD_TOP_MARK = 116;
+const BUILD_TOP_MARK = 118;
 // ═══ תצוגה מינימלית לציר-הזמן — קבועים ומצב ═══════════════════════════════════
 // תכונה חדשה, נפרדת לגמרי מהתצוגה הרגילה — לא נוגעת בשום קוד קיים. ראו renderTimelineMinimal().
 let minimalViewMode = false;
@@ -5755,10 +5755,10 @@ function buildSmRow(sm, idx) {
         <option value="rosh_chodesh_aleph" ${calType==='rosh_chodesh_aleph'?'selected':''}>ראש חודש א' (יום א בחודש)</option>
         <option value="rosh_chodesh_lamed" ${calType==='rosh_chodesh_lamed'?'selected':''}>ראש חודש ל' (יום ל, רק בחודשים מלאים)</option>
       </select>
-      ${(calType!=='none'&&calType!=='rosh_chodesh_aleph'&&calType!=='rosh_chodesh_lamed')?`<input type="text" placeholder="חפש תאריך עברי..." value="${sm.calLabel||''}" oninput="searchCalendarSm(this.value,${idx})" style="width:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text)">
+      ${(calType!=='none'&&calType!=='rosh_chodesh_aleph'&&calType!=='rosh_chodesh_lamed')?`<div style="position:relative"><input type="text" placeholder="חפש תאריך עברי..." value="${sm.calLabel||''}" oninput="searchCalendarSm(this.value,${idx})" style="width:160px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text)">
+      <div id="sm-cal-results-${idx}" style="position:absolute;top:100%;inset-inline-start:0;margin-top:2px;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:8px;max-height:150px;overflow-y:auto;display:none;min-width:200px"></div></div>
       ${sm.calLabel?`<span style="font-size:12px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);border-radius:6px;padding:2px 8px;color:var(--accent2)">${sm.calLabel} <button onclick="_scheduledModes[${idx}].calLabel='';_scheduledModes[${idx}].calDay=null;_scheduledModes[${idx}].calMonth=null;renderScheduledModes()" style="background:none;border:none;cursor:pointer;color:var(--muted)">✕</button></span>`:''}
-      ${calType==='once'?`<input type="number" placeholder="שנה" value="${sm.calYear||''}" onchange="_scheduledModes[${idx}].calYear=parseInt(this.value)" style="width:70px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`:''}
-      <div id="sm-cal-results-${idx}" style="position:absolute;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:8px;max-height:150px;overflow-y:auto;display:none;min-width:200px"></div>`:''}
+      ${calType==='once'?`<input type="number" placeholder="שנה" value="${sm.calYear||''}" onchange="_scheduledModes[${idx}].calYear=parseInt(this.value)" style="width:70px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--text)">`:''}`:''}
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <label style="font-size:13px;display:flex;align-items:center;gap:6px">
@@ -5823,6 +5823,11 @@ function saveScheduledModes() {
   socket.emit('save_scheduled_modes', _scheduledModes);
 }
 
+// תוצאות-החיפוש האחרונות לכל שורת-תזמון (לפי idx) — הבחירה נעשית **לפי אינדקס** ולא ע"י הדבקת
+// הטקסט-העברי בתוך מאפיין onclick: התאריך העברי מכיל גרשיים (למשל תשפ"ו / י"ב), והם היו חותכים את
+// המאפיין באמצע ("Invalid or unexpected token") — כך שלחיצה על תוצאה לא עשתה כלום באף שורה.
+// אותו עיקרון בדיוק כמו _calMatches/selectCalIdx בחיפוש-התאריך של תוכניות.
+const _smCalMatches = {};
 function searchCalendarSm(query, idx) {
   const results = document.getElementById(`sm-cal-results-${idx}`);
   if (!results) return;
@@ -5849,11 +5854,18 @@ function searchCalendarSm(query, idx) {
       if (found.length >= 8) break;
     }
   }
+  _smCalMatches[idx] = found;
   if (!found.length) { results.innerHTML='<div style="padding:8px 12px;font-size:13px;color:var(--muted)">לא נמצאו תוצאות</div>'; results.style.display='block'; return; }
   results.style.display = 'block';
-  results.innerHTML = found.map(f =>
-    `<div onclick="selectCalendarSm(${idx},'${f.label}','${f.day}','${f.month}')" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">${f.label}${f.special?` <span style="color:var(--warn);font-size:11px">${f.special}</span>`:''}</div>`
+  results.innerHTML = found.map((f, i) =>
+    `<div onmousedown="selectCalendarSmIdx(${idx},${i})" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">${f.label}${f.special?` <span style="color:var(--warn);font-size:11px">${f.special}</span>`:''}</div>`
   ).join('');
+}
+
+function selectCalendarSmIdx(idx, i) {
+  const f = (_smCalMatches[idx] || [])[i];
+  if (!f) return;
+  selectCalendarSm(idx, f.label, f.day, f.month);
 }
 
 function selectCalendarSm(idx, label, day, month) {
@@ -5867,7 +5879,7 @@ function selectCalendarSm(idx, label, day, month) {
 
 // שורה ממש אחרונה בסקריפט — אם קובץ זה קטום (העלאה חלקית), השורה הזו לעולם לא תרוץ, והאינדיקטור
 // בכותרת יישאר "?" בעמדת-הסוף שלו במקום להתעדכן. ראו BUILD_TOP_MARK בתחילת הסקריפט.
-BUILD_BOTTOM_MARK = 116;
+BUILD_BOTTOM_MARK = 118;
 updateBuildVersionIndicator();
 </script>
 <div class="conflict-modal-overlay" id="conflict-modal-overlay">
